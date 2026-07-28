@@ -75,3 +75,32 @@ func TestTagCompare(t *testing.T) {
 		})
 	}
 }
+
+func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
+	for _, test := range []struct {
+		stateID uint64
+		deltaID uint64
+		usesHLC bool
+	}{
+		{TypeIDGCounterState, TypeIDGCounterDelta, false},
+		{TypeIDORSetState, TypeIDORSetDelta, true},
+		{TypeIDPNCounterState, TypeIDPNCounterDelta, false},
+		{TypeIDRGAState, TypeIDRGADelta, true},
+		{TypeIDORTreeState, TypeIDORTreeDelta, true},
+	} {
+		kind, ok := FrameTypeForState(test.stateID)
+		if !ok || kind.DeltaID != test.deltaID || kind.UsesHLC != test.usesHLC {
+			t.Fatalf("FrameTypeForState(%d) = %#v, %v", test.stateID, kind, ok)
+		}
+		fromDelta, ok := FrameTypeForDelta(test.deltaID)
+		if !ok || fromDelta != kind {
+			t.Fatalf("FrameTypeForDelta(%d) = %#v, %v", test.deltaID, fromDelta, ok)
+		}
+	}
+	if _, ok := FrameTypeForState(TypeIDLWWMapState); ok {
+		t.Fatal("reserved LWW state type is not wire-ready")
+	}
+	if _, ok := FrameTypeForDelta(TypeIDLWWMapDelta); ok {
+		t.Fatal("reserved LWW delta type is not wire-ready")
+	}
+}

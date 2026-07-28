@@ -7,6 +7,7 @@ import (
 	"github.com/darkinno/crdt"
 	"github.com/darkinno/crdt/clock"
 	"github.com/darkinno/crdt/counter"
+	frame "github.com/darkinno/crdt/encoding"
 	"github.com/darkinno/crdt/set"
 	"github.com/darkinno/crdt/snapshot"
 )
@@ -69,6 +70,16 @@ func TestSnapshotSupportsPNCounterRecoveryPlan(t *testing.T) {
 	}
 	if _, err := snapshot.NewRecoveryPlan(saved, [][]byte{encodedDelta}, len(encodedDelta)); err != nil {
 		t.Fatalf("NewRecoveryPlan() error = %v", err)
+	}
+}
+
+func TestSnapshotRejectsReservedStateTypesWithoutConcreteWireSupport(t *testing.T) {
+	state, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWMapState})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshot.New(state, nil); !errors.Is(err, snapshot.ErrInvalid) {
+		t.Fatalf("snapshot.New() error = %v, want %v", err, snapshot.ErrInvalid)
 	}
 }
 

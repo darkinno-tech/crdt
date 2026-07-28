@@ -4,7 +4,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/darkinno/crdt"
 	"github.com/darkinno/crdt/counter"
+	frame "github.com/darkinno/crdt/encoding"
 )
 
 func TestBatchRoundTripCopiesAndLimits(t *testing.T) {
@@ -147,6 +149,16 @@ func TestBatchAndCoalescerAcceptPNCounterDeltas(t *testing.T) {
 	}
 	if got, err := target.ValueInt64(); err != nil || got != 3 {
 		t.Fatalf("coalesced PN-Counter value = %d, %v; want 3, nil", got, err)
+	}
+}
+
+func TestBatchRejectsReservedDeltaTypesWithoutConcreteWireSupport(t *testing.T) {
+	item, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWMapDelta})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewBatch([][]byte{item}, len(item)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("NewBatch() error = %v, want %v", err, ErrInvalid)
 	}
 }
 

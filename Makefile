@@ -10,7 +10,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./clock ./counter ./delta ./encoding ./lww ./merkle ./set ./snapshot ./text ./cmd/crdt-analyze ./cmd/crdt-sync-probe; do go test $$package; done
+	for package in . ./clock ./counter ./delta ./encoding ./lww ./merkle ./register ./set ./snapshot ./text ./tree ./cmd/crdt-analyze ./cmd/crdt-sync-probe; do go test $$package; done
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -31,6 +31,8 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./set
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
+	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=10s ./text
+	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=10s ./tree
 
 coverage:
 	COVERAGE_THRESHOLD=90 ./scripts/check-coverage.sh

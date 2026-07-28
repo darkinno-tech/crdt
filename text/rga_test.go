@@ -81,6 +81,40 @@ func TestRGADeleteBeforeInsertAndInputBounds(t *testing.T) {
 	}
 }
 
+func TestRGAStateCountsOnlyRootReachableNodes(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := source.Insert(0, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := source.Insert(1, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(child); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.String(); got != "" {
+		t.Fatalf("out-of-order text = %q, want empty", got)
+	}
+	if got := target.State().ElementCount; got != 0 {
+		t.Fatalf("out-of-order visible count = %d, want 0", got)
+	}
+	if err := target.ApplyDelta(parent); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.State().ElementCount; got != 2 {
+		t.Fatalf("resolved visible count = %d, want 2", got)
+	}
+}
+
 func TestRGARejectsCycle(t *testing.T) {
 	value, err := New("local")
 	if err != nil {
