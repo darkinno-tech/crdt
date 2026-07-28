@@ -6,7 +6,7 @@
 It provides deterministic binary state and delta frames so replicas can converge
 despite duplicate delivery, reordering, and temporary partitions.
 
-> Status: first public module release `v1.0`; APIs follow semantic versioning.
+> Status: first public module release `v1.0.0`; APIs follow semantic versioning.
 
 ## Features
 
@@ -41,7 +41,7 @@ mechanism.
 After the first public release tag is available:
 
 ```sh
-go get github.com/darkinno/crdt@v1.0
+go get github.com/darkinno/crdt@v1.0.0
 ```
 
 Until then, use a local checkout for development:
@@ -264,7 +264,7 @@ Run `make test-extreme` to repeat the high-cardinality scenario in normal and
 race-instrumented modes. Internal investigation data and deployment runbooks
 are intentionally kept outside the public release tree.
 
-## Publishing `v1.0`
+## Publishing `v1.0.0`
 
 Before publishing, run the verification commands above, review the public API,
 commit the reviewed release contents, and ensure the repository is publicly
@@ -273,9 +273,9 @@ reachable at the module path. Then create an immutable semantic-version tag:
 ```sh
 go mod tidy
 go test ./...
-git tag -a v1.0 -m "Release v1.0"
-git push origin v1.0
-GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v1.0
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v1.0.0
 ```
 
 Do not move or reuse a published tag. For Go modules, breaking changes after
