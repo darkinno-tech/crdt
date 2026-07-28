@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -15,3 +16,15 @@ func TestRunShowsConvergedWorkboard(t *testing.T) {
 		t.Fatalf("run output = %q, want %q", got, want)
 	}
 }
+
+func TestRunPropagatesWriterFailure(t *testing.T) {
+	if err := run(failingWriter{}); !errors.Is(err, errWrite) {
+		t.Fatalf("run() error = %v, want %v", err, errWrite)
+	}
+}
+
+var errWrite = errors.New("write failed")
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errWrite }

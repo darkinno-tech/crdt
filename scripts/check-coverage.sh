@@ -5,7 +5,9 @@ set -eu
 threshold=${COVERAGE_THRESHOLD:-90}
 failed=0
 
-for package in $(go list ./...); do
+# Executable examples are run by go test but do not define library coverage
+# obligations. The gate applies to importable packages and command tools.
+for package in $(go list ./... | awk '$0 !~ /\/examples\//'); do
 	output=$(go test -cover "$package")
 	printf '%s\n' "$output"
 	coverage=$(printf '%s\n' "$output" | sed -n 's/.*coverage: \([0-9.][0-9.]*\)%.*/\1/p')
