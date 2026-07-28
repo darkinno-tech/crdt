@@ -22,8 +22,8 @@ func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
 	}
 	if _, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
 		StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{}); !errors.Is(err, ErrInvalidManifest) {
-		t.Fatalf("disabled experimental protocol error = %v", err)
+	}, crdt.ProtocolPolicy{}); err != nil {
+		t.Fatalf("stable RGA manifest error = %v", err)
 	}
 	if _, err := NewManifest("set", "example.com/set/v1", 1, Protocol{
 		StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: 1,
@@ -40,7 +40,7 @@ func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
 func TestExperimentalProtocolsRequireExplicitPolicyAtUseBoundaries(t *testing.T) {
 	policy := crdt.ProtocolPolicy{AllowExperimental: true}
 	manifest, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
-		StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1,
+		StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: 2,
 	}, policy)
 	if err != nil {
 		t.Fatalf("NewManifest experimental: %v", err)
@@ -49,8 +49,8 @@ func TestExperimentalProtocolsRequireExplicitPolicyAtUseBoundaries(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewFrontier: %v", err)
 	}
-	delta := mustFrame(t, crdt.TypeIDRGADelta, "")
-	state := mustFrame(t, crdt.TypeIDRGAState, "")
+	delta := mustFrame(t, crdt.TypeIDRGARunDelta, "")
+	state := mustFrame(t, crdt.TypeIDRGARunState, "")
 	clockState := clock.State{ReplicaID: "local", WallTime: 1}
 	validator := func([]byte) error { return nil }
 

@@ -15,6 +15,10 @@ func (r *RGA) MarshalBinary() ([]byte, error) {
 		return nil, ErrNilText
 	}
 	r.mu.RLock()
+	if len(r.pending) > 0 {
+		r.mu.RUnlock()
+		return nil, ErrIncompleteState
+	}
 	nodes, tombstones := cloneNodes(r.nodes), cloneTombstones(r.tombstones)
 	r.mu.RUnlock()
 	return marshalRGA(crdt.TypeIDRGAState, nodes, tombstones)
@@ -122,6 +126,13 @@ func (r *RGA) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimits)
 	if err != nil {
 		return err
 	}
+	if len(nodes) > r.options.MaxNodes || len(tombstones) > r.options.MaxTombstones {
+		return ErrResourceLimit
+	}
+	sequence, children, err := buildSequence(nodes, tombstones)
+	if err != nil {
+		return err
+	}
 	delta := Delta{nodes: nodes, tombstones: tombstones}
 	if tag, ok := greatestTag(delta); ok {
 		if err := r.clock.Witness(tag); err != nil {
@@ -130,6 +141,10 @@ func (r *RGA) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimits)
 	}
 	r.mu.Lock()
 	r.nodes, r.tombstones = nodes, tombstones
+	r.pending = make(map[Position]node)
+	r.waitingByParent = make(map[Position]map[Position]struct{})
+	r.pendingBytes = 0
+	r.sequence, r.children = sequence, children
 	r.version++
 	r.mu.Unlock()
 	return nil
@@ -140,6 +155,10 @@ func (r *RGA) MarshalBinaryWithClockState() ([]byte, clock.State, error) {
 		return nil, clock.State{}, ErrNilText
 	}
 	r.mu.RLock()
+	if len(r.pending) > 0 {
+		r.mu.RUnlock()
+		return nil, clock.State{}, ErrIncompleteState
+	}
 	nodes, tombstones, state := cloneNodes(r.nodes), cloneTombstones(r.tombstones), r.clock.Snapshot()
 	r.mu.RUnlock()
 	encoded, err := marshalRGA(crdt.TypeIDRGAState, nodes, tombstones)
@@ -151,7 +170,7 @@ func (r *RGA) Snapshot(frontier map[string]crdt.Tag) (snapshot.Snapshot, error) 
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}
-	return snapshot.NewWithClockState(state, frontier, clockState)
+	return snapshot.NewValidatedWithClockState(state, frontier, clockState, validateRGAState)
 }
 
 func (r *RGA) SnapshotCurrentState() (snapshot.Snapshot, error) {
@@ -159,6 +178,10 @@ func (r *RGA) SnapshotCurrentState() (snapshot.Snapshot, error) {
 		return snapshot.Snapshot{}, ErrNilText
 	}
 	r.mu.RLock()
+	if len(r.pending) > 0 {
+		r.mu.RUnlock()
+		return snapshot.Snapshot{}, ErrIncompleteState
+	}
 	nodes := cloneNodes(r.nodes)
 	tombstones := cloneTombstones(r.tombstones)
 	clockState := r.clock.Snapshot()
@@ -168,13 +191,15 @@ func (r *RGA) SnapshotCurrentState() (snapshot.Snapshot, error) {
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}
-	return snapshot.NewWithClockState(state, frontier, clockState)
+	return snapshot.NewValidatedWithClockState(state, frontier, clockState, validateRGAState)
+}
+
+func validateRGAState(data []byte) error {
+	_, _, err := unmarshalRGA(data, crdt.TypeIDRGAState, frame.DefaultLimits(), true)
+	return err
 }
 
 func NewFromSnapshot(saved snapshot.Snapshot) (*RGA, error) {
-	if saved.TypeID != crdt.TypeIDRGAState {
-		return nil, ErrInvalidDelta
-	}
 	clockState, ok := saved.ClockState()
 	if !ok {
 		return nil, ErrInvalidDelta
@@ -183,7 +208,16 @@ func NewFromSnapshot(saved snapshot.Snapshot) (*RGA, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := r.UnmarshalBinary(saved.Bytes()); err != nil {
+	var unmarshal func([]byte) error
+	switch saved.TypeID {
+	case crdt.TypeIDRGAState:
+		unmarshal = r.UnmarshalBinary
+	case crdt.TypeIDRGARunState:
+		unmarshal = r.UnmarshalRunBinary
+	default:
+		return nil, ErrInvalidDelta
+	}
+	if err := unmarshal(saved.Bytes()); err != nil {
 		return nil, err
 	}
 	return r, nil
