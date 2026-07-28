@@ -1,5 +1,7 @@
 # crdt
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 `crdt` is a small, dependency-free Go library for composable state-based CRDTs.
 It provides deterministic binary state and delta frames so replicas can converge
 despite duplicate delivery, reordering, and temporary partitions.
@@ -237,15 +239,16 @@ container verification.
 
 ### Quality and performance snapshot — 2026-07-28
 
-This pre-release snapshot was collected on Go 1.26.5. It is reproducible
-evidence for this revision, not a latency or throughput guarantee for every
-workload.
+This historical pre-release snapshot was collected on Go 1.26.5. It is
+recorded evidence for that revision, not a latency or throughput guarantee for
+every workload; the checks below were not re-executed as part of this
+documentation update.
 
-- `make verify` passed: formatting, independent-package tests, integration and
+- The recorded `make verify` run passed: formatting, independent-package tests, integration and
   extreme scenarios, the race detector, vet, four 10-second decoder fuzz
   campaigns, `staticcheck`, `golangci-lint`, and a per-package coverage gate of
   at least 90%.
-- `make docker-test` passed with Go 1.26; `govulncheck ./...` found no known
+- The recorded `make docker-test` run passed with Go 1.26; `govulncheck ./...` found no known
   vulnerabilities.
 - A controlled three-host delivery probe confirmed idempotent duplicate
   delivery and rejected unauthorized, malformed, and oversized requests.
@@ -256,9 +259,10 @@ workload.
 The OR-Set implementation avoids copying its own validated state during merge
 and delta application. On the maintained 128-element benchmark, the current
 Apple-silicon sample measured 46.6 microseconds and 57.8 KB per `Merge`, and
-5.3 microseconds with zero allocations per duplicate `ApplyDelta` (12 logical
-CPUs). Exact results depend on the CPU, Go version, element codec, set size,
-and mutation mix.
+5.3 microseconds with zero allocations per duplicate `ApplyDelta` at
+`GOMAXPROCS=12`. This benchmark uses one serial loop, not `RunParallel`; it is
+not a 12-core throughput measurement. Exact results depend on the CPU, Go
+version, element codec, set size, and mutation mix.
 
 Run `make test-extreme` to repeat the high-cardinality scenario in normal and
 race-instrumented modes. Internal investigation data and deployment runbooks
