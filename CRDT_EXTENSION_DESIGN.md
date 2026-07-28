@@ -1,25 +1,25 @@
 # CRDT collection extension design
 
 This document defines the collection boundary after the stable v1 core.
-RGA text and OR-Tree have framed codecs, bounded decoders, HLC snapshots, and
-fuzz coverage, but remain experimental until their exact tombstone-GC lifecycle
-ships. LWW collections currently provide only in-memory merge semantics; their
+LWW-Map, RGA text, and OR-Tree have framed codecs, bounded decoders, HLC
+snapshots, and fuzz coverage, but remain experimental until their exact
+tombstone-GC lifecycle ships. LWW-Set remains an in-memory collection and its
 reserved frame IDs must not be advertised as a wire protocol.
 
 ## Experimental protocol policy
 
 `crdt.ProtocolPolicy` is the per-replication-group opt-in boundary. Its zero
 value advertises only stable G-Counter, OR-Set, and PN-Counter frames. Setting
-`AllowExperimental` additionally advertises RGA and OR-Tree. Peers must compare
-the advertised `FrameTypes` before sending frames; this is capability
+`AllowExperimental` additionally advertises LWW-Map, RGA, and OR-Tree. Peers
+must compare the advertised `FrameTypes` before sending frames; this is capability
 negotiation, not a dynamic plugin registry and not a replacement for
 authentication, authorization, decoder limits, or application-level schema
 validation.
 
 The policy does not change frame parsing or make an unknown type acceptable.
-Callers that opt in must persist the associated HLC state and retain all RGA or
-OR-Tree tombstones. Exact acknowledgement and compaction for those types are a
-release gate before they become stable.
+Callers that opt in must persist the associated HLC state and retain all
+LWW-Map, RGA, or OR-Tree tombstones. Exact acknowledgement and compaction for
+those types are a release gate before they become stable.
 
 ## Semantics
 
@@ -44,8 +44,11 @@ are rejected.
 
 ## LWW protocol completion gate
 
-Before exporting LWW Set or LWW Map as network-replicable library primitives,
-deliver all of the following together:
+LWW-Map meets this gate as an experimental protocol: it has state and delta
+frames, bounded canonical decoders, HLC-bearing snapshots, Delta coalescing
+compatibility, independent golden-vector coverage, and fuzzing. The remaining
+LWW-Set protocol must deliver all of the following before it is exported as a
+network-replicable library primitive:
 
 1. Reserve state/delta type IDs, canonical framed codecs, bounded decoders,
    canonical re-encoding tests, and delta coalescer support.
