@@ -43,6 +43,16 @@ func TestBatchRoundTripCopiesAndLimits(t *testing.T) {
 	}
 }
 
+func TestBatchMarshalBinaryRetainsInternalValidation(t *testing.T) {
+	batch := Batch{items: [][]byte{[]byte("not a frame")}}
+	if _, err := batch.MarshalBinary(32); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("MarshalBinary() error = %v, want %v", err, ErrInvalid)
+	}
+	if _, err := (Batch{}).MarshalBinary(0); !errors.Is(err, ErrLimit) {
+		t.Fatalf("MarshalBinary() limit error = %v, want %v", err, ErrLimit)
+	}
+}
+
 func TestCoalescerJoinsWithoutGrowingQueue(t *testing.T) {
 	source, err := counter.NewGCounter("source")
 	if err != nil {
@@ -184,6 +194,54 @@ func FuzzUnmarshalBatch(f *testing.F) {
 			t.Fatalf("successful batch decode returned invalid items: %v", err)
 		}
 	})
+}
+
+var benchmarkBatchBytes []byte
+
+func BenchmarkBatchMarshalBinary(b *testing.B) {
+	items := make([][]byte, 24)
+	for index := range items {
+		items[index] = mustEncodedDelta(b, "source", uint64(index+1))
+	}
+	batch, err := NewBatch(items, 1<<20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(items[0]) * len(items)))
+	b.ReportAllocs()
+	for _, benchmark := range []struct {
+		name string
+		fn   func(Batch, int) ([]byte, error)
+	}{
+		{name: "optimized", fn: Batch.MarshalBinary},
+		{name: "pre_optimization", fn: marshalBinaryWithCopy},
+	} {
+		b.Run(benchmark.name, func(b *testing.B) {
+			b.ResetTimer()
+			for index := 0; index < b.N; index++ {
+				encoded, err := benchmark.fn(batch, 1<<20)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkBatchBytes = encoded
+			}
+		})
+	}
+}
+
+func marshalBinaryWithCopy(b Batch, maxBytes int) ([]byte, error) {
+	validated, err := NewBatch(b.items, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	encoded := make([]byte, 0, 4+len(validated.items)*frameByteOverhead(validated.items))
+	encoded = append(encoded, batchMagic...)
+	encoded = frame.AppendUvarint(encoded, uint64(len(validated.items)))
+	for _, item := range validated.items {
+		encoded = frame.AppendUvarint(encoded, uint64(len(item)))
+		encoded = append(encoded, item...)
+	}
+	return encoded, nil
 }
 
 func mustEncodedDelta(t testing.TB, replicaID string, amount uint64) []byte {
