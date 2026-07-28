@@ -108,16 +108,16 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 
 func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 	stable := (ProtocolPolicy{}).FrameTypes()
-	if len(stable) != 6 {
-		t.Fatalf("stable protocol count = %d, want 6", len(stable))
+	if len(stable) != 5 {
+		t.Fatalf("stable protocol count = %d, want 5", len(stable))
 	}
 	for _, kind := range stable {
 		if IsExperimentalFrame(kind.StateID) || IsExperimentalFrame(kind.DeltaID) {
 			t.Fatalf("default policy advertised experimental protocol %#v", kind)
 		}
 	}
-	if !(ProtocolPolicy{}).SupportsFrame(TypeIDRGAState) {
-		t.Fatal("default policy omitted stable RGA state")
+	if (ProtocolPolicy{}).SupportsFrame(TypeIDRGAState) {
+		t.Fatal("default policy supports experimental RGA state")
 	}
 	if (ProtocolPolicy{}).SupportsFrame(TypeIDORTreeDelta) {
 		t.Fatal("default policy supports OR-Tree delta")
@@ -136,7 +136,7 @@ func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
 	if policy.SupportsFrame(TypeIDLWWSetState) || policy.SupportsFrame(999) {
 		t.Fatal("policy supported a reserved or unknown frame")
 	}
-	if !IsExperimentalFrame(TypeIDLWWMapDelta) || IsExperimentalFrame(TypeIDRGAState) || !IsExperimentalFrame(TypeIDRGARunState) || !IsExperimentalFrame(TypeIDORTreeDelta) {
+	if !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || !IsExperimentalFrame(TypeIDRGARunState) || !IsExperimentalFrame(TypeIDORTreeDelta) {
 		t.Fatal("implemented experimental protocol was not marked experimental")
 	}
 	if IsExperimentalFrame(TypeIDLWWSetDelta) || IsExperimentalFrame(999) {

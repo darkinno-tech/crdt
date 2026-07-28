@@ -21,6 +21,7 @@
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
 - 实验性 LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
+  RGA v1 现具备有边界的延迟集成与增量可见索引，但其墓碑生命周期仍为实验性。
 
 ## 范围
 
@@ -31,10 +32,13 @@
 
 ## 实验性 LWW-Map、RGA 与 OR-Tree 协议
 
-LWW-Map（`lww.Map`）、RGA 文本（`text`）和 OR-Tree（`tree`）已具备确定性的
-状态/增量帧、有边界的解码，以及带 HLC 的快照恢复；但在稳定发布前仍属于实验性
-能力，其 API 和墓碑生命周期仍可能调整。复制组必须显式选择并在交换这些帧前通告
-协议集合：
+RGA 文本 v1（`text`，TypeID 11/12）通过有边界的延迟集成队列处理乱序 delta，拒绝
+不完整快照，并以增量索引替代每次编辑后的全量可见投影重建；在完整墓碑生命周期经过
+验证前仍为实验性协议。必须原子持久化其带 HLC 的快照。
+
+`CompactTombstones` 有意保持保守：只有在经过认证的精确确认纪元已持久化回收后快照
+并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Map、
+RGA run-v2（TypeID 19/20）和 OR-Tree 仍为实验性能力，必须显式启用：
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -44,10 +48,15 @@ for _, kind := range policy.FrameTypes() {
 }
 ```
 
-零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该策略既不是全局
-开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。LWW-Map、RGA 和
-OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；这些类型的精确
-确认式墓碑回收尚未实现。
+接收实验帧之前，必须在经过认证的握手中将其绑定到 `replica.Manifest`。Manifest
+包含 group、schema、epoch、codec 与语义版本；在每个 replica 边界
+（`NewChangeWithPolicy`、`NewInboxWithPolicy`、`NewCheckpointWithPolicy`、
+`NewSessionWithPolicy`）均传入同一份显式 Policy。仅凭 Frame Type ID 不能证明
+线协议语义兼容。
+
+零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该
+策略既不是全局开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。LWW-Map、
+RGA 和 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
 
 ## 要求
 
@@ -218,9 +227,10 @@ go run ./examples/collaborative-board
   无缺口因果前缀的场景。
 - 在复用 MV-Register 的副本 ID 前持久化其状态快照。其版本向量而非墙上时钟可证明
   后续 `Set` 已观察哪些写入；使用 `register.NewMVRegisterFromSnapshot` 恢复。
-- 将 `ProtocolPolicy.FrameTypes()` 作为经过认证的连接/建链能力通告。只有两端
-  都选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧；应原子持久化其带 HLC
-  的快照，且暂时不要回收其墓碑。
+- 将 `ProtocolPolicy.FrameTypes()` 作为本地能力白名单；经过认证的连接/建链必须
+  使用 `replica.Manifest` 比较 group、schema、epoch、codec 与语义版本。只有两端都
+  显式选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧。必须原子持久化带 HLC 的
+  快照；RGA 墓碑回收还需要经过认证的精确确认纪元并淘汰旧 delta。
 - 保持 `ElementCodec.ID`、`Marshal` 与 `Unmarshal` 确定性，并确保它们可安全
   并发调用。编码值必须以规范形式往返。
 - 将收到的字节视为不可信数据。请根据传输环境使用带合适限制的
@@ -248,7 +258,7 @@ go run ./examples/collaborative-board
 | `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
 | `set` | G-Set、加法胜出 OR-Set 与元素编解码器契约。 |
 | `lww` | 内存 LWW-Set 与实验性的、带帧 LWW-Map。 |
-| `text` | 实验性、带帧的 RGA 协作文本。 |
+| `text` | 实验性、带帧 RGA 协作文本和 run-v2 编解码器。 |
 | `tree` | 实验性、带帧的观察移除树。 |
 | `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |
 | `encoding` | 带边界的版本化二进制帧。 |
