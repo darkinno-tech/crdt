@@ -20,7 +20,11 @@ var (
 	ErrInvalidText      = errors.New("text: invalid UTF-8 text")
 	ErrRange            = errors.New("text: range outside visible text")
 	ErrInvalidDelta     = errors.New("text: invalid RGA delta")
-	ErrTagConflict      = errors.New("text: conflicting node for one tag")
+	// ErrIncompleteState indicates a state snapshot contains an unresolved
+	// parent reference. Deltas may be partial for out-of-order delivery, but a
+	// recoverable state frame must include the complete parent closure.
+	ErrIncompleteState = errors.New("text: incomplete RGA state")
+	ErrTagConflict     = errors.New("text: conflicting node for one tag")
 )
 
 // Position is a stable, opaque identifier for one Unicode scalar value.
@@ -42,13 +46,12 @@ type Delta struct {
 // RGA is a collaborative text CRDT. A tombstone retained for a deleted
 // position wins even if it arrives before the corresponding insertion.
 type RGA struct {
-	mu           sync.RWMutex
-	replicaID    string
-	clock        *clock.HLC
-	nodes        map[Position]node
-	tombstones   map[Position]struct{}
-	visibleCount int
-	version      uint64
+	mu         sync.RWMutex
+	replicaID  string
+	clock      *clock.HLC
+	nodes      map[Position]node
+	tombstones map[Position]struct{}
+	version    uint64
 
 	// projection caches the ordered visible positions for the current version.
 	// It has its own lock so frequent readers do not contend with CRDT writes.
@@ -211,15 +214,18 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 			return err
 		}
 	}
+	if len(r.nodes) == 0 && len(delta.nodes) > 0 {
+		r.nodes = make(map[Position]node, len(delta.nodes))
+	}
+	if len(r.tombstones) == 0 && len(delta.tombstones) > 0 {
+		r.tombstones = make(map[Position]struct{}, len(delta.tombstones))
+	}
 	changed := false
 	for id, incoming := range delta.nodes {
 		if _, exists := r.nodes[id]; exists {
 			continue
 		}
 		r.nodes[id] = incoming
-		if _, deleted := r.tombstones[id]; !deleted {
-			r.visibleCount++
-		}
 		changed = true
 	}
 	for id := range delta.tombstones {
@@ -227,9 +233,6 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 			continue
 		}
 		r.tombstones[id] = struct{}{}
-		if _, exists := r.nodes[id]; exists {
-			r.visibleCount--
-		}
 		changed = true
 	}
 	if changed {
@@ -275,9 +278,16 @@ func (r *RGA) State() crdt.StateSnapshot {
 	if r == nil {
 		return crdt.StateSnapshot{Type: "rga-text"}
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return crdt.StateSnapshot{Type: "rga-text", ReplicaID: r.replicaID, ElementCount: r.visibleCount, TombstoneCount: len(r.tombstones)}
+	for {
+		visible, version := r.visibleProjection()
+		r.mu.RLock()
+		if r.version == version {
+			state := crdt.StateSnapshot{Type: "rga-text", ReplicaID: r.replicaID, ElementCount: len(visible), TombstoneCount: len(r.tombstones)}
+			r.mu.RUnlock()
+			return state
+		}
+		r.mu.RUnlock()
+	}
 }
 
 // visibleProjection returns an immutable ordered slice paired with the state

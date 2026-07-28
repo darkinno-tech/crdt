@@ -3,7 +3,6 @@ package set
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"reflect"
@@ -541,11 +540,11 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[
 		return nil, frame.ErrFrameLimit
 	}
 
-	payloadSize := uvarintSize(uint64(len(entries)))
+	payloadSize := frame.UvarintSize(uint64(len(entries)))
 	tagCount := 0
 	for _, item := range entries {
 		tagCountForElement := item.tagEnd - item.tagStart
-		additional := uvarintSize(uint64(len(item.encoded))) + len(item.encoded) + uvarintSize(uint64(tagCountForElement))
+		additional := frame.UvarintSize(uint64(len(item.encoded))) + len(item.encoded) + frame.UvarintSize(uint64(tagCountForElement))
 		if additional > limits.MaxPayload-payloadSize {
 			return nil, frame.ErrFrameLimit
 		}
@@ -557,7 +556,7 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[
 			if len(tag.ReplicaID) > limits.MaxStringBytes {
 				return nil, frame.ErrFrameLimit
 			}
-			additional = encodedTagSize(tag)
+			additional = frame.TagSize(tag)
 			if additional > limits.MaxPayload-payloadSize {
 				return nil, frame.ErrFrameLimit
 			}
@@ -567,7 +566,7 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[
 	}
 	tags := plan.tombstones
 	slices.SortFunc(tags, func(left, right crdt.Tag) int { return left.Compare(right) })
-	additional := uvarintSize(uint64(len(tags)))
+	additional := frame.UvarintSize(uint64(len(tags)))
 	if additional > limits.MaxPayload-payloadSize {
 		return nil, frame.ErrFrameLimit
 	}
@@ -579,7 +578,7 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[
 		if len(tag.ReplicaID) > limits.MaxStringBytes {
 			return nil, frame.ErrFrameLimit
 		}
-		additional = encodedTagSize(tag)
+		additional = frame.TagSize(tag)
 		if additional > limits.MaxPayload-payloadSize {
 			return nil, frame.ErrFrameLimit
 		}
@@ -592,12 +591,12 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[
 			payload = appendBytes(payload, item.encoded)
 			payload = frame.AppendUvarint(payload, uint64(item.tagEnd-item.tagStart))
 			for _, tag := range plan.liveTags[item.tagStart:item.tagEnd] {
-				payload = appendTag(payload, tag)
+				payload = frame.AppendTag(payload, tag)
 			}
 		}
 		payload = frame.AppendUvarint(payload, uint64(len(tags)))
 		for _, tag := range tags {
-			payload = appendTag(payload, tag)
+			payload = frame.AppendTag(payload, tag)
 		}
 		if len(payload) != payloadSize {
 			return frame.ErrInvalidFrame
@@ -680,7 +679,7 @@ func unmarshalORSet[T comparable](data []byte, expectedTypeID uint64, codec Elem
 		tags := make(map[crdt.Tag]struct{}, int(count))
 		var previousTag crdt.Tag
 		for j := uint64(0); j < count; j++ {
-			tag, next, ok := readTag(decoded.Payload, pos, limits.MaxStringBytes)
+			tag, next, ok := frame.ReadTag(decoded.Payload, pos, limits.MaxStringBytes)
 			if !ok || (j > 0 && previousTag.Compare(tag) >= 0) {
 				return nil, nil, frame.ErrInvalidFrame
 			}
@@ -704,7 +703,7 @@ func unmarshalORSet[T comparable](data []byte, expectedTypeID uint64, codec Elem
 	tombstones := make(map[crdt.Tag]struct{}, int(tombstoneCount))
 	var previousTombstone crdt.Tag
 	for i := uint64(0); i < tombstoneCount; i++ {
-		tag, next, ok := readTag(decoded.Payload, pos, limits.MaxStringBytes)
+		tag, next, ok := frame.ReadTag(decoded.Payload, pos, limits.MaxStringBytes)
 		if !ok || (i > 0 && previousTombstone.Compare(tag) >= 0) {
 			return nil, nil, frame.ErrInvalidFrame
 		}
@@ -922,45 +921,17 @@ func appendBytes(dst, value []byte) []byte {
 	return append(dst, value...)
 }
 
-func appendTag(dst []byte, tag crdt.Tag) []byte {
-	dst = appendString(dst, tag.ReplicaID)
-	dst = frame.AppendUvarint(dst, tag.WallTime)
-	return frame.AppendUvarint(dst, tag.Logical)
-}
-
 func appendString(dst []byte, value string) []byte {
 	dst = frame.AppendUvarint(dst, uint64(len(value)))
 	return append(dst, value...)
 }
 
+// Kept as package-private test seams while the canonical implementation lives
+// in encoding alongside the frame primitives.
+func appendTag(dst []byte, tag crdt.Tag) []byte { return frame.AppendTag(dst, tag) }
+
 func readTag(data []byte, pos, maxStringBytes int) (crdt.Tag, int, bool) {
-	replicaID, next, ok := frame.ReadBytes(data, pos, maxStringBytes)
-	if !ok {
-		return crdt.Tag{}, pos, false
-	}
-	wallTime, next, ok := frame.ReadUvarint(data, next)
-	if !ok {
-		return crdt.Tag{}, pos, false
-	}
-	logical, next, ok := frame.ReadUvarint(data, next)
-	if !ok {
-		return crdt.Tag{}, pos, false
-	}
-	tag := crdt.Tag{ReplicaID: string(replicaID), WallTime: wallTime, Logical: logical}
-	if !tag.Valid() {
-		return crdt.Tag{}, pos, false
-	}
-	return tag, next, true
-}
-
-func encodedTagSize(tag crdt.Tag) int {
-	return uvarintSize(uint64(len(tag.ReplicaID))) + len(tag.ReplicaID) +
-		uvarintSize(tag.WallTime) + uvarintSize(tag.Logical)
-}
-
-func uvarintSize(value uint64) int {
-	var encoded [binary.MaxVarintLen64]byte
-	return binary.PutUvarint(encoded[:], value)
+	return frame.ReadTag(data, pos, maxStringBytes)
 }
 
 func isNilCodec[T comparable](codec ElementCodec[T]) bool {

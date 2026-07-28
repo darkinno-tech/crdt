@@ -66,3 +66,29 @@ all of the following together:
 - Concurrency: race tests cover local edits, merge, reads, and serialization.
 - Capacity: benchmark live text, tombstone-heavy text, wide sibling fan-out,
   large LWW values, and merge under a target production limit.
+
+## OR-Tree design boundary
+
+The tree type is deliberately not modelled as `map[node]parent` with a
+last-write-wins parent pointer: concurrent moves can create `A -> B -> A`, and
+each replica can render a different repair. The first tree protocol is an
+observed-remove rooted forest with these rules:
+
+1. A node instance is identified by its immutable creation tag, not a display
+   name. An add records one parent instance and carries the complete node
+   identity.
+2. A remove tombstones only creation tags observed by that replica. It may
+   arrive before its add, exactly as an OR-Set tombstone does.
+3. The visible projection starts at the synthetic root, follows only live
+   parent links, sorts siblings by canonical tag, and hides dangling nodes
+   until their parents arrive. Frames reject completed cycles; snapshots also
+   reject missing non-root parents.
+4. v1 has insert and observed-remove only. A move is represented as a remove
+   plus a newly created node instance; a later move protocol must introduce an
+   explicit, independently proven attachment register rather than mutating a
+   parent pointer in place.
+
+This keeps merge a set union plus tombstone subtraction, preserving
+commutativity, associativity, idempotence, and a mechanically testable no-cycle
+invariant. Tree framing, bounded decode, snapshot/HLC recovery, and exact
+tombstone GC must ship as one unit.

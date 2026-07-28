@@ -13,7 +13,52 @@ const (
 	TypeIDORSetDelta     uint64 = 4
 	TypeIDPNCounterState uint64 = 5
 	TypeIDPNCounterDelta uint64 = 6
+	TypeIDLWWSetState    uint64 = 7
+	TypeIDLWWSetDelta    uint64 = 8
+	TypeIDLWWMapState    uint64 = 9
+	TypeIDLWWMapDelta    uint64 = 10
+	TypeIDRGAState       uint64 = 11
+	TypeIDRGADelta       uint64 = 12
+	TypeIDORTreeState    uint64 = 17
+	TypeIDORTreeDelta    uint64 = 18
 )
+
+// FrameType describes one fully implemented framed CRDT protocol. The type
+// table is deliberately closed: reserving an ID alone must not make a payload
+// eligible for batching or recovery before its concrete codec is available.
+type FrameType struct {
+	StateID uint64
+	DeltaID uint64
+	UsesHLC bool
+}
+
+var frameTypes = [...]FrameType{
+	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta},
+	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, UsesHLC: true},
+	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
+	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
+	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
+}
+
+// FrameTypeForState returns the supported protocol associated with stateID.
+func FrameTypeForState(stateID uint64) (FrameType, bool) {
+	for _, kind := range frameTypes {
+		if kind.StateID == stateID {
+			return kind, true
+		}
+	}
+	return FrameType{}, false
+}
+
+// FrameTypeForDelta returns the supported protocol associated with deltaID.
+func FrameTypeForDelta(deltaID uint64) (FrameType, bool) {
+	for _, kind := range frameTypes {
+		if kind.DeltaID == deltaID {
+			return kind, true
+		}
+	}
+	return FrameType{}, false
+}
 
 // CRDT is the common contract for state-based CRDTs.
 //

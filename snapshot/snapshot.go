@@ -56,23 +56,22 @@ func NewValidated(state []byte, frontier map[string]crdt.Tag, validator StateVal
 	return newSnapshot(decoded, state, frontier, nil), nil
 }
 
-// NewWithClockState creates an OR-Set snapshot with the local HLC state that
-// must be persisted atomically with the state frame before the replica ID is
-// reused. G-Counter snapshots do not use an HLC and are rejected here.
+// NewWithClockState creates an HLC-backed CRDT snapshot with the local clock
+// state that must be persisted atomically before its replica ID is reused.
 func NewWithClockState(state []byte, frontier map[string]crdt.Tag, clockState clock.State) (Snapshot, error) {
 	decoded, err := frame.UnmarshalFrame(state, frame.DefaultLimits())
-	if err != nil || decoded.TypeID != crdt.TypeIDORSetState || !validFrontier(frontier) || !validClockState(clockState) {
+	if err != nil || !isHLCStateType(decoded.TypeID) || !validFrontier(frontier) || !validClockState(clockState) {
 		return Snapshot{}, ErrInvalid
 	}
 	return newSnapshot(decoded, state, frontier, &clockState), nil
 }
 
-// NewValidatedWithClockState creates an OR-Set snapshot only when its frame,
+// NewValidatedWithClockState creates an HLC-backed CRDT snapshot only when its frame,
 // clock state, and type-specific payload are valid. Use it when accepting an
 // externally supplied OR-Set snapshot before persistence.
 func NewValidatedWithClockState(state []byte, frontier map[string]crdt.Tag, clockState clock.State, validator StateValidator) (Snapshot, error) {
 	decoded, err := frame.UnmarshalFrame(state, frame.DefaultLimits())
-	if err != nil || decoded.TypeID != crdt.TypeIDORSetState || !validFrontier(frontier) || !validClockState(clockState) || !validateState(validator, state) {
+	if err != nil || !isHLCStateType(decoded.TypeID) || !validFrontier(frontier) || !validClockState(clockState) || !validateState(validator, state) {
 		return Snapshot{}, ErrInvalid
 	}
 	return newSnapshot(decoded, state, frontier, &clockState), nil
@@ -161,27 +160,25 @@ func (s Snapshot) valid() bool {
 	decoded, err := frame.UnmarshalFrame(s.state, frame.DefaultLimits())
 	if err != nil || s.FormatVersion != frame.FormatVersion || s.TypeID != decoded.TypeID ||
 		s.CodecID != decoded.CodecID || !isStateType(s.TypeID) || !validFrontier(s.frontier) ||
-		(s.clockState != nil && (s.TypeID != crdt.TypeIDORSetState || !validClockState(*s.clockState))) {
+		(s.clockState != nil && (!isHLCStateType(s.TypeID) || !validClockState(*s.clockState))) {
 		return false
 	}
 	return true
 }
 
 func isStateType(typeID uint64) bool {
-	return typeID == crdt.TypeIDGCounterState || typeID == crdt.TypeIDORSetState || typeID == crdt.TypeIDPNCounterState
+	_, ok := crdt.FrameTypeForState(typeID)
+	return ok
 }
 
 func deltaTypeForState(typeID uint64) (uint64, bool) {
-	switch typeID {
-	case crdt.TypeIDGCounterState:
-		return crdt.TypeIDGCounterDelta, true
-	case crdt.TypeIDORSetState:
-		return crdt.TypeIDORSetDelta, true
-	case crdt.TypeIDPNCounterState:
-		return crdt.TypeIDPNCounterDelta, true
-	default:
-		return 0, false
-	}
+	kind, ok := crdt.FrameTypeForState(typeID)
+	return kind.DeltaID, ok
+}
+
+func isHLCStateType(typeID uint64) bool {
+	kind, ok := crdt.FrameTypeForState(typeID)
+	return ok && kind.UsesHLC
 }
 
 func validFrontier(frontier map[string]crdt.Tag) bool {
