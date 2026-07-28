@@ -22,8 +22,8 @@ func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
 	}
 	if _, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
 		StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{}); err != nil {
-		t.Fatalf("stable RGA manifest error = %v", err)
+	}, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
+		t.Fatalf("experimental RGA manifest error = %v", err)
 	}
 	if _, err := NewManifest("set", "example.com/set/v1", 1, Protocol{
 		StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: 1,
