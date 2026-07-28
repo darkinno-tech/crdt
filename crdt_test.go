@@ -87,6 +87,7 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 		{TypeIDPNCounterState, TypeIDPNCounterDelta, false},
 		{TypeIDGSetState, TypeIDGSetDelta, false},
 		{TypeIDMVRegisterState, TypeIDMVRegisterDelta, false},
+		{TypeIDLWWMapState, TypeIDLWWMapDelta, true},
 		{TypeIDRGAState, TypeIDRGADelta, true},
 		{TypeIDORTreeState, TypeIDORTreeDelta, true},
 	} {
@@ -99,11 +100,8 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 			t.Fatalf("FrameTypeForDelta(%d) = %#v, %v", test.deltaID, fromDelta, ok)
 		}
 	}
-	if _, ok := FrameTypeForState(TypeIDLWWMapState); ok {
-		t.Fatal("reserved LWW state type is not wire-ready")
-	}
-	if _, ok := FrameTypeForDelta(TypeIDLWWMapDelta); ok {
-		t.Fatal("reserved LWW delta type is not wire-ready")
+	if _, ok := FrameTypeForState(TypeIDLWWSetState); ok {
+		t.Fatal("reserved LWW set type is not wire-ready")
 	}
 }
 
@@ -128,19 +126,19 @@ func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
 	policy := ProtocolPolicy{AllowExperimental: true}
 	types := policy.FrameTypes()
-	if len(types) != 7 {
-		t.Fatalf("experimental protocol count = %d, want 7", len(types))
+	if len(types) != 8 {
+		t.Fatalf("experimental protocol count = %d, want 8", len(types))
 	}
-	if !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDORTreeDelta) {
+	if !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDORTreeDelta) {
 		t.Fatal("experimental policy omitted an implemented experimental protocol")
 	}
-	if policy.SupportsFrame(TypeIDLWWMapState) || policy.SupportsFrame(999) {
+	if policy.SupportsFrame(TypeIDLWWSetState) || policy.SupportsFrame(999) {
 		t.Fatal("policy supported a reserved or unknown frame")
 	}
-	if !IsExperimentalFrame(TypeIDRGAState) || !IsExperimentalFrame(TypeIDORTreeDelta) {
+	if !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || !IsExperimentalFrame(TypeIDORTreeDelta) {
 		t.Fatal("implemented experimental protocol was not marked experimental")
 	}
-	if IsExperimentalFrame(TypeIDLWWMapDelta) || IsExperimentalFrame(999) {
+	if IsExperimentalFrame(TypeIDLWWSetDelta) || IsExperimentalFrame(999) {
 		t.Fatal("reserved or unknown protocol was marked experimental")
 	}
 

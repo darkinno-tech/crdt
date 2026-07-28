@@ -74,7 +74,7 @@ func TestSnapshotSupportsPNCounterRecoveryPlan(t *testing.T) {
 }
 
 func TestSnapshotRejectsReservedStateTypesWithoutConcreteWireSupport(t *testing.T) {
-	state, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWMapState})
+	state, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWSetState})
 	if err != nil {
 		t.Fatal(err)
 	}

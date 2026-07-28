@@ -21,6 +21,8 @@ var (
 	ErrNilSet           = errors.New("lww: nil set")
 	ErrNilMap           = errors.New("lww: nil map")
 	ErrInvalidKey       = errors.New("lww: invalid key")
+	ErrInvalidDelta     = errors.New("lww: invalid map delta")
+	ErrInvalidSnapshot  = errors.New("lww: invalid map snapshot")
 	ErrTagConflict      = errors.New("lww: conflicting values for one tag")
 )
 
@@ -160,6 +162,11 @@ type mapEntry struct {
 	value   []byte
 }
 
+// MapDelta is a joinable partial LWW-Map state. Its contents are deliberately
+// opaque so callers cannot mutate an entry after it has been handed to a
+// replica or coalescer.
+type MapDelta struct{ entries map[string]mapEntry }
+
 // Map is a byte-value LWW map. Returning and accepting copies prevents a
 // caller from modifying replicated state through a shared slice. Values are
 // deliberately opaque; applications may use a deterministic JSON, protobuf,
@@ -172,6 +179,7 @@ type Map struct {
 }
 
 var _ crdt.CRDT[*Map] = (*Map)(nil)
+var _ crdt.DeltaCapable[*Map, MapDelta] = (*Map)(nil)
 
 func NewMap(replicaID string) (*Map, error) {
 	return NewMapFromClock(clock.State{ReplicaID: replicaID})
@@ -195,26 +203,49 @@ func (m *Map) ClockState() clock.State {
 	return m.clock.Snapshot()
 }
 
-func (m *Map) Set(key string, value []byte) error { return m.write(key, value, true) }
-func (m *Map) Delete(key string) error            { return m.write(key, nil, false) }
+// Set writes a value and preserves the original non-delta API.
+func (m *Map) Set(key string, value []byte) error {
+	_, err := m.SetWithDelta(key, value)
+	return err
+}
 
-func (m *Map) write(key string, value []byte, present bool) error {
+// Delete removes key and preserves the original non-delta API.
+func (m *Map) Delete(key string) error {
+	_, err := m.DeleteWithDelta(key)
+	return err
+}
+
+// SetWithDelta writes a value and returns the joinable delta for this write.
+func (m *Map) SetWithDelta(key string, value []byte) (MapDelta, error) {
+	return m.writeDelta(key, value, true)
+}
+
+// DeleteWithDelta removes key and returns the joinable delete delta.
+func (m *Map) DeleteWithDelta(key string) (MapDelta, error) {
+	return m.writeDelta(key, nil, false)
+}
+
+func (m *Map) writeDelta(key string, value []byte, present bool) (MapDelta, error) {
 	if m == nil || m.clock == nil {
-		return ErrNilMap
+		return MapDelta{}, ErrNilMap
 	}
 	if strings.TrimSpace(key) == "" {
-		return ErrInvalidKey
+		return MapDelta{}, ErrInvalidKey
 	}
 	tag, err := m.clock.Now()
 	if err != nil {
-		return err
+		return MapDelta{}, err
+	}
+	incoming := mapEntry{tag: tag, present: present}
+	if present {
+		incoming.value = append([]byte(nil), value...)
 	}
 	m.mu.Lock()
 	if current, exists := m.entries[key]; !exists || current.tag.Compare(tag) < 0 {
-		m.entries[key] = mapEntry{tag: tag, present: present, value: append([]byte(nil), value...)}
+		m.entries[key] = incoming
 	}
 	m.mu.Unlock()
-	return nil
+	return MapDelta{entries: map[string]mapEntry{key: incoming}}, nil
 }
 
 func (m *Map) Get(key string) ([]byte, bool) {
@@ -248,20 +279,26 @@ func (m *Map) Keys() []string {
 	return keys
 }
 
-func (m *Map) Merge(other *Map) error {
-	if m == nil || other == nil {
+// ApplyDelta joins a validated partial map state into m. It validates every
+// entry and detects equal-tag conflicts before mutating the map or HLC.
+func (m *Map) ApplyDelta(delta MapDelta) error {
+	if m == nil || m.clock == nil {
 		return ErrNilMap
 	}
-	if m == other {
-		return nil
+	if err := validateMapEntries(delta.entries); err != nil {
+		return err
 	}
-	other.mu.RLock()
-	entries := cloneMapEntries(other.entries)
-	other.mu.RUnlock()
+	return m.applyOwnedMapEntries(cloneMapEntries(delta.entries))
+}
+
+// applyOwnedMapEntries joins entries that are already owned by the caller.
+// Merge uses it after taking its one source snapshot, avoiding a second full
+// map clone while retaining ApplyDelta's public ownership boundary.
+func (m *Map) applyOwnedMapEntries(entries map[string]mapEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, incoming := range entries {
-		if current, exists := m.entries[key]; exists && current.tag == incoming.tag && (current.present != incoming.present || !bytes.Equal(current.value, incoming.value)) {
+		if current, exists := m.entries[key]; exists && mapEntriesConflict(current, incoming) {
 			return ErrTagConflict
 		}
 	}
@@ -272,12 +309,27 @@ func (m *Map) Merge(other *Map) error {
 	}
 	for key, incoming := range entries {
 		current, exists := m.entries[key]
-		switch {
-		case !exists || current.tag.Compare(incoming.tag) < 0:
+		if !exists || current.tag.Compare(incoming.tag) < 0 {
 			m.entries[key] = incoming
 		}
 	}
 	return nil
+}
+
+func (m *Map) Merge(other *Map) error {
+	if m == nil || other == nil {
+		return ErrNilMap
+	}
+	if m == other {
+		return nil
+	}
+	other.mu.RLock()
+	entries := cloneMapEntries(other.entries)
+	other.mu.RUnlock()
+	if err := validateMapEntries(entries); err != nil {
+		return err
+	}
+	return m.applyOwnedMapEntries(entries)
 }
 
 func (m *Map) State() crdt.StateSnapshot {
@@ -295,6 +347,37 @@ func (m *Map) State() crdt.StateSnapshot {
 	return crdt.StateSnapshot{Type: "lww-map", ReplicaID: m.replicaID, ElementCount: present, TombstoneCount: len(m.entries) - present}
 }
 
+// Frontier returns the greatest map-entry tag per replica. The returned map
+// is owned by the caller and includes delete tombstones.
+func (m *Map) Frontier() map[string]crdt.Tag {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return mapFrontier(m.entries)
+}
+
+// Merge joins two map deltas without modifying either input.
+func (d MapDelta) Merge(other MapDelta) (MapDelta, error) {
+	if err := validateMapEntries(d.entries); err != nil {
+		return MapDelta{}, err
+	}
+	if err := validateMapEntries(other.entries); err != nil {
+		return MapDelta{}, err
+	}
+	merged := cloneMapEntries(d.entries)
+	for key, incoming := range other.entries {
+		if current, exists := merged[key]; exists && mapEntriesConflict(current, incoming) {
+			return MapDelta{}, ErrTagConflict
+		}
+		if current, exists := merged[key]; !exists || current.tag.Compare(incoming.tag) < 0 {
+			merged[key] = incoming
+		}
+	}
+	return MapDelta{entries: merged}, nil
+}
+
 func cloneSetEntries[T comparable](source map[T]setEntry[T]) map[T]setEntry[T] {
 	out := make(map[T]setEntry[T], len(source))
 	for value, entry := range source {
@@ -310,6 +393,29 @@ func cloneMapEntries(source map[string]mapEntry) map[string]mapEntry {
 		out[key] = entry
 	}
 	return out
+}
+
+func validateMapEntries(entries map[string]mapEntry) error {
+	for key, entry := range entries {
+		if strings.TrimSpace(key) == "" || !entry.tag.Valid() || (!entry.present && len(entry.value) != 0) {
+			return ErrInvalidDelta
+		}
+	}
+	return nil
+}
+
+func mapEntriesConflict(left, right mapEntry) bool {
+	return left.tag == right.tag && (left.present != right.present || !bytes.Equal(left.value, right.value))
+}
+
+func mapFrontier(entries map[string]mapEntry) map[string]crdt.Tag {
+	frontier := make(map[string]crdt.Tag)
+	for _, entry := range entries {
+		if current, ok := frontier[entry.tag.ReplicaID]; !ok || current.Compare(entry.tag) < 0 {
+			frontier[entry.tag.ReplicaID] = entry.tag
+		}
+	}
+	return frontier
 }
 func greatestSetTag[T comparable](entries map[T]setEntry[T]) (crdt.Tag, bool) {
 	var greatest crdt.Tag

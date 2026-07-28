@@ -153,7 +153,7 @@ func TestBatchAndCoalescerAcceptPNCounterDeltas(t *testing.T) {
 }
 
 func TestBatchRejectsReservedDeltaTypesWithoutConcreteWireSupport(t *testing.T) {
-	item, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWMapDelta})
+	item, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWSetDelta})
 	if err != nil {
 		t.Fatal(err)
 	}

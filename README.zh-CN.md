@@ -11,13 +11,16 @@
 ## 特性
 
 - 基于状态的 **G-Counter**，具有可合并且类型隔离的增量。
+- 使用调用方自定义元素编解码器、带可合并增量的仅增长 **G-Set**。
 - 支持调用方自定义元素编解码器的加法胜出（add-wins）观察移除 **OR-Set**。
+- 因果复制的 **MV-Register**：保留并发的不透明字节写入，而非用墙上时钟裁决。
+- 处于实验阶段、支持 Delta 复制的 **LWW-Map**，使用不透明字节值和确定性的 HLC 冲突决议。
 - 混合逻辑时钟（HLC）标签和可持久化的时钟状态，支持副本重启。
 - 规范化、带校验和的二进制帧；解码有边界且编码确定。
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
-- 实验性 RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
+- 实验性 LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
 
 ## 范围
 
@@ -26,11 +29,12 @@
 `tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该
 成员视图。校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
 
-## 实验性 RGA 与 OR-Tree 协议
+## 实验性 LWW-Map、RGA 与 OR-Tree 协议
 
-RGA 文本（`text`）和 OR-Tree（`tree`）已具备确定性的状态/增量帧、有边界的
-解码，以及带 HLC 的快照恢复；但在稳定发布前仍属于实验性能力，其 API 和墓碑
-生命周期仍可能调整。复制组必须显式选择并在交换这些帧前通告协议集合：
+LWW-Map（`lww.Map`）、RGA 文本（`text`）和 OR-Tree（`tree`）已具备确定性的
+状态/增量帧、有边界的解码，以及带 HLC 的快照恢复；但在稳定发布前仍属于实验性
+能力，其 API 和墓碑生命周期仍可能调整。复制组必须显式选择并在交换这些帧前通告
+协议集合：
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -40,10 +44,10 @@ for _, kind := range policy.FrameTypes() {
 }
 ```
 
-零值策略仅通告稳定的 G-Counter、OR-Set 和 PN-Counter 协议。该策略既不是全局
-开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。RGA 和 OR-Tree 的
-实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；这两种类型的精确确认式
-墓碑回收尚未实现。
+零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该策略既不是全局
+开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。LWW-Map、RGA 和
+OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；这些类型的精确
+确认式墓碑回收尚未实现。
 
 ## 要求
 
@@ -212,15 +216,28 @@ go run ./examples/collaborative-board
   加入的成员必须从回收后的快照启动。
 - `ORSet.Compact` 仅适用于传输层能够独立证明所提供 frontier 对每个副本都是
   无缺口因果前缀的场景。
+- 在复用 MV-Register 的副本 ID 前持久化其状态快照。其版本向量而非墙上时钟可证明
+  后续 `Set` 已观察哪些写入；使用 `register.NewMVRegisterFromSnapshot` 恢复。
 - 将 `ProtocolPolicy.FrameTypes()` 作为经过认证的连接/建链能力通告。只有两端
-  都选择实验协议时才能发送 RGA 或 OR-Tree 帧；应原子持久化其带 HLC 的快照，
-  且暂时不要回收其墓碑。
+  都选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧；应原子持久化其带 HLC
+  的快照，且暂时不要回收其墓碑。
 - 保持 `ElementCodec.ID`、`Marshal` 与 `Unmarshal` 确定性，并确保它们可安全
   并发调用。编码值必须以规范形式往返。
 - 将收到的字节视为不可信数据。请根据传输环境使用带合适限制的
   `UnmarshalBinaryWithLimits` 与 `Unmarshal*DeltaWithLimits`。
 - 在外围应用中完成消息认证、授权、加密、重试和持久化。CRDT 收敛本身不提供
   这些保证。
+
+## JSON 诊断输出
+
+具体 CRDT 状态和 delta 对象实现了 `json.Marshaler`，可用于结构化日志和人工查看。例如：
+
+```json
+{"type":"gcounter","replica_id":"left","element_count":2,"tombstone_count":0}
+```
+
+该输出刻意不包含应用值、元素键、标签、时钟状态或二进制帧。JSON 诊断结果不能恢复
+或应用 CRDT 状态/delta，也不是复制格式；复制和持久化仍应使用有界、规范的二进制编码。
 
 ## 包
 
@@ -229,11 +246,11 @@ go run ./examples/collaborative-board
 | `crdt` | 通用契约、状态摘要与变更标签。 |
 | `clock` | 混合逻辑时钟和持久化 HLC 状态。 |
 | `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
-| `set` | 加法胜出 OR-Set 与元素编解码器契约。 |
+| `set` | G-Set、加法胜出 OR-Set 与元素编解码器契约。 |
+| `lww` | 内存 LWW-Set 与实验性的、带帧 LWW-Map。 |
 | `text` | 实验性、带帧的 RGA 协作文本。 |
 | `tree` | 实验性、带帧的观察移除树。 |
-| `lww` | 内存内 LWW Set 和 Map；尚不是带帧协议。 |
-| `register` | 内存内 LWW 和 max register；尚未带帧。 |
+| `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |
 | `encoding` | 带边界的版本化二进制帧。 |
 | `delta` | 带边界的增量批处理和合并器。 |
 | `snapshot` | 不可变状态快照与恢复计划。 |
@@ -298,8 +315,8 @@ CI 工作流会强制执行格式化、单元测试、竞态检测、vet、解�
 - 记录中的 `make docker-test` 已在 Go 1.26 上通过；`govulncheck ./...` 未发现已知漏洞。
 - 受控的三主机投递探针验证了重复投递幂等性，并拒绝了未授权、格式错误和超限
   请求。
-- 提供的基准覆盖 G-Counter、PN-Counter 和 OR-Set 的 `Merge`、`ApplyDelta`
-  与 `MarshalBinary`。在确定容量限制前，请在目标硬件上运行 `make benchmark`。
+- 提供的基准覆盖 G-Counter、PN-Counter、G-Set、OR-Set 和 MV-Register 的
+  `Merge`、`ApplyDelta` 与 `MarshalBinary`。在确定容量限制前，请在目标硬件上运行 `make benchmark`。
 
 本 README 底部的不同场景测评记录了当前本地样本：重复投递、存活状态序列化和
 墓碑密集状态序列化。精确结果取决于 CPU、Go 版本、元素编解码器、集合大小和

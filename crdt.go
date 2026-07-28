@@ -1,6 +1,9 @@
 package crdt
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Stable frame type assignments. Values are part of the v1 wire contract and
 // must never be reused for a different payload shape.
@@ -40,6 +43,7 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
 	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
 	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
+	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, UsesHLC: true},
 	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
 	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
 }
@@ -51,6 +55,8 @@ var frameTypes = [...]FrameType{
 var experimentalFrameTypes = map[uint64]struct{}{
 	TypeIDRGAState:    {},
 	TypeIDRGADelta:    {},
+	TypeIDLWWMapState: {},
+	TypeIDLWWMapDelta: {},
 	TypeIDORTreeState: {},
 	TypeIDORTreeDelta: {},
 }
@@ -64,9 +70,9 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // TypeID remains necessary but is not sufficient: applications still own
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
-	// AllowExperimental includes the framed RGA and OR-Tree protocols. Keep it
-	// false until the replication group has accepted their experimental API and
-	// tombstone-retention lifecycle.
+	// AllowExperimental includes the framed LWW-Map, RGA, and OR-Tree protocols.
+	// Keep it false until the replication group has accepted their experimental
+	// API and tombstone-retention lifecycle.
 	AllowExperimental bool
 }
 
@@ -141,10 +147,35 @@ type DeltaCapable[T any, D any] interface {
 // StateSnapshot is an immutable summary of a CRDT state for diagnostics and
 // observability. It never exposes mutable internal data.
 type StateSnapshot struct {
-	Type           string
-	ReplicaID      string
-	ElementCount   int
-	TombstoneCount int
+	Type           string `json:"type"`
+	ReplicaID      string `json:"replica_id"`
+	ElementCount   int    `json:"element_count"`
+	TombstoneCount int    `json:"tombstone_count"`
+}
+
+// StateReporter exposes an immutable CRDT diagnostic summary.
+//
+// It intentionally excludes application values, mutation tags, clock state,
+// and framed bytes. Use it for observability only, never to persist or
+// replicate a CRDT.
+type StateReporter interface {
+	State() StateSnapshot
+}
+
+// MarshalStateJSON returns a compact JSON diagnostic summary for value.
+//
+// This helper is intended for structured logs and human inspection. It does
+// not encode CRDT state, deltas, or opaque application values, so its output
+// cannot reconstruct a replica and must not be used as a wire format.
+func MarshalStateJSON(value StateReporter) ([]byte, error) {
+	return MarshalDiagnosticJSON(value.State())
+}
+
+// MarshalDiagnosticJSON encodes a caller-provided diagnostic summary. It is
+// useful for CRDT delta log views that use the same schema as StateSnapshot.
+// The summary must not contain application values or replication state.
+func MarshalDiagnosticJSON(summary StateSnapshot) ([]byte, error) {
+	return json.Marshal(summary)
 }
 
 // Tag uniquely identifies a CRDT mutation. WallTime, Logical, and ReplicaID

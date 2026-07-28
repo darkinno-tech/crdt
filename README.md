@@ -15,6 +15,8 @@ despite duplicate delivery, reordering, and temporary partitions.
 - Add-wins observed-remove **OR-Set** with a caller-defined element codec.
 - Causally replicated **MV-Register** that preserves concurrent opaque-byte
   writes instead of resolving them by wall clock.
+- Experimental delta-replicated **LWW-Map** with opaque byte values and
+  deterministic HLC conflict resolution.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -23,8 +25,8 @@ despite duplicate delivery, reordering, and temporary partitions.
   anti-entropy workflows.
 - Optional exact-acknowledgement tombstone collection with membership epochs.
 - Safe concurrent access for the provided CRDT implementations.
-- Experimental framed RGA text and OR-Tree collections, enabled only by an
-  explicit per-replication-group protocol policy.
+- Experimental framed LWW-Map, RGA text, and OR-Tree collections, enabled
+  only by an explicit per-replication-group protocol policy.
 
 ## Scope
 
@@ -37,13 +39,13 @@ persist that view. A checksum
 detects accidental frame corruption; it is not an authenticity or encryption
 mechanism.
 
-## Experimental RGA and OR-Tree protocols
+## Experimental LWW-Map, RGA, and OR-Tree protocols
 
-RGA text (`text`) and OR-Tree (`tree`) have deterministic state/delta frames,
-bounded decoders, and HLC-backed snapshot recovery. They are experimental:
-their APIs and tombstone lifecycle may change before stable promotion. A
-replication group must opt in explicitly and advertise the resulting protocol
-set before exchanging their frames:
+LWW-Map (`lww.Map`), RGA text (`text`), and OR-Tree (`tree`) have deterministic
+state/delta frames, bounded decoders, and HLC-backed snapshot recovery. They
+are experimental: their APIs and tombstone lifecycle may change before stable
+promotion. A replication group must opt in explicitly and advertise the
+resulting protocol set before exchanging their frames:
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -56,9 +58,9 @@ for _, kind := range policy.FrameTypes() {
 The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
 MV-Register, and PN-Counter protocols. The policy is neither a global switch nor a plugin
 registry: unknown and reserved frame types remain unsupported. Experimental
-RGA and OR-Tree replicas must persist HLC state with snapshots and retain their
-tombstones; exact acknowledgement-based compaction for those types is not yet
-implemented.
+LWW-Map, RGA, and OR-Tree replicas must persist HLC state with snapshots and
+retain their tombstones; exact acknowledgement-based compaction for those
+types is not yet implemented.
 
 ## Requirements
 
@@ -240,15 +242,29 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   version vector, not a wall clock, proves which writes a later `Set` observes;
   recover with `register.NewMVRegisterFromSnapshot`.
 - Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
-  capability advertisement. Do not send RGA or OR-Tree frames unless both
-  peers have opted into the experimental protocol. Persist their HLC-backed
-  snapshots atomically and do not compact their tombstones yet.
+  capability advertisement. Do not send LWW-Map, RGA, or OR-Tree frames unless
+  both peers have opted into the experimental protocol. Persist their
+  HLC-backed snapshots atomically and do not compact their tombstones yet.
 - Keep `ElementCodec.ID`, `Marshal`, and `Unmarshal` deterministic and safe for
   concurrent calls. Encoded values must round-trip canonically.
 - Treat received bytes as untrusted. Use `UnmarshalBinaryWithLimits` and
   `Unmarshal*DeltaWithLimits` with limits appropriate to the transport.
 - Authenticate, authorize, encrypt, retry, and persist messages in the
   surrounding application. CRDT convergence does not provide those guarantees.
+
+## JSON diagnostics
+
+Concrete CRDT state and delta objects implement `json.Marshaler` for structured
+logs and human inspection. The output is a compact, stable summary such as:
+
+```json
+{"type":"gcounter","replica_id":"left","element_count":2,"tombstone_count":0}
+```
+
+It deliberately excludes application values, element keys, tags, clock state,
+and binary frames. JSON diagnostics cannot restore or apply a CRDT state or
+delta and are not a replication format; use the bounded canonical binary
+encoders for that.
 
 ## Packages
 
@@ -257,11 +273,11 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 | `crdt` | Common contracts, state summaries, and mutation tags. |
 | `clock` | Hybrid logical clock and persisted HLC state. |
 | `counter` | G-Counter, PN-Counter, and their delta codecs. |
-| `set` | Add-wins OR-Set and element-codec contract. |
+| `set` | G-Set, add-wins OR-Set, and element-codec contract. |
+| `lww` | In-memory LWW-Set and experimental framed LWW-Map. |
 | `text` | Experimental framed RGA collaborative text. |
 | `tree` | Experimental framed observed-remove tree. |
-| `lww` | In-memory LWW Set and Map; not yet a framed protocol. |
-| `register` | In-memory LWW and max registers; not yet framed. |
+| `register` | In-memory LWW/max registers and framed causal MV-Register. |
 | `encoding` | Versioned bounded binary frames. |
 | `delta` | Bounded delta batches and coalescers. |
 | `snapshot` | Immutable state snapshots and recovery plans. |
@@ -332,8 +348,8 @@ documentation update.
   vulnerabilities.
 - A controlled three-host delivery probe confirmed idempotent duplicate
   delivery and rejected unauthorized, malformed, and oversized requests.
-- The supplied benchmarks cover G-Counter, PN-Counter, and OR-Set `Merge`,
-  `ApplyDelta`, and `MarshalBinary`. Run `make benchmark` on your target
+- The supplied benchmarks cover G-Counter, PN-Counter, G-Set, OR-Set, and
+  MV-Register `Merge`, `ApplyDelta`, and `MarshalBinary`. Run `make benchmark` on your target
   hardware before choosing capacity limits.
 
 The scenario evaluation at the end of this README records the current local
