@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/darkinno/crdt"
+	"github.com/DarkInno/crdt"
 )
 
 func TestHLCNilAndPhysicalClockFailures(t *testing.T) {

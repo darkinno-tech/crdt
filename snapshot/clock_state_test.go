@@ -3,10 +3,10 @@ package snapshot_test
 import (
 	"testing"
 
-	"github.com/darkinno/crdt"
-	"github.com/darkinno/crdt/clock"
-	"github.com/darkinno/crdt/set"
-	"github.com/darkinno/crdt/snapshot"
+	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/clock"
+	"github.com/DarkInno/crdt/set"
+	"github.com/DarkInno/crdt/snapshot"
 )
 
 type snapshotStringCodec struct{}

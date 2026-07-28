@@ -13,7 +13,7 @@ import (
 	"io"
 	"os"
 
-	frame "github.com/darkinno/crdt/encoding"
+	frame "github.com/DarkInno/crdt/encoding"
 )
 
 type analysis struct {

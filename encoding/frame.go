@@ -6,7 +6,7 @@ import (
 	"errors"
 	"hash/crc32"
 
-	"github.com/darkinno/crdt"
+	"github.com/DarkInno/crdt"
 )
 
 // FormatVersion identifies the canonical frame layout implemented by this

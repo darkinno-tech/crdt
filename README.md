@@ -68,13 +68,13 @@ types is not yet implemented.
 After the first public release tag is available:
 
 ```sh
-go get github.com/darkinno/crdt@v1.0.0
+go get github.com/DarkInno/crdt@v1.0.0
 ```
 
 Until then, use a local checkout for development:
 
 ```sh
-git clone https://github.com/darkinno/crdt.git
+git clone https://github.com/DarkInno/crdt.git
 cd crdt
 go test ./...
 ```
@@ -93,7 +93,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/darkinno/crdt/counter"
+	"github.com/DarkInno/crdt/counter"
 )
 
 func main() {
@@ -163,7 +163,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/darkinno/crdt/set"
+	"github.com/DarkInno/crdt/set"
 )
 
 type stringCodec struct{}
@@ -352,12 +352,12 @@ go mod tidy
 go test ./...
 git tag -a v1.0.0 -m "Release v1.0.0"
 git push origin v1.0.0
-GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v1.0.0
+GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@v1.0.0
 ```
 
 Do not move or reuse a published tag. For Go modules, breaking changes after
 the first stable release require a new major-version module path such as
-`github.com/darkinno/crdt/v2`.
+`github.com/DarkInno/crdt/v2`.
 
 ## Contributing
 

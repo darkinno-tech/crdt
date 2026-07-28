@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/darkinno/crdt"
+	"github.com/DarkInno/crdt"
 )
 
 var (

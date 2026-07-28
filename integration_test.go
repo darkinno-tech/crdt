@@ -4,12 +4,12 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/darkinno/crdt/counter"
-	"github.com/darkinno/crdt/delta"
-	frame "github.com/darkinno/crdt/encoding"
-	"github.com/darkinno/crdt/merkle"
-	"github.com/darkinno/crdt/set"
-	"github.com/darkinno/crdt/snapshot"
+	"github.com/DarkInno/crdt/counter"
+	"github.com/DarkInno/crdt/delta"
+	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/merkle"
+	"github.com/DarkInno/crdt/set"
+	"github.com/DarkInno/crdt/snapshot"
 )
 
 type integrationStringCodec struct{}
