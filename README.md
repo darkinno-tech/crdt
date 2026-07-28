@@ -50,10 +50,17 @@ resulting protocol set before exchanging their frames:
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
 for _, kind := range policy.FrameTypes() {
-	// Include StateID and DeltaID in the authenticated connection handshake.
+	// This is only a local capability allowlist, not the full handshake.
 	_ = kind
 }
 ```
+
+Before an experimental frame is accepted, bind it to a `replica.Manifest` in
+the authenticated handshake. The manifest includes the group, schema, epoch,
+codec, and semantics version; pass the same explicit policy to each replica
+boundary through `NewChangeWithPolicy`, `NewInboxWithPolicy`,
+`NewCheckpointWithPolicy`, and `NewSessionWithPolicy`. Frame type IDs alone do
+not establish wire-semantic compatibility.
 
 The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
 MV-Register, and PN-Counter protocols. The policy is neither a global switch nor a plugin

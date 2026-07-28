@@ -39,10 +39,16 @@ LWW-Map（`lww.Map`）、RGA 文本（`text`）和 OR-Tree（`tree`）已具备�
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
 for _, kind := range policy.FrameTypes() {
-	// 在经过认证的连接握手中包含 StateID 和 DeltaID。
+	// 这只是本地能力白名单，不是完整的握手协商。
 	_ = kind
 }
 ```
+
+接收实验帧之前，必须在经过认证的握手中将其绑定到 `replica.Manifest`。Manifest
+包含 group、schema、epoch、codec 与语义版本；在每个 replica 边界
+（`NewChangeWithPolicy`、`NewInboxWithPolicy`、`NewCheckpointWithPolicy`、
+`NewSessionWithPolicy`）均传入同一份显式 Policy。仅凭 Frame Type ID 不能证明
+线协议语义兼容。
 
 零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该策略既不是全局
 开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。LWW-Map、RGA 和
@@ -218,8 +224,9 @@ go run ./examples/collaborative-board
   无缺口因果前缀的场景。
 - 在复用 MV-Register 的副本 ID 前持久化其状态快照。其版本向量而非墙上时钟可证明
   后续 `Set` 已观察哪些写入；使用 `register.NewMVRegisterFromSnapshot` 恢复。
-- 将 `ProtocolPolicy.FrameTypes()` 作为经过认证的连接/建链能力通告。只有两端
-  都选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧；应原子持久化其带 HLC
+- 将 `ProtocolPolicy.FrameTypes()` 作为本地能力白名单；经过认证的连接/建链必须
+  使用 `replica.Manifest` 比较 group、schema、epoch、codec 与语义版本。只有两端
+  都显式选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧；应原子持久化其带 HLC
   的快照，且暂时不要回收其墓碑。
 - 保持 `ElementCodec.ID`、`Marshal` 与 `Unmarshal` 确定性，并确保它们可安全
   并发调用。编码值必须以规范形式往返。
