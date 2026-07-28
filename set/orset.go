@@ -272,6 +272,9 @@ func (s *ORSet[T]) Merge(other *ORSet[T]) error {
 	if s.codec.ID() != other.codec.ID() {
 		return ErrCodecMismatch
 	}
+	if s == other {
+		return nil
+	}
 
 	other.mu.RLock()
 	adds := cloneAdds(other.elements)
@@ -280,21 +283,15 @@ func (s *ORSet[T]) Merge(other *ORSet[T]) error {
 	if err := validateState(adds, tombstones); err != nil {
 		return err
 	}
-	if other != s {
-		if tag, ok := greatestStateTag(adds, tombstones); ok {
-			if err := s.clock.Witness(tag); err != nil {
-				return err
-			}
+	if tag, ok := greatestStateTag(adds, tombstones); ok {
+		if err := s.clock.Witness(tag); err != nil {
+			return err
 		}
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	mergedAdds := cloneAdds(s.elements)
-	mergedTombstones := cloneTags(s.tombstones)
-	joinState(mergedAdds, mergedTombstones, adds, tombstones)
-	s.elements = mergedAdds
-	s.tombstones = mergedTombstones
+	joinState(s.elements, s.tombstones, adds, tombstones)
 	return nil
 }
 
@@ -314,11 +311,7 @@ func (s *ORSet[T]) ApplyDelta(delta ORSetDelta[T]) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	mergedAdds := cloneAdds(s.elements)
-	mergedTombstones := cloneTags(s.tombstones)
-	joinState(mergedAdds, mergedTombstones, delta.adds, delta.tombstones)
-	s.elements = mergedAdds
-	s.tombstones = mergedTombstones
+	joinState(s.elements, s.tombstones, delta.adds, delta.tombstones)
 	return nil
 }
 
