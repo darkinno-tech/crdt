@@ -2,25 +2,32 @@
 // primitives in this module.
 package crdt
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Stable frame type assignments. Values are part of the v1 wire contract and
 // must never be reused for a different payload shape.
 const (
-	TypeIDGCounterState  uint64 = 1
-	TypeIDORSetState     uint64 = 2
-	TypeIDGCounterDelta  uint64 = 3
-	TypeIDORSetDelta     uint64 = 4
-	TypeIDPNCounterState uint64 = 5
-	TypeIDPNCounterDelta uint64 = 6
-	TypeIDLWWSetState    uint64 = 7
-	TypeIDLWWSetDelta    uint64 = 8
-	TypeIDLWWMapState    uint64 = 9
-	TypeIDLWWMapDelta    uint64 = 10
-	TypeIDRGAState       uint64 = 11
-	TypeIDRGADelta       uint64 = 12
-	TypeIDORTreeState    uint64 = 17
-	TypeIDORTreeDelta    uint64 = 18
+	TypeIDGCounterState   uint64 = 1
+	TypeIDORSetState      uint64 = 2
+	TypeIDGCounterDelta   uint64 = 3
+	TypeIDORSetDelta      uint64 = 4
+	TypeIDPNCounterState  uint64 = 5
+	TypeIDPNCounterDelta  uint64 = 6
+	TypeIDLWWSetState     uint64 = 7
+	TypeIDLWWSetDelta     uint64 = 8
+	TypeIDLWWMapState     uint64 = 9
+	TypeIDLWWMapDelta     uint64 = 10
+	TypeIDRGAState        uint64 = 11
+	TypeIDRGADelta        uint64 = 12
+	TypeIDGSetState       uint64 = 13
+	TypeIDGSetDelta       uint64 = 14
+	TypeIDMVRegisterState uint64 = 15
+	TypeIDMVRegisterDelta uint64 = 16
+	TypeIDORTreeState     uint64 = 17
+	TypeIDORTreeDelta     uint64 = 18
 )
 
 // FrameType describes one fully implemented framed CRDT protocol. The type
@@ -38,6 +45,8 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
 	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, UsesHLC: true},
 	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
+	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
+	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
 	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
 }
 
@@ -140,10 +149,35 @@ type DeltaCapable[T any, D any] interface {
 // StateSnapshot is an immutable summary of a CRDT state for diagnostics and
 // observability. It never exposes mutable internal data.
 type StateSnapshot struct {
-	Type           string
-	ReplicaID      string
-	ElementCount   int
-	TombstoneCount int
+	Type           string `json:"type"`
+	ReplicaID      string `json:"replica_id"`
+	ElementCount   int    `json:"element_count"`
+	TombstoneCount int    `json:"tombstone_count"`
+}
+
+// StateReporter exposes an immutable CRDT diagnostic summary.
+//
+// It intentionally excludes application values, mutation tags, clock state,
+// and framed bytes. Use it for observability only, never to persist or
+// replicate a CRDT.
+type StateReporter interface {
+	State() StateSnapshot
+}
+
+// MarshalStateJSON returns a compact JSON diagnostic summary for value.
+//
+// This helper is intended for structured logs and human inspection. It does
+// not encode CRDT state, deltas, or opaque application values, so its output
+// cannot reconstruct a replica and must not be used as a wire format.
+func MarshalStateJSON(value StateReporter) ([]byte, error) {
+	return MarshalDiagnosticJSON(value.State())
+}
+
+// MarshalDiagnosticJSON encodes a caller-provided diagnostic summary. It is
+// useful for CRDT delta log views that use the same schema as StateSnapshot.
+// The summary must not contain application values or replication state.
+func MarshalDiagnosticJSON(summary StateSnapshot) ([]byte, error) {
+	return json.Marshal(summary)
 }
 
 // Tag uniquely identifies a CRDT mutation. WallTime, Logical, and ReplicaID

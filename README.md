@@ -6,14 +6,17 @@
 It provides deterministic binary state and delta frames so replicas can converge
 despite duplicate delivery, reordering, and temporary partitions.
 
-> Status: first public module release `v1.0.0`; APIs follow semantic versioning.
+> Status: stable releases are published from `main`; APIs follow semantic versioning.
 
 ## Features
 
 - State-based **G-Counter** with joinable, type-isolated deltas.
+- Grow-only **G-Set** with a caller-defined element codec and joinable deltas.
 - Add-wins observed-remove **OR-Set** with a caller-defined element codec.
 - Experimental delta-replicated **LWW-Map** with opaque byte values and
   deterministic HLC conflict resolution.
+- Causally replicated **MV-Register** that preserves concurrent opaque-byte
+  writes instead of resolving them by wall clock.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -52,8 +55,8 @@ for _, kind := range policy.FrameTypes() {
 }
 ```
 
-The zero-value policy advertises only the stable G-Counter, OR-Set, and
-PN-Counter protocols. The policy is neither a global switch nor a plugin
+The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
+MV-Register, and PN-Counter protocols. The policy is neither a global switch nor a plugin
 registry: unknown and reserved frame types remain unsupported. Experimental
 LWW-Map, RGA, and OR-Tree replicas must persist HLC state with snapshots and
 retain their tombstones; exact acknowledgement-based compaction for those
@@ -65,13 +68,13 @@ types is not yet implemented.
 
 ## Install
 
-After the first public release tag is available:
+Install the latest stable release:
 
 ```sh
-go get github.com/DarkInno/crdt@v1.0.0
+go get github.com/DarkInno/crdt@latest
 ```
 
-Until then, use a local checkout for development:
+For development, use a local checkout:
 
 ```sh
 git clone https://github.com/DarkInno/crdt.git
@@ -235,6 +238,9 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   bootstrap from a post-compaction snapshot.
 - `ORSet.Compact` remains available only for transports that independently
   prove a gap-free causal prefix for every supplied frontier.
+- Persist an MV-Register state snapshot before reusing its replica ID. Its
+  version vector, not a wall clock, proves which writes a later `Set` observes;
+  recover with `register.NewMVRegisterFromSnapshot`.
 - Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
   capability advertisement. Do not send LWW-Map, RGA, or OR-Tree frames unless
   both peers have opted into the experimental protocol. Persist their
@@ -246,6 +252,20 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 - Authenticate, authorize, encrypt, retry, and persist messages in the
   surrounding application. CRDT convergence does not provide those guarantees.
 
+## JSON diagnostics
+
+Concrete CRDT state and delta objects implement `json.Marshaler` for structured
+logs and human inspection. The output is a compact, stable summary such as:
+
+```json
+{"type":"gcounter","replica_id":"left","element_count":2,"tombstone_count":0}
+```
+
+It deliberately excludes application values, element keys, tags, clock state,
+and binary frames. JSON diagnostics cannot restore or apply a CRDT state or
+delta and are not a replication format; use the bounded canonical binary
+encoders for that.
+
 ## Packages
 
 | Package | Purpose |
@@ -253,11 +273,11 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 | `crdt` | Common contracts, state summaries, and mutation tags. |
 | `clock` | Hybrid logical clock and persisted HLC state. |
 | `counter` | G-Counter, PN-Counter, and their delta codecs. |
-| `set` | Add-wins OR-Set and element-codec contract. |
+| `set` | G-Set, add-wins OR-Set, and element-codec contract. |
 | `lww` | In-memory LWW-Set and experimental framed LWW-Map. |
 | `text` | Experimental framed RGA collaborative text. |
 | `tree` | Experimental framed observed-remove tree. |
-| `register` | In-memory LWW and max registers; not yet framed. |
+| `register` | In-memory LWW/max registers and framed causal MV-Register. |
 | `encoding` | Versioned bounded binary frames. |
 | `delta` | Bounded delta batches and coalescers. |
 | `snapshot` | Immutable state snapshots and recovery plans. |
@@ -328,8 +348,8 @@ documentation update.
   vulnerabilities.
 - A controlled three-host delivery probe confirmed idempotent duplicate
   delivery and rejected unauthorized, malformed, and oversized requests.
-- The supplied benchmarks cover G-Counter, PN-Counter, and OR-Set `Merge`,
-  `ApplyDelta`, and `MarshalBinary`. Run `make benchmark` on your target
+- The supplied benchmarks cover G-Counter, PN-Counter, G-Set, OR-Set, and
+  MV-Register `Merge`, `ApplyDelta`, and `MarshalBinary`. Run `make benchmark` on your target
   hardware before choosing capacity limits.
 
 The scenario evaluation at the end of this README records the current local
@@ -341,18 +361,19 @@ Run `make test-extreme` to repeat the high-cardinality scenario in normal and
 race-instrumented modes. Internal investigation data and deployment runbooks
 are intentionally kept outside the public release tree.
 
-## Publishing `v1.0.0`
+## Publishing releases
 
-Before publishing, run the verification commands above, review the public API,
-commit the reviewed release contents, and ensure the repository is publicly
-reachable at the module path. Then create an immutable semantic-version tag:
+Before merging `beta` into `main`, run the verification commands above, review
+the public API, and ensure the repository is publicly reachable at the module
+path. The `main` push workflow creates the next immutable semantic-version tag
+and a GitHub Release with generated notes. Do not create a competing stable tag
+by hand.
 
 ```sh
 go mod tidy
-go test ./...
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
-GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@v1.0.0
+make verify
+# Merge the reviewed beta -> main pull request, then wait for the main workflow.
+GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@latest
 ```
 
 Do not move or reuse a published tag. For Go modules, breaking changes after

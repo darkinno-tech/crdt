@@ -108,9 +108,10 @@ replay policy, or authorization model. Do not expose it to the public Internet.
 The probe demonstrates the boundary that a consuming application owns:
 
 1. Assign every live logical replica a globally unique, non-blank ID. A process
-   that reuses an OR-Set ID after restart must restore its HLC state; otherwise
-   it needs a fresh ID.
-2. On a local mutation, call `Add`, `Remove`, or `Increment`; persist the local
+   that reuses an OR-Set ID after restart must restore its HLC state; a process
+   that reuses an MV-Register ID must restore its causal snapshot. Otherwise it
+   needs a fresh ID.
+2. On a local mutation, call `Add`, `Remove`, `Increment`, or `Set`; persist the local
    CRDT state and its encoded delta in one durable transaction/outbox. Persist
    OR-Set state with the HLC state from `SnapshotCurrentState()` or
    `MarshalBinaryWithClockState()`.
@@ -149,7 +150,20 @@ codec ID stable across replicas, make encoding deterministic, and deliberately
 version it when the byte format changes. Real tasks normally use canonical IDs,
 not arbitrary display text.
 
-## 4. Experimental LWW-Map, RGA, and OR-Tree integration
+## 4. Stable G-Set and MV-Register integration
+
+G-Set and MV-Register are stable framed protocols included by the zero-value
+`crdt.ProtocolPolicy`. A G-Set is grow-only: use OR-Set when the product needs
+removal. An MV-Register `Set` can retain multiple causally concurrent values;
+read `Values()` and make the product-level choice explicit rather than assuming
+a single last writer wins.
+
+Persist an MV-Register state frame and its `Snapshot()` atomically with the
+outbox/receipt transaction. Restore a same-ID replica with
+`register.NewMVRegisterFromSnapshot`; state bytes alone omit its causal context.
+No experimental opt-in is required for G-Set or MV-Register frames.
+
+## 5. Experimental LWW-Map, RGA, and OR-Tree integration
 
 LWW-Map (`lww.Map`), RGA (`text`), and OR-Tree (`tree`) are framed, HLC-backed
 experimental protocols. They are suitable only after the capability check above succeeds;
@@ -167,7 +181,7 @@ delete tombstones for out-of-order delivery. Exact acknowledgement-based
 compaction for them is not implemented, so an experimental integration must
 budget, monitor, and retain those tombstones rather than calling a generic GC.
 
-## 5. Recovery, anti-entropy, and tombstones
+## 6. Recovery, anti-entropy, and tombstones
 
 Bootstrap a new or recovering replica from a complete state snapshot. For an
 OR-Set, never restore a same-ID replica from `MarshalBinary()` bytes alone: its
@@ -194,11 +208,11 @@ make test-integration
 
 | Check | Required evidence |
 | --- | --- |
-| Stable identity | Replica-ID lifecycle and OR-Set HLC persistence are documented and tested. |
+| Stable identity | Replica-ID lifecycle, OR-Set HLC persistence, and MV-Register causal-snapshot persistence are documented and tested. |
 | Duplicate/reordered delivery | The same encoded delta is delivered more than once and final state is unchanged. |
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
-| Business semantics | Product owners have accepted add-wins and the limits of grow-only counters. |
+| Business semantics | Product owners have accepted add-wins, grow-only G-Set and counter limits, and concurrent MV-Register value semantics. |
 | Experimental protocol agreement | LWW-Map/RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
