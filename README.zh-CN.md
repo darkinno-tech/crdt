@@ -6,8 +6,7 @@
 它提供确定性的二进制状态帧与增量帧，使副本能在重复投递、乱序和暂时
 网络分区的情况下收敛。
 
-> 状态：预发布。首个公开模块版本将为 `v0.1.0`；在 `v1.0.0` 前 API
-> 仍可能调整。
+> 状态：首个公开模块版本为 `v1.0`；API 遵循语义化版本规范。
 
 ## 特性
 
@@ -35,7 +34,7 @@
 首个公开发布标签可用后：
 
 ```sh
-go get github.com/darkinno/crdt@v0.1.0
+go get github.com/darkinno/crdt@v1.0
 ```
 
 在此之前，请使用本地检出进行开发：
@@ -237,16 +236,14 @@ CI 工作流会强制执行格式化、单元测试、竞态检测、vet、解�
 - 提供的基准覆盖 G-Counter 和 OR-Set 的 `Merge`、`ApplyDelta` 与
   `MarshalBinary`。在确定容量限制前，请在目标硬件上运行 `make benchmark`。
 
-OR-Set 在合并和增量应用时不会复制自身已经验证的状态。在维护的 128 元素基准上，
-当前 Apple 芯片样本的 `Merge` 为 46.6 微秒、57.8 KB；在 `GOMAXPROCS=12` 时，
-重复 `ApplyDelta` 为 5.3 微秒且零分配。该基准只有一个串行循环，没有使用
-`RunParallel`，因此不是 12 核吞吐量测量。精确结果取决于 CPU、Go 版本、元素
-编解码器、集合大小和变更组合。
+本 README 底部的不同场景测评记录了当前本地样本：重复投递、存活状态序列化和
+墓碑密集状态序列化。精确结果取决于 CPU、Go 版本、元素编解码器、集合大小和
+变更组合。
 
 运行 `make test-extreme` 可在普通和 race 插桩模式下重现高基数场景。内部分析数据
 和部署运行手册刻意保留在公开发布树之外。
 
-## 发布 `v0.1.0`
+## 发布 `v1.0`
 
 发布前，请运行以上验证命令、审阅公开 API、提交审核过的发布内容，并确保仓库可
 通过模块路径公开访问。然后创建不可变的语义版本标签：
@@ -254,9 +251,9 @@ OR-Set 在合并和增量应用时不会复制自身已经验证的状态。在�
 ```sh
 go mod tidy
 go test ./...
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
-GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v0.1.0
+git tag -a v1.0 -m "Release v1.0"
+git push origin v1.0
+GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v1.0
 ```
 
 不要移动或复用已发布标签。对于 Go 模块，首个稳定版之后的破坏性变更需要新的主
@@ -266,6 +263,26 @@ GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v0.1.0
 
 请先创建 issue 再提出 API 扩展。贡献应包含聚焦的测试，保持线协议编码确定性，
 限制不可信输入，并通过上述验证命令。
+
+## 不同场景性能测评 — 2026-07-28
+
+在 Apple M4 Pro、Go 1.26.5（`darwin/arm64`）本地测得。夹具包含 128 个字符串
+元素；每项结果为三次、每次两秒采样的四舍五入均值。各次采样的分配数据保持稳定。
+
+| 场景 | `GOMAXPROCS=1` | `GOMAXPROCS=4` | 每操作分配 |
+| --- | ---: | ---: | ---: |
+| `Merge` | 56.0 µs/op | 42.9 µs/op | 57,768 B；259 allocs |
+| 重复 `ApplyDelta` | 131 ns/op | 131 ns/op | 0 B；0 allocs |
+| 并行重复 `ApplyDelta` | 132 ns/op | 105 ns/op | 0 B；0 allocs |
+| `MarshalBinary`（128 个存活元素） | 36.8 µs/op | 26.6 µs/op | 29,952 B；132 allocs |
+| `MarshalBinary`（墓碑密集） | 24.8 µs/op | 17.4 µs/op | 15,616 B；2 allocs |
+
+`Merge`、普通 `ApplyDelta` 与 `MarshalBinary` 使用串行基准循环；它们的
+`GOMAXPROCS=4` 数据仅是运行时设置样本，并非四核吞吐量测量。只有“并行重复
+`ApplyDelta`”一行使用了 `RunParallel`。与采用同一存活状态夹具和方法的早期本地
+样本相比，`MarshalBinary` 现为每操作 29,952 B、132 次分配，低于原先的
+96,312 B、778 次分配。这些是本地预发布测量，不是容量规划或 SLA 保证；设置限制
+前请在部署目标上重新运行 `make benchmark`。
 
 ## 许可证
 

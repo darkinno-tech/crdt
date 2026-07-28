@@ -6,8 +6,7 @@
 It provides deterministic binary state and delta frames so replicas can converge
 despite duplicate delivery, reordering, and temporary partitions.
 
-> Status: pre-release. The first public module release will be `v0.1.0`; APIs
-> may change before `v1.0.0`.
+> Status: first public module release `v1.0`; APIs follow semantic versioning.
 
 ## Features
 
@@ -42,7 +41,7 @@ mechanism.
 After the first public release tag is available:
 
 ```sh
-go get github.com/darkinno/crdt@v0.1.0
+go get github.com/darkinno/crdt@v1.0
 ```
 
 Until then, use a local checkout for development:
@@ -256,19 +255,16 @@ documentation update.
   and `MarshalBinary`. Run `make benchmark` on your target hardware before
   choosing capacity limits.
 
-The OR-Set implementation avoids copying its own validated state during merge
-and delta application. On the maintained 128-element benchmark, the current
-Apple-silicon sample measured 46.6 microseconds and 57.8 KB per `Merge`, and
-5.3 microseconds with zero allocations per duplicate `ApplyDelta` at
-`GOMAXPROCS=12`. This benchmark uses one serial loop, not `RunParallel`; it is
-not a 12-core throughput measurement. Exact results depend on the CPU, Go
-version, element codec, set size, and mutation mix.
+The scenario evaluation at the end of this README records the current local
+sample for duplicate delivery and both live-state and tombstone-heavy
+serialization. Exact results depend on the CPU, Go version, element codec, set
+size, and mutation mix.
 
 Run `make test-extreme` to repeat the high-cardinality scenario in normal and
 race-instrumented modes. Internal investigation data and deployment runbooks
 are intentionally kept outside the public release tree.
 
-## Publishing `v0.1.0`
+## Publishing `v1.0`
 
 Before publishing, run the verification commands above, review the public API,
 commit the reviewed release contents, and ensure the repository is publicly
@@ -277,9 +273,9 @@ reachable at the module path. Then create an immutable semantic-version tag:
 ```sh
 go mod tidy
 go test ./...
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
-GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v0.1.0
+git tag -a v1.0 -m "Release v1.0"
+git push origin v1.0
+GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v1.0
 ```
 
 Do not move or reuse a published tag. For Go modules, breaking changes after
@@ -291,6 +287,29 @@ the first stable release require a new major-version module path such as
 Please open an issue before proposing an API expansion. Contributions should
 include focused tests, preserve deterministic wire encoding, keep untrusted
 input bounded, and pass the verification commands above.
+
+## Scenario performance evaluation — 2026-07-28
+
+Measured locally on an Apple M4 Pro with Go 1.26.5 (`darwin/arm64`). The
+fixture contains 128 string elements; each result is the rounded mean of three
+two-second samples. Allocation values were stable across samples.
+
+| Scenario | `GOMAXPROCS=1` | `GOMAXPROCS=4` | Allocation per operation |
+| --- | ---: | ---: | ---: |
+| `Merge` | 56.0 µs/op | 42.9 µs/op | 57,768 B; 259 allocs |
+| Duplicate `ApplyDelta` | 131 ns/op | 131 ns/op | 0 B; 0 allocs |
+| Parallel duplicate `ApplyDelta` | 132 ns/op | 105 ns/op | 0 B; 0 allocs |
+| `MarshalBinary` (128 live elements) | 36.8 µs/op | 26.6 µs/op | 29,952 B; 132 allocs |
+| `MarshalBinary` (tombstone-heavy) | 24.8 µs/op | 17.4 µs/op | 15,616 B; 2 allocs |
+
+`Merge`, ordinary `ApplyDelta`, and `MarshalBinary` use serial benchmark
+loops; their `GOMAXPROCS=4` values are runtime-setting samples, not four-core
+throughput measurements. Only the parallel duplicate-delivery row uses
+`RunParallel`. Compared with an earlier local sample using the same live-state
+fixture and method, `MarshalBinary` now uses 29,952 B and 132 allocations per
+operation, down from 96,312 B and 778 allocations. These are local
+pre-release measurements, not capacity planning or SLA guarantees; rerun
+`make benchmark` on the deployment target before setting limits.
 
 ## License
 
