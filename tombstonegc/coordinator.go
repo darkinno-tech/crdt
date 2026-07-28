@@ -31,6 +31,17 @@ type Membership struct {
 	Members []string
 }
 
+// AcknowledgementStats is a point-in-time summary for setting application GC
+// policy. Entries counts unique member/tag acknowledgements; Tags counts the
+// tags with at least one retained acknowledgement.
+type AcknowledgementStats struct {
+	GroupID string
+	Epoch   uint64
+	Members int
+	Tags    int
+	Entries int
+}
+
 // Coordinator collects exact tombstone acknowledgements for one replicated
 // OR-Set. Its state is deliberately fail-closed: a restart or membership
 // replacement clears acknowledgements and can delay collection, but cannot
@@ -40,11 +51,13 @@ type Membership struct {
 // replication protocol. A removed member that later reconnects must bootstrap
 // from a snapshot created after the compaction it missed.
 type Coordinator[T comparable] struct {
-	mu               sync.Mutex
-	groupID          string
-	epoch            uint64
-	members          map[string]struct{}
-	acknowledgements map[string]map[crdt.Tag]struct{}
+	membershipMu          sync.RWMutex
+	acknowledgementMu     sync.Mutex
+	groupID               string
+	epoch                 uint64
+	members               map[string]struct{}
+	acknowledgements      map[string]map[crdt.Tag]struct{}
+	acknowledgementCounts map[crdt.Tag]uint
 }
 
 // NewCoordinator creates a coordinator for groupID with the initial active
@@ -60,10 +73,11 @@ func NewCoordinator[T comparable](groupID string, members []string) (*Coordinato
 		return nil, err
 	}
 	return &Coordinator[T]{
-		groupID:          groupID,
-		epoch:            1,
-		members:          memberSet,
-		acknowledgements: make(map[string]map[crdt.Tag]struct{}, len(memberSet)),
+		groupID:               groupID,
+		epoch:                 1,
+		members:               memberSet,
+		acknowledgements:      make(map[string]map[crdt.Tag]struct{}, len(memberSet)),
+		acknowledgementCounts: make(map[crdt.Tag]uint),
 	}, nil
 }
 
@@ -72,9 +86,33 @@ func (c *Coordinator[T]) Membership() Membership {
 	if c == nil {
 		return Membership{}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.membershipMu.RLock()
+	defer c.membershipMu.RUnlock()
 	return Membership{GroupID: c.groupID, Epoch: c.epoch, Members: sortedMembers(c.members)}
+}
+
+// AcknowledgementStats returns counts suitable for monitoring acknowledgement
+// memory and deciding when to persist a post-compaction snapshot and prune
+// records. It returns an empty value for a nil coordinator.
+func (c *Coordinator[T]) AcknowledgementStats() AcknowledgementStats {
+	if c == nil {
+		return AcknowledgementStats{}
+	}
+	c.membershipMu.RLock()
+	defer c.membershipMu.RUnlock()
+	c.acknowledgementMu.Lock()
+	defer c.acknowledgementMu.Unlock()
+	entries := 0
+	for _, acknowledged := range c.acknowledgements {
+		entries += len(acknowledged)
+	}
+	return AcknowledgementStats{
+		GroupID: c.groupID,
+		Epoch:   c.epoch,
+		Members: len(c.members),
+		Tags:    len(c.acknowledgementCounts),
+		Entries: entries,
+	}
 }
 
 // ReplaceMembership installs an authoritative new membership view. It clears
@@ -88,14 +126,17 @@ func (c *Coordinator[T]) ReplaceMembership(members []string) (Membership, error)
 	if err != nil {
 		return Membership{}, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.membershipMu.Lock()
+	defer c.membershipMu.Unlock()
 	if c.epoch == ^uint64(0) {
 		return Membership{}, ErrInvalidMembership
 	}
+	c.acknowledgementMu.Lock()
+	defer c.acknowledgementMu.Unlock()
 	c.epoch++
 	c.members = memberSet
 	c.acknowledgements = make(map[string]map[crdt.Tag]struct{}, len(memberSet))
+	c.acknowledgementCounts = make(map[crdt.Tag]uint)
 	return Membership{GroupID: c.groupID, Epoch: c.epoch, Members: sortedMembers(memberSet)}, nil
 }
 
@@ -106,13 +147,58 @@ func (c *Coordinator[T]) Acknowledge(groupID, member string, epoch uint64, tombs
 	if c == nil {
 		return ErrInvalidMembership
 	}
-	for _, tag := range tombstones {
-		if !tag.Valid() {
-			return ErrInvalidTag
-		}
+	if err := validateTombstones(tombstones); err != nil {
+		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.membershipMu.RLock()
+	defer c.membershipMu.RUnlock()
+	c.acknowledgementMu.Lock()
+	defer c.acknowledgementMu.Unlock()
+	return c.acknowledgeLocked(groupID, member, epoch, tombstones)
+}
+
+// PruneAcknowledgements removes retained acknowledgement proofs for tags in
+// the current membership epoch. Call it only after the local compacted target
+// has been durably snapshotted. Pruning is fail-closed: it can delay a later
+// compaction until members report again, but it cannot make a tag eligible.
+//
+// A Coordinator shared by multiple local targets must not prune a tag until
+// every target that relies on this Coordinator has compacted it or can safely
+// wait for another full acknowledgement cycle. The return value is the number
+// of member/tag acknowledgement records removed.
+func (c *Coordinator[T]) PruneAcknowledgements(groupID string, epoch uint64, tags []crdt.Tag) (int, error) {
+	if c == nil {
+		return 0, ErrInvalidMembership
+	}
+	if err := validateTombstones(tags); err != nil {
+		return 0, err
+	}
+	c.membershipMu.RLock()
+	defer c.membershipMu.RUnlock()
+	c.acknowledgementMu.Lock()
+	defer c.acknowledgementMu.Unlock()
+	if groupID != c.groupID {
+		return 0, ErrGroupMismatch
+	}
+	if epoch != c.epoch {
+		return 0, ErrStaleMembership
+	}
+	removed := 0
+	for _, tag := range tags {
+		for _, acknowledged := range c.acknowledgements {
+			if _, exists := acknowledged[tag]; !exists {
+				continue
+			}
+			delete(acknowledged, tag)
+			removed++
+		}
+		delete(c.acknowledgementCounts, tag)
+	}
+	return removed, nil
+}
+
+// acknowledgeLocked requires membershipMu and acknowledgementMu to be held.
+func (c *Coordinator[T]) acknowledgeLocked(groupID, member string, epoch uint64, tombstones []crdt.Tag) error {
 	if groupID != c.groupID {
 		return ErrGroupMismatch
 	}
@@ -126,7 +212,11 @@ func (c *Coordinator[T]) Acknowledge(groupID, member string, epoch uint64, tombs
 		c.acknowledgements[member] = make(map[crdt.Tag]struct{}, len(tombstones))
 	}
 	for _, tag := range tombstones {
+		if _, alreadyAcknowledged := c.acknowledgements[member][tag]; alreadyAcknowledged {
+			continue
+		}
 		c.acknowledgements[member][tag] = struct{}{}
+		c.acknowledgementCounts[tag]++
 	}
 	return nil
 }
@@ -138,10 +228,29 @@ func (c *Coordinator[T]) AcknowledgeAndCompact(groupID, member string, epoch uin
 	if target == nil {
 		return 0, set.ErrNilORSet
 	}
-	if err := c.Acknowledge(groupID, member, epoch, tombstones); err != nil {
+	if c == nil {
+		return 0, ErrInvalidMembership
+	}
+	if err := validateTombstones(tombstones); err != nil {
 		return 0, err
 	}
-	return target.CompactTombstones(c.stableTombstones(target.TombstoneTags()))
+
+	// Hold the membership read lock through target compaction so
+	// ReplaceMembership cannot install a new epoch between deciding that a tag
+	// is stable and deleting that tag. Keep acknowledgement locking narrower:
+	// ORSet sorting and compaction do not block independent acknowledgement
+	// writes. The lock order is membershipMu before acknowledgementMu.
+	c.membershipMu.RLock()
+	defer c.membershipMu.RUnlock()
+	candidates := target.TombstoneTags()
+	c.acknowledgementMu.Lock()
+	if err := c.acknowledgeLocked(groupID, member, epoch, tombstones); err != nil {
+		c.acknowledgementMu.Unlock()
+		return 0, err
+	}
+	stable := c.stableTombstonesLocked(candidates)
+	c.acknowledgementMu.Unlock()
+	return target.CompactTombstones(stable)
 }
 
 // AcknowledgeSetAndCompact is AcknowledgeAndCompact for a member's complete
@@ -154,26 +263,27 @@ func (c *Coordinator[T]) AcknowledgeSetAndCompact(groupID, member string, epoch 
 	return c.AcknowledgeAndCompact(groupID, member, epoch, acknowledged.TombstoneTags(), target)
 }
 
-func (c *Coordinator[T]) stableTombstones(candidates []crdt.Tag) []crdt.Tag {
-	if c == nil || len(candidates) == 0 {
+// stableTombstonesLocked requires membershipMu and acknowledgementMu to be held.
+func (c *Coordinator[T]) stableTombstonesLocked(candidates []crdt.Tag) []crdt.Tag {
+	if len(candidates) == 0 {
 		return nil
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	stable := make([]crdt.Tag, 0, len(candidates))
 	for _, tag := range candidates {
-		acknowledgedByAll := true
-		for member := range c.members {
-			if _, ok := c.acknowledgements[member][tag]; !ok {
-				acknowledgedByAll = false
-				break
-			}
-		}
-		if acknowledgedByAll {
+		if c.acknowledgementCounts[tag] == uint(len(c.members)) {
 			stable = append(stable, tag)
 		}
 	}
 	return stable
+}
+
+func validateTombstones(tombstones []crdt.Tag) error {
+	for _, tag := range tombstones {
+		if !tag.Valid() {
+			return ErrInvalidTag
+		}
+	}
+	return nil
 }
 
 func validateMembers(members []string) (map[string]struct{}, error) {
