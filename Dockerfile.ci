@@ -1,0 +1,12 @@
+ARG GO_IMAGE=golang:1.21-bookworm
+FROM ${GO_IMAGE}
+
+WORKDIR /workspace
+
+COPY go.mod ./
+RUN go mod download
+
+COPY . .
+RUN chmod +x scripts/check-coverage.sh
+
+CMD ["./scripts/check-coverage.sh"]
