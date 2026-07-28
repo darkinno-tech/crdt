@@ -5,20 +5,24 @@ import "strings"
 // Stable frame type assignments. Values are part of the v1 wire contract and
 // must never be reused for a different payload shape.
 const (
-	TypeIDGCounterState  uint64 = 1
-	TypeIDORSetState     uint64 = 2
-	TypeIDGCounterDelta  uint64 = 3
-	TypeIDORSetDelta     uint64 = 4
-	TypeIDPNCounterState uint64 = 5
-	TypeIDPNCounterDelta uint64 = 6
-	TypeIDLWWSetState    uint64 = 7
-	TypeIDLWWSetDelta    uint64 = 8
-	TypeIDLWWMapState    uint64 = 9
-	TypeIDLWWMapDelta    uint64 = 10
-	TypeIDRGAState       uint64 = 11
-	TypeIDRGADelta       uint64 = 12
-	TypeIDORTreeState    uint64 = 17
-	TypeIDORTreeDelta    uint64 = 18
+	TypeIDGCounterState   uint64 = 1
+	TypeIDORSetState      uint64 = 2
+	TypeIDGCounterDelta   uint64 = 3
+	TypeIDORSetDelta      uint64 = 4
+	TypeIDPNCounterState  uint64 = 5
+	TypeIDPNCounterDelta  uint64 = 6
+	TypeIDLWWSetState     uint64 = 7
+	TypeIDLWWSetDelta     uint64 = 8
+	TypeIDLWWMapState     uint64 = 9
+	TypeIDLWWMapDelta     uint64 = 10
+	TypeIDRGAState        uint64 = 11
+	TypeIDRGADelta        uint64 = 12
+	TypeIDGSetState       uint64 = 13
+	TypeIDGSetDelta       uint64 = 14
+	TypeIDMVRegisterState uint64 = 15
+	TypeIDMVRegisterDelta uint64 = 16
+	TypeIDORTreeState     uint64 = 17
+	TypeIDORTreeDelta     uint64 = 18
 )
 
 // FrameType describes one fully implemented framed CRDT protocol. The type
@@ -34,6 +38,8 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta},
 	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, UsesHLC: true},
 	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
+	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
+	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
 	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
 	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
 }

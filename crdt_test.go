@@ -85,6 +85,8 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 		{TypeIDGCounterState, TypeIDGCounterDelta, false},
 		{TypeIDORSetState, TypeIDORSetDelta, true},
 		{TypeIDPNCounterState, TypeIDPNCounterDelta, false},
+		{TypeIDGSetState, TypeIDGSetDelta, false},
+		{TypeIDMVRegisterState, TypeIDMVRegisterDelta, false},
 		{TypeIDRGAState, TypeIDRGADelta, true},
 		{TypeIDORTreeState, TypeIDORTreeDelta, true},
 	} {
@@ -107,8 +109,8 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 
 func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 	stable := (ProtocolPolicy{}).FrameTypes()
-	if len(stable) != 3 {
-		t.Fatalf("stable protocol count = %d, want 3", len(stable))
+	if len(stable) != 5 {
+		t.Fatalf("stable protocol count = %d, want 5", len(stable))
 	}
 	for _, kind := range stable {
 		if IsExperimentalFrame(kind.StateID) || IsExperimentalFrame(kind.DeltaID) {
@@ -126,8 +128,8 @@ func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
 	policy := ProtocolPolicy{AllowExperimental: true}
 	types := policy.FrameTypes()
-	if len(types) != 5 {
-		t.Fatalf("experimental protocol count = %d, want 5", len(types))
+	if len(types) != 7 {
+		t.Fatalf("experimental protocol count = %d, want 7", len(types))
 	}
 	if !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDORTreeDelta) {
 		t.Fatal("experimental policy omitted an implemented experimental protocol")

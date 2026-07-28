@@ -17,12 +17,13 @@ import (
 )
 
 var (
-	ErrInvalidCodec    = errors.New("set: invalid element codec")
-	ErrNilORSet        = errors.New("set: nil OR-Set")
-	ErrCodecMismatch   = errors.New("set: codec ID mismatch")
-	ErrInvalidDelta    = errors.New("set: invalid OR-Set delta")
-	ErrInvalidFrontier = errors.New("set: invalid frontier")
-	ErrInvalidSnapshot = errors.New("set: invalid OR-Set snapshot")
+	ErrInvalidCodec     = errors.New("set: invalid element codec")
+	ErrInvalidReplicaID = errors.New("set: invalid replica ID")
+	ErrNilORSet         = errors.New("set: nil OR-Set")
+	ErrCodecMismatch    = errors.New("set: codec ID mismatch")
+	ErrInvalidDelta     = errors.New("set: invalid OR-Set delta")
+	ErrInvalidFrontier  = errors.New("set: invalid frontier")
+	ErrInvalidSnapshot  = errors.New("set: invalid OR-Set snapshot")
 )
 
 // ElementCodec identifies and encodes one OR-Set element type. ID and encoded

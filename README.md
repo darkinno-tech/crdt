@@ -11,7 +11,10 @@ despite duplicate delivery, reordering, and temporary partitions.
 ## Features
 
 - State-based **G-Counter** with joinable, type-isolated deltas.
+- Grow-only **G-Set** with a caller-defined element codec and joinable deltas.
 - Add-wins observed-remove **OR-Set** with a caller-defined element codec.
+- Causally replicated **MV-Register** that preserves concurrent opaque-byte
+  writes instead of resolving them by wall clock.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -50,8 +53,8 @@ for _, kind := range policy.FrameTypes() {
 }
 ```
 
-The zero-value policy advertises only the stable G-Counter, OR-Set, and
-PN-Counter protocols. The policy is neither a global switch nor a plugin
+The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
+MV-Register, and PN-Counter protocols. The policy is neither a global switch nor a plugin
 registry: unknown and reserved frame types remain unsupported. Experimental
 RGA and OR-Tree replicas must persist HLC state with snapshots and retain their
 tombstones; exact acknowledgement-based compaction for those types is not yet
@@ -233,6 +236,9 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   bootstrap from a post-compaction snapshot.
 - `ORSet.Compact` remains available only for transports that independently
   prove a gap-free causal prefix for every supplied frontier.
+- Persist an MV-Register state snapshot before reusing its replica ID. Its
+  version vector, not a wall clock, proves which writes a later `Set` observes;
+  recover with `register.NewMVRegisterFromSnapshot`.
 - Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
   capability advertisement. Do not send RGA or OR-Tree frames unless both
   peers have opted into the experimental protocol. Persist their HLC-backed

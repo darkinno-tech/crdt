@@ -30,6 +30,7 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
 	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./set
+	go test -run=^$$ -fuzz=FuzzMVRegisterUnmarshal -fuzztime=10s ./register
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=10s ./text
 	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=10s ./tree
