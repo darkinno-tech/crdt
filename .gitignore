@@ -1,0 +1,5 @@
+# Local design and review documents
+docs/
+
+# OS metadata
+.DS_Store
