@@ -35,7 +35,7 @@ benchmark:
 	go test -run='^$$' -bench=. -benchmem ./...
 
 docker-test:
-	docker build --build-arg GO_IMAGE=$${DOCKER_GO_IMAGE:-golang:1.21-bookworm} --file Dockerfile.ci --tag crdt-ci:local .
+	docker build --build-arg GO_IMAGE=$${DOCKER_GO_IMAGE:-golang:1.26-bookworm} --file Dockerfile.ci --tag crdt-ci:local .
 	docker run --rm --env COVERAGE_THRESHOLD=90 crdt-ci:local
 
 staticcheck:
