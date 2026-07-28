@@ -15,8 +15,8 @@
 
 ### 1.1 问题场景
 
-`main` 已自动生成正式标签 `v1.0.1`，但 GitHub Releases 页面没有对应发布条目和
-自动生成的变更说明。
+`main` 已自动生成正式标签 `v1.0.1` 与 `v1.0.2`，但 GitHub Releases 页面最初没有
+对应发布条目和自动生成的变更说明。
 
 ### 1.2 具体表现
 
@@ -31,17 +31,20 @@
 2. 查询 GitHub Releases API，得到 404，确认不是页面缓存或权限问题。
 3. 检查 `.github/workflows/test.yml`，发现 `release-tag` 只执行 `git tag` 与
    `git push origin <tag>`。
-4. 工作流没有使用 GitHub Releases API 或 CLI 创建 release，因此 tag 不会自动拥有
-   发布说明页面。
+4. 新增独立的 tag 触发工作流后，`v1.0.1` 的手动 dispatch 可以创建 Release，但
+   `release-tag` 通过 `GITHUB_TOKEN` 推送的 `v1.0.2` 没有触发该工作流。
+5. GitHub 为避免递归，不会让 `GITHUB_TOKEN` 创建的 push 触发新的 workflow；因此
+   自动发布链路必须在创建 tag 的同一个 job 内创建 Release。
 
 ### 2.2 直接原因
 
-`.github/workflows/test.yml` 的正式发布 job 未配置创建 GitHub Release 的步骤。
+`.github/workflows/test.yml` 的正式发布 job 未配置创建 GitHub Release 的步骤；仅依赖
+独立 tag workflow 也无法覆盖其 `GITHUB_TOKEN` 推送的标签。
 
 ### 2.3 根本原因
 
-发布流程将 Git tag 与 GitHub Release 视为同一产物，未将 Release 页面、自动说明和
-已存在标签的补发流程建模为独立交付步骤。
+发布流程将 Git tag 与 GitHub Release 视为同一产物，且未考虑 Actions 令牌推送不会
+触发下游工作流的事件边界。
 
 ### 2.4 为什么没有提前发现
 
@@ -49,14 +52,15 @@
 
 ## 3. 解决方案
 
-新增 `.github/workflows/release.yml`：正式 `vMAJOR.MINOR.PATCH` tag 会用
-`gh release create --verify-tag --generate-notes` 创建 Release；beta 预发布 tag 跳过。
-它还提供 `workflow_dispatch` 输入，以 CI 方式补发已存在的稳定标签，并在 Release
-已存在时幂等退出。
+在 `.github/workflows/test.yml` 的 `release-tag` job 内直接执行
+`gh release create --verify-tag --generate-notes`，使正式 tag 和 Release 同一事务式
+发布；已存在 Release 时幂等退出。`.github/workflows/release.yml` 保留用于外部推送的
+稳定 tag 与 `workflow_dispatch` 补发，beta 预发布 tag 始终跳过。
 
 ## 4. 预防措施
 
-- [x] 正式 tag 与 GitHub Release 使用独立、可审计的工作流。
+- [x] Actions 创建的正式 tag 在同一 job 中创建 GitHub Release。
+- [x] 独立 Release 工作流仅处理外部 stable tag 与手动补发。
 - [x] 只接受稳定 SemVer，beta 预发布标签不创建正式 Release。
 - [x] 已存在 Release 时幂等退出，避免覆盖手工编辑的发布说明。
 - [ ] 发布验收同时核对 tag 指向和 Releases API 的发布条目。
