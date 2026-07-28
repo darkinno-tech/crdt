@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+
+	"github.com/darkinno/crdt"
 )
 
 // FormatVersion identifies the canonical frame layout implemented by this
@@ -145,6 +147,48 @@ func UnmarshalFrame(data []byte, limits Limits) (Frame, error) {
 // AppendUvarint appends the unique shortest representation of value.
 func AppendUvarint(dst []byte, value uint64) []byte {
 	return binary.AppendUvarint(dst, value)
+}
+
+// UvarintSize returns the size of value's canonical unsigned-varint encoding.
+func UvarintSize(value uint64) int {
+	var encoded [binary.MaxVarintLen64]byte
+	return binary.PutUvarint(encoded[:], value)
+}
+
+// AppendTag appends the canonical CRDT tag payload shared by framed CRDTs.
+func AppendTag(dst []byte, tag crdt.Tag) []byte {
+	dst = AppendUvarint(dst, uint64(len(tag.ReplicaID)))
+	dst = append(dst, tag.ReplicaID...)
+	dst = AppendUvarint(dst, tag.WallTime)
+	return AppendUvarint(dst, tag.Logical)
+}
+
+// TagSize returns the number of bytes used by AppendTag.
+func TagSize(tag crdt.Tag) int {
+	return UvarintSize(uint64(len(tag.ReplicaID))) + len(tag.ReplicaID) +
+		UvarintSize(tag.WallTime) + UvarintSize(tag.Logical)
+}
+
+// ReadTag decodes one bounded canonical tag without retaining data's backing
+// storage. The caller owns the returned tag value.
+func ReadTag(data []byte, position, maxStringBytes int) (crdt.Tag, int, bool) {
+	replicaID, next, ok := ReadBytes(data, position, maxStringBytes)
+	if !ok {
+		return crdt.Tag{}, position, false
+	}
+	wallTime, next, ok := ReadUvarint(data, next)
+	if !ok {
+		return crdt.Tag{}, position, false
+	}
+	logical, next, ok := ReadUvarint(data, next)
+	if !ok {
+		return crdt.Tag{}, position, false
+	}
+	tag := crdt.Tag{ReplicaID: string(replicaID), WallTime: wallTime, Logical: logical}
+	if !tag.Valid() {
+		return crdt.Tag{}, position, false
+	}
+	return tag, next, true
 }
 
 // ReadUvarint reads one shortest-form unsigned varint at position. It rejects

@@ -35,7 +35,7 @@ func run(writer io.Writer) error {
 		return fmt.Errorf("recover workboard: %w", err)
 	}
 	if _, err := fmt.Fprintf(writer, "completed-inspections=%d\nopen-tasks=%v\n", completed, tasks); err != nil {
-		return fmt.Errorf("write workboard: %w", err)
+		return fmt.Errorf("write collaborative board: %w", err)
 	}
 	return nil
 }

@@ -75,3 +75,73 @@ func TestTagCompare(t *testing.T) {
 		})
 	}
 }
+
+func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
+	for _, test := range []struct {
+		stateID uint64
+		deltaID uint64
+		usesHLC bool
+	}{
+		{TypeIDGCounterState, TypeIDGCounterDelta, false},
+		{TypeIDORSetState, TypeIDORSetDelta, true},
+		{TypeIDPNCounterState, TypeIDPNCounterDelta, false},
+		{TypeIDLWWMapState, TypeIDLWWMapDelta, true},
+		{TypeIDRGAState, TypeIDRGADelta, true},
+		{TypeIDORTreeState, TypeIDORTreeDelta, true},
+	} {
+		kind, ok := FrameTypeForState(test.stateID)
+		if !ok || kind.DeltaID != test.deltaID || kind.UsesHLC != test.usesHLC {
+			t.Fatalf("FrameTypeForState(%d) = %#v, %v", test.stateID, kind, ok)
+		}
+		fromDelta, ok := FrameTypeForDelta(test.deltaID)
+		if !ok || fromDelta != kind {
+			t.Fatalf("FrameTypeForDelta(%d) = %#v, %v", test.deltaID, fromDelta, ok)
+		}
+	}
+	if _, ok := FrameTypeForState(TypeIDLWWSetState); ok {
+		t.Fatal("reserved LWW set type is not wire-ready")
+	}
+}
+
+func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
+	stable := (ProtocolPolicy{}).FrameTypes()
+	if len(stable) != 3 {
+		t.Fatalf("stable protocol count = %d, want 3", len(stable))
+	}
+	for _, kind := range stable {
+		if IsExperimentalFrame(kind.StateID) || IsExperimentalFrame(kind.DeltaID) {
+			t.Fatalf("default policy advertised experimental protocol %#v", kind)
+		}
+	}
+	if (ProtocolPolicy{}).SupportsFrame(TypeIDRGAState) {
+		t.Fatal("default policy supports RGA state")
+	}
+	if (ProtocolPolicy{}).SupportsFrame(TypeIDORTreeDelta) {
+		t.Fatal("default policy supports OR-Tree delta")
+	}
+}
+
+func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
+	policy := ProtocolPolicy{AllowExperimental: true}
+	types := policy.FrameTypes()
+	if len(types) != 6 {
+		t.Fatalf("experimental protocol count = %d, want 6", len(types))
+	}
+	if !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDORTreeDelta) {
+		t.Fatal("experimental policy omitted an implemented experimental protocol")
+	}
+	if policy.SupportsFrame(TypeIDLWWSetState) || policy.SupportsFrame(999) {
+		t.Fatal("policy supported a reserved or unknown frame")
+	}
+	if !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || !IsExperimentalFrame(TypeIDORTreeDelta) {
+		t.Fatal("implemented experimental protocol was not marked experimental")
+	}
+	if IsExperimentalFrame(TypeIDLWWSetDelta) || IsExperimentalFrame(999) {
+		t.Fatal("reserved or unknown protocol was marked experimental")
+	}
+
+	types[0] = FrameType{}
+	if got := policy.FrameTypes()[0]; got.StateID == 0 {
+		t.Fatal("FrameTypes returned a shared slice")
+	}
+}

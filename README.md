@@ -12,6 +12,8 @@ despite duplicate delivery, reordering, and temporary partitions.
 
 - State-based **G-Counter** with joinable, type-isolated deltas.
 - Add-wins observed-remove **OR-Set** with a caller-defined element codec.
+- Experimental delta-replicated **LWW-Map** with opaque byte values and
+  deterministic HLC conflict resolution.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -20,6 +22,8 @@ despite duplicate delivery, reordering, and temporary partitions.
   anti-entropy workflows.
 - Optional exact-acknowledgement tombstone collection with membership epochs.
 - Safe concurrent access for the provided CRDT implementations.
+- Experimental framed LWW-Map, RGA text, and OR-Tree collections, enabled
+  only by an explicit per-replication-group protocol policy.
 
 ## Scope
 
@@ -31,6 +35,29 @@ authenticated active-membership view. It does not discover, authenticate, or
 persist that view. A checksum
 detects accidental frame corruption; it is not an authenticity or encryption
 mechanism.
+
+## Experimental LWW-Map, RGA, and OR-Tree protocols
+
+LWW-Map (`lww.Map`), RGA text (`text`), and OR-Tree (`tree`) have deterministic
+state/delta frames, bounded decoders, and HLC-backed snapshot recovery. They
+are experimental: their APIs and tombstone lifecycle may change before stable
+promotion. A replication group must opt in explicitly and advertise the
+resulting protocol set before exchanging their frames:
+
+```go
+policy := crdt.ProtocolPolicy{AllowExperimental: true}
+for _, kind := range policy.FrameTypes() {
+	// Include StateID and DeltaID in the authenticated connection handshake.
+	_ = kind
+}
+```
+
+The zero-value policy advertises only the stable G-Counter, OR-Set, and
+PN-Counter protocols. The policy is neither a global switch nor a plugin
+registry: unknown and reserved frame types remain unsupported. Experimental
+LWW-Map, RGA, and OR-Tree replicas must persist HLC state with snapshots and
+retain their tombstones; exact acknowledgement-based compaction for those
+types is not yet implemented.
 
 ## Requirements
 
@@ -96,6 +123,32 @@ func main() {
 	fmt.Println(value)
 	// Output: 5
 }
+```
+
+### PN-Counter
+
+A PN-Counter supports independent increments and decrements. It stores
+positive and negative per-replica G-Counter components, so merges remain
+commutative, associative, and idempotent. `Value` returns an exact `*big.Int`;
+use `ValueInt64` when the application requires a bounded machine integer.
+
+```go
+counter, err := counter.NewPNCounter("cart")
+if err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Increment(7); err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Decrement(2); err != nil {
+	log.Fatal(err)
+}
+value, err := counter.Value()
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(value)
+// Output: 5
 ```
 
 ### OR-Set delta replication
@@ -182,6 +235,10 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   bootstrap from a post-compaction snapshot.
 - `ORSet.Compact` remains available only for transports that independently
   prove a gap-free causal prefix for every supplied frontier.
+- Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
+  capability advertisement. Do not send LWW-Map, RGA, or OR-Tree frames unless
+  both peers have opted into the experimental protocol. Persist their
+  HLC-backed snapshots atomically and do not compact their tombstones yet.
 - Keep `ElementCodec.ID`, `Marshal`, and `Unmarshal` deterministic and safe for
   concurrent calls. Encoded values must round-trip canonically.
 - Treat received bytes as untrusted. Use `UnmarshalBinaryWithLimits` and
@@ -195,8 +252,12 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 | --- | --- |
 | `crdt` | Common contracts, state summaries, and mutation tags. |
 | `clock` | Hybrid logical clock and persisted HLC state. |
-| `counter` | G-Counter and its delta codec. |
+| `counter` | G-Counter, PN-Counter, and their delta codecs. |
 | `set` | Add-wins OR-Set and element-codec contract. |
+| `lww` | In-memory LWW-Set and experimental framed LWW-Map. |
+| `text` | Experimental framed RGA collaborative text. |
+| `tree` | Experimental framed observed-remove tree. |
+| `register` | In-memory LWW and max registers; not yet framed. |
 | `encoding` | Versioned bounded binary frames. |
 | `delta` | Bounded delta batches and coalescers. |
 | `snapshot` | Immutable state snapshots and recovery plans. |

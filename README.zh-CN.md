@@ -12,11 +12,13 @@
 
 - 基于状态的 **G-Counter**，具有可合并且类型隔离的增量。
 - 支持调用方自定义元素编解码器的加法胜出（add-wins）观察移除 **OR-Set**。
+- 处于实验阶段、支持 Delta 复制的 **LWW-Map**，使用不透明字节值和确定性的 HLC 冲突决议。
 - 混合逻辑时钟（HLC）标签和可持久化的时钟状态，支持副本重启。
 - 规范化、带校验和的二进制帧；解码有边界且编码确定。
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
+- 实验性 LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
 
 ## 范围
 
@@ -24,6 +26,26 @@
 认证、存储后端或重试策略。只有当应用提供权威且经过认证的活跃成员视图后，
 `tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该
 成员视图。校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
+
+## 实验性 LWW-Map、RGA 与 OR-Tree 协议
+
+LWW-Map（`lww.Map`）、RGA 文本（`text`）和 OR-Tree（`tree`）已具备确定性的
+状态/增量帧、有边界的解码，以及带 HLC 的快照恢复；但在稳定发布前仍属于实验性
+能力，其 API 和墓碑生命周期仍可能调整。复制组必须显式选择并在交换这些帧前通告
+协议集合：
+
+```go
+policy := crdt.ProtocolPolicy{AllowExperimental: true}
+for _, kind := range policy.FrameTypes() {
+	// 在经过认证的连接握手中包含 StateID 和 DeltaID。
+	_ = kind
+}
+```
+
+零值策略仅通告稳定的 G-Counter、OR-Set 和 PN-Counter 协议。该策略既不是全局
+开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。LWW-Map、RGA 和
+OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；这些类型的精确
+确认式墓碑回收尚未实现。
 
 ## 要求
 
@@ -89,6 +111,31 @@ func main() {
 	fmt.Println(value)
 	// Output: 5
 }
+```
+
+### PN-Counter
+
+PN-Counter 支持独立递增与递减。它将每个副本的正、负分量分别保存为
+G-Counter，因此合并仍满足可交换性、结合性和幂等性。`Value` 返回精确的
+`*big.Int`；需要有界机器整数时使用 `ValueInt64`。
+
+```go
+counter, err := counter.NewPNCounter("cart")
+if err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Increment(7); err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Decrement(2); err != nil {
+	log.Fatal(err)
+}
+value, err := counter.Value()
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(value)
+// Output: 5
 ```
 
 ### OR-Set 增量复制
@@ -167,6 +214,9 @@ go run ./examples/collaborative-board
   加入的成员必须从回收后的快照启动。
 - `ORSet.Compact` 仅适用于传输层能够独立证明所提供 frontier 对每个副本都是
   无缺口因果前缀的场景。
+- 将 `ProtocolPolicy.FrameTypes()` 作为经过认证的连接/建链能力通告。只有两端
+  都选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧；应原子持久化其带 HLC
+  的快照，且暂时不要回收其墓碑。
 - 保持 `ElementCodec.ID`、`Marshal` 与 `Unmarshal` 确定性，并确保它们可安全
   并发调用。编码值必须以规范形式往返。
 - 将收到的字节视为不可信数据。请根据传输环境使用带合适限制的
@@ -180,8 +230,12 @@ go run ./examples/collaborative-board
 | --- | --- |
 | `crdt` | 通用契约、状态摘要与变更标签。 |
 | `clock` | 混合逻辑时钟和持久化 HLC 状态。 |
-| `counter` | G-Counter 及其增量编解码器。 |
+| `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
 | `set` | 加法胜出 OR-Set 与元素编解码器契约。 |
+| `lww` | 内存 LWW-Set 与实验性的、带帧 LWW-Map。 |
+| `text` | 实验性、带帧的 RGA 协作文本。 |
+| `tree` | 实验性、带帧的观察移除树。 |
+| `register` | 内存内 LWW 和 max register；尚未带帧。 |
 | `encoding` | 带边界的版本化二进制帧。 |
 | `delta` | 带边界的增量批处理和合并器。 |
 | `snapshot` | 不可变状态快照与恢复计划。 |

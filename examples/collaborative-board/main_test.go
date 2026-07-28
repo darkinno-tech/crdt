@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -17,14 +18,21 @@ func TestRunShowsConvergedWorkboard(t *testing.T) {
 	}
 }
 
-func TestRunPropagatesWriterFailure(t *testing.T) {
-	if err := run(failingWriter{}); !errors.Is(err, errWrite) {
-		t.Fatalf("run() error = %v, want %v", err, errWrite)
-	}
+type failingWriter struct {
+	err error
 }
 
-var errWrite = errors.New("write failed")
+func (writer failingWriter) Write([]byte) (int, error) {
+	return 0, writer.err
+}
 
-type failingWriter struct{}
-
-func (failingWriter) Write([]byte) (int, error) { return 0, errWrite }
+func TestRunReturnsWriteError(t *testing.T) {
+	writeErr := errors.New("write failed")
+	err := run(failingWriter{err: writeErr})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("run error = %v, want wrapped %v", err, writeErr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "write collaborative board") {
+		t.Fatalf("run error = %v, want contextual write error", err)
+	}
+}
