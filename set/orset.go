@@ -804,8 +804,7 @@ func validateDeltaState[T comparable](adds map[T]map[crdt.Tag]struct{}, tombston
 	if !trackTags {
 		return nil
 	}
-	var seen map[crdt.Tag]struct{}
-	seen = make(map[crdt.Tag]struct{})
+	seen := make(map[crdt.Tag]struct{})
 	for _, tags := range adds {
 		for tag := range tags {
 			if _, duplicate := seen[tag]; duplicate {
