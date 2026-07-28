@@ -254,21 +254,19 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	known := make(map[Position]node, len(r.nodes)+len(r.pending))
-	for id, item := range r.nodes {
-		known[id] = item
-	}
-	for id, item := range r.pending {
-		known[id] = item
-	}
-	if !acyclicAgainst(delta.nodes, known) {
-		return ErrInvalidDelta
-	}
 	for id, incoming := range delta.nodes {
-		current, exists := known[id]
-		if exists && current != incoming {
+		if current, exists := r.nodes[id]; exists && current != incoming {
 			return ErrTagConflict
 		}
+		if current, exists := r.pending[id]; exists && current != incoming {
+			return ErrTagConflict
+		}
+	}
+	// Integrated nodes have complete, previously validated parent chains. Only
+	// a pending node can still point at an ID introduced by this delta, so
+	// copying or traversing the full live document is unnecessary here.
+	if !acyclicAgainst(delta.nodes, r.pending) {
+		return ErrInvalidDelta
 	}
 	newNodes, newPendingNodes, newPendingBytes := r.deltaCapacity(delta)
 	if len(r.nodes)+len(r.pending)+newNodes > r.options.MaxNodes ||
@@ -284,7 +282,10 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 	}
 	changed := false
 	for id, incoming := range delta.nodes {
-		if _, exists := known[id]; exists {
+		if _, exists := r.nodes[id]; exists {
+			continue
+		}
+		if _, exists := r.pending[id]; exists {
 			continue
 		}
 		r.enqueuePending(id, incoming)
@@ -647,29 +648,48 @@ func validateDelta(delta Delta) error {
 }
 
 // acyclicAgainst permits a parent that has not arrived yet (out-of-order
-// delivery), but rejects every cycle whose links are currently known. This is
-// essential because visibleLocked recursively traverses the parent graph.
-func acyclicAgainst(incoming, existing map[Position]node) bool {
+// delivery), but rejects every cycle formed by incoming and already pending
+// nodes. Integrated nodes are deliberately not traversed: their parent closure
+// and acyclicity were established before integration, so they cannot close a
+// new cycle. A tri-colour walk visits each relevant node at most once.
+func acyclicAgainst(incoming, pending map[Position]node) bool {
 	lookup := func(id Position) (node, bool) {
 		if item, ok := incoming[id]; ok {
 			return item, true
 		}
-		item, ok := existing[id]
+		item, ok := pending[id]
 		return item, ok
 	}
-	for id, item := range incoming {
-		seen := map[Position]struct{}{id: {}}
-		parent := item.parent
-		for parent.Valid() {
-			if _, repeated := seen[parent]; repeated {
+	const (
+		unseen uint8 = iota
+		visiting
+		complete
+	)
+	state := make(map[Position]uint8, len(incoming)+len(pending))
+	for id := range incoming {
+		if state[id] == complete {
+			continue
+		}
+		path := make([]Position, 0)
+		current := id
+		for current.Valid() {
+			switch state[current] {
+			case visiting:
 				return false
+			case complete:
+				current = Position{}
+				continue
 			}
-			seen[parent] = struct{}{}
-			next, known := lookup(parent)
+			next, known := lookup(current)
 			if !known {
 				break
 			}
-			parent = next.parent
+			state[current] = visiting
+			path = append(path, current)
+			current = next.parent
+		}
+		for _, visited := range path {
+			state[visited] = complete
 		}
 	}
 	return true

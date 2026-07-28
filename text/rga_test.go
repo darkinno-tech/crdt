@@ -290,6 +290,33 @@ func TestRGARejectsCycle(t *testing.T) {
 	}
 }
 
+func TestRGARejectsCycleClosingPendingDependency(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := Position{ReplicaID: "remote", WallTime: 1}
+	second := Position{ReplicaID: "remote", WallTime: 2}
+	if err := value.ApplyDelta(Delta{
+		nodes:      map[Position]node{first: {parent: second, rune: 'a'}},
+		tombstones: map[Position]struct{}{},
+	}); err != nil {
+		t.Fatalf("queue unresolved dependency: %v", err)
+	}
+	if got := value.PendingCount(); got != 1 {
+		t.Fatalf("pending before cycle = %d, want 1", got)
+	}
+	if err := value.ApplyDelta(Delta{
+		nodes:      map[Position]node{second: {parent: first, rune: 'b'}},
+		tombstones: map[Position]struct{}{},
+	}); err != ErrInvalidDelta {
+		t.Fatalf("ApplyDelta(cycle through pending) = %v, want %v", err, ErrInvalidDelta)
+	}
+	if got := value.PendingCount(); got != 1 {
+		t.Fatalf("rejected cycle changed pending count to %d", got)
+	}
+}
+
 func TestRGAProjectionInvalidatesAcrossEdits(t *testing.T) {
 	value, err := New("local")
 	if err != nil {
