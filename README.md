@@ -11,9 +11,12 @@ despite duplicate delivery, reordering, and temporary partitions.
 ## Features
 
 - State-based **G-Counter** with joinable, type-isolated deltas.
+- Grow-only **G-Set** with a caller-defined element codec and joinable deltas.
 - Add-wins observed-remove **OR-Set** with a caller-defined element codec.
 - Experimental delta-replicated **LWW-Map** with opaque byte values and
   deterministic HLC conflict resolution.
+- Causally replicated **MV-Register** that preserves concurrent opaque-byte
+  writes instead of resolving them by wall clock.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -52,8 +55,8 @@ for _, kind := range policy.FrameTypes() {
 }
 ```
 
-The zero-value policy advertises only the stable G-Counter, OR-Set, and
-PN-Counter protocols. The policy is neither a global switch nor a plugin
+The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
+MV-Register, and PN-Counter protocols. The policy is neither a global switch nor a plugin
 registry: unknown and reserved frame types remain unsupported. Experimental
 LWW-Map, RGA, and OR-Tree replicas must persist HLC state with snapshots and
 retain their tombstones; exact acknowledgement-based compaction for those
@@ -235,6 +238,9 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   bootstrap from a post-compaction snapshot.
 - `ORSet.Compact` remains available only for transports that independently
   prove a gap-free causal prefix for every supplied frontier.
+- Persist an MV-Register state snapshot before reusing its replica ID. Its
+  version vector, not a wall clock, proves which writes a later `Set` observes;
+  recover with `register.NewMVRegisterFromSnapshot`.
 - Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
   capability advertisement. Do not send LWW-Map, RGA, or OR-Tree frames unless
   both peers have opted into the experimental protocol. Persist their
@@ -253,11 +259,11 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 | `crdt` | Common contracts, state summaries, and mutation tags. |
 | `clock` | Hybrid logical clock and persisted HLC state. |
 | `counter` | G-Counter, PN-Counter, and their delta codecs. |
-| `set` | Add-wins OR-Set and element-codec contract. |
+| `set` | G-Set, add-wins OR-Set, and element-codec contract. |
 | `lww` | In-memory LWW-Set and experimental framed LWW-Map. |
 | `text` | Experimental framed RGA collaborative text. |
 | `tree` | Experimental framed observed-remove tree. |
-| `register` | In-memory LWW and max registers; not yet framed. |
+| `register` | In-memory LWW/max registers and framed causal MV-Register. |
 | `encoding` | Versioned bounded binary frames. |
 | `delta` | Bounded delta batches and coalescers. |
 | `snapshot` | Immutable state snapshots and recovery plans. |
@@ -328,8 +334,8 @@ documentation update.
   vulnerabilities.
 - A controlled three-host delivery probe confirmed idempotent duplicate
   delivery and rejected unauthorized, malformed, and oversized requests.
-- The supplied benchmarks cover G-Counter, PN-Counter, and OR-Set `Merge`,
-  `ApplyDelta`, and `MarshalBinary`. Run `make benchmark` on your target
+- The supplied benchmarks cover G-Counter, PN-Counter, G-Set, OR-Set, and
+  MV-Register `Merge`, `ApplyDelta`, and `MarshalBinary`. Run `make benchmark` on your target
   hardware before choosing capacity limits.
 
 The scenario evaluation at the end of this README records the current local

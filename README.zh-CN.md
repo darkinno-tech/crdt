@@ -11,7 +11,9 @@
 ## 特性
 
 - 基于状态的 **G-Counter**，具有可合并且类型隔离的增量。
+- 使用调用方自定义元素编解码器、带可合并增量的仅增长 **G-Set**。
 - 支持调用方自定义元素编解码器的加法胜出（add-wins）观察移除 **OR-Set**。
+- 因果复制的 **MV-Register**：保留并发的不透明字节写入，而非用墙上时钟裁决。
 - 处于实验阶段、支持 Delta 复制的 **LWW-Map**，使用不透明字节值和确定性的 HLC 冲突决议。
 - 混合逻辑时钟（HLC）标签和可持久化的时钟状态，支持副本重启。
 - 规范化、带校验和的二进制帧；解码有边界且编码确定。
@@ -42,7 +44,7 @@ for _, kind := range policy.FrameTypes() {
 }
 ```
 
-零值策略仅通告稳定的 G-Counter、OR-Set 和 PN-Counter 协议。该策略既不是全局
+零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该策略既不是全局
 开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。LWW-Map、RGA 和
 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；这些类型的精确
 确认式墓碑回收尚未实现。
@@ -214,6 +216,8 @@ go run ./examples/collaborative-board
   加入的成员必须从回收后的快照启动。
 - `ORSet.Compact` 仅适用于传输层能够独立证明所提供 frontier 对每个副本都是
   无缺口因果前缀的场景。
+- 在复用 MV-Register 的副本 ID 前持久化其状态快照。其版本向量而非墙上时钟可证明
+  后续 `Set` 已观察哪些写入；使用 `register.NewMVRegisterFromSnapshot` 恢复。
 - 将 `ProtocolPolicy.FrameTypes()` 作为经过认证的连接/建链能力通告。只有两端
   都选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧；应原子持久化其带 HLC
   的快照，且暂时不要回收其墓碑。
@@ -231,11 +235,11 @@ go run ./examples/collaborative-board
 | `crdt` | 通用契约、状态摘要与变更标签。 |
 | `clock` | 混合逻辑时钟和持久化 HLC 状态。 |
 | `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
-| `set` | 加法胜出 OR-Set 与元素编解码器契约。 |
+| `set` | G-Set、加法胜出 OR-Set 与元素编解码器契约。 |
 | `lww` | 内存 LWW-Set 与实验性的、带帧 LWW-Map。 |
 | `text` | 实验性、带帧的 RGA 协作文本。 |
 | `tree` | 实验性、带帧的观察移除树。 |
-| `register` | 内存内 LWW 和 max register；尚未带帧。 |
+| `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |
 | `encoding` | 带边界的版本化二进制帧。 |
 | `delta` | 带边界的增量批处理和合并器。 |
 | `snapshot` | 不可变状态快照与恢复计划。 |
@@ -300,8 +304,9 @@ CI 工作流会强制执行格式化、单元测试、竞态检测、vet、解�
 - 记录中的 `make docker-test` 已在 Go 1.26 上通过；`govulncheck ./...` 未发现已知漏洞。
 - 受控的三主机投递探针验证了重复投递幂等性，并拒绝了未授权、格式错误和超限
   请求。
-- 提供的基准覆盖 G-Counter、PN-Counter 和 OR-Set 的 `Merge`、`ApplyDelta`
-  与 `MarshalBinary`。在确定容量限制前，请在目标硬件上运行 `make benchmark`。
+- 提供的基准覆盖 G-Counter、PN-Counter、G-Set、OR-Set 和 MV-Register 的
+  `Merge`、`ApplyDelta` 与 `MarshalBinary`。在确定容量限制前，请在目标硬件上运行
+  `make benchmark`。
 
 本 README 底部的不同场景测评记录了当前本地样本：重复投递、存活状态序列化和
 墓碑密集状态序列化。精确结果取决于 CPU、Go 版本、元素编解码器、集合大小和
