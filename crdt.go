@@ -1,5 +1,3 @@
-// Package crdt defines the common types and contracts used by the CRDT
-// primitives in this module.
 package crdt
 
 import "strings"
