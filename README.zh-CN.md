@@ -43,7 +43,7 @@ RGA run-v2（TypeID 19/20）和 OR-Tree 仍为实验性能力，必须显式启�
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
 for _, kind := range policy.FrameTypes() {
-	// 在经过认证的连接握手中包含 StateID 和 DeltaID。
+	// 这只是本地能力白名单，不是完整的握手协商。
 	_ = kind
 }
 ```
