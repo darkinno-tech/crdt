@@ -147,6 +147,22 @@ For a remove to be observed by other replicas, send the returned remove delta
 or merge the state. An add concurrent with a remove that did not observe its
 tag remains present (add-wins semantics).
 
+## End-to-end integration
+
+For a reproducible local HTTP delivery exercise, a production-integration
+checklist, snapshot/restart guidance, and the expected convergence evidence,
+see the [end-to-end integration tutorial](INTEGRATION.md). The
+[runnable collaborative-workboard example](examples/collaborative-board)
+models duplicate delivery, a partitioned add/remove conflict, and recovery
+from an OR-Set snapshot:
+
+```sh
+go run ./examples/collaborative-board
+```
+
+For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
+[协作任务示例](examples/collaborative-board).
+
 ## Correct use in a distributed system
 
 - Give every live logical replica a globally unique, non-blank replica ID.
