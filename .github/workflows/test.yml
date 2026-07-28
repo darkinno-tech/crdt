@@ -144,6 +144,8 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -184,6 +186,11 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag --annotate "${tag}" --message "Release ${tag}"
           git push origin "${tag}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "GitHub Release already exists for ${tag}"
+          else
+            gh release create "${tag}" --repo "${GITHUB_REPOSITORY}" --verify-tag --generate-notes --title "${tag}"
+          fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report release tag
         run: echo "Created release tag ${{ steps.tag.outputs.tag }}"
