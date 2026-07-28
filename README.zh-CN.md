@@ -228,6 +228,17 @@ go run ./examples/collaborative-board
 - 在外围应用中完成消息认证、授权、加密、重试和持久化。CRDT 收敛本身不提供
   这些保证。
 
+## JSON 诊断输出
+
+具体 CRDT 状态和 delta 对象实现了 `json.Marshaler`，可用于结构化日志和人工查看。例如：
+
+```json
+{"type":"gcounter","replica_id":"left","element_count":2,"tombstone_count":0}
+```
+
+该输出刻意不包含应用值、元素键、标签、时钟状态或二进制帧。JSON 诊断结果不能恢复
+或应用 CRDT 状态/delta，也不是复制格式；复制和持久化仍应使用有界、规范的二进制编码。
+
 ## 包
 
 | 包 | 作用 |

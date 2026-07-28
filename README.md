@@ -17,6 +17,8 @@ despite duplicate delivery, reordering, and temporary partitions.
   deterministic HLC conflict resolution.
 - Causally replicated **MV-Register** that preserves concurrent opaque-byte
   writes instead of resolving them by wall clock.
+- Experimental delta-replicated **LWW-Map** with opaque byte values and
+  deterministic HLC conflict resolution.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -251,6 +253,20 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   `Unmarshal*DeltaWithLimits` with limits appropriate to the transport.
 - Authenticate, authorize, encrypt, retry, and persist messages in the
   surrounding application. CRDT convergence does not provide those guarantees.
+
+## JSON diagnostics
+
+Concrete CRDT state and delta objects implement `json.Marshaler` for structured
+logs and human inspection. The output is a compact, stable summary such as:
+
+```json
+{"type":"gcounter","replica_id":"left","element_count":2,"tombstone_count":0}
+```
+
+It deliberately excludes application values, element keys, tags, clock state,
+and binary frames. JSON diagnostics cannot restore or apply a CRDT state or
+delta and are not a replication format; use the bounded canonical binary
+encoders for that.
 
 ## Packages
 
