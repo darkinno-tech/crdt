@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/darkinno/crdt"
-	"github.com/darkinno/crdt/counter"
-	frame "github.com/darkinno/crdt/encoding"
-	"github.com/darkinno/crdt/snapshot"
+	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/counter"
+	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/snapshot"
 )
 
 type failingStringCodec struct{ stringCodec }

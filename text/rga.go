@@ -10,8 +10,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/darkinno/crdt"
-	"github.com/darkinno/crdt/clock"
+	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/clock"
 )
 
 var (

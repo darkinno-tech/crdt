@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/darkinno/crdt"
-	frame "github.com/darkinno/crdt/encoding"
-	"github.com/darkinno/crdt/snapshot"
+	"github.com/DarkInno/crdt"
+	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/snapshot"
 )
 
 func TestRGABinaryStateDeltaAndSnapshotRoundTrip(t *testing.T) {

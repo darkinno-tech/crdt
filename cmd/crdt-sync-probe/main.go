@@ -18,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/darkinno/crdt/counter"
-	frame "github.com/darkinno/crdt/encoding"
-	"github.com/darkinno/crdt/set"
+	"github.com/DarkInno/crdt/counter"
+	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/set"
 )
 
 const (

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/darkinno/crdt/counter"
+	"github.com/DarkInno/crdt/counter"
 )
 
 func TestProbeAuthenticatesAndDeduplicatesDelivery(t *testing.T) {

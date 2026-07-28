@@ -6,8 +6,8 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/darkinno/crdt"
-	frame "github.com/darkinno/crdt/encoding"
+	"github.com/DarkInno/crdt"
+	frame "github.com/DarkInno/crdt/encoding"
 )
 
 var (
