@@ -10,7 +10,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./clock ./counter ./delta ./encoding ./merkle ./set ./snapshot ./cmd/crdt-analyze ./cmd/crdt-sync-probe; do go test $$package; done
+	for package in . ./clock ./counter ./delta ./encoding ./lww ./merkle ./set ./snapshot ./text ./cmd/crdt-analyze ./cmd/crdt-sync-probe; do go test $$package; done
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -26,7 +26,11 @@ vet:
 	go vet ./...
 
 fuzz:
-	for package in ./encoding ./counter ./set ./delta; do go test -run=^$$ -fuzz=Fuzz -fuzztime=10s $$package; done
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./encoding
+	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
+	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./set
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
 
 coverage:
 	COVERAGE_THRESHOLD=90 ./scripts/check-coverage.sh

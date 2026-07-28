@@ -25,9 +25,11 @@ jobs:
         run: go vet ./...
       - name: Fuzz decoders
         run: |
-          for package in ./encoding ./counter ./set ./delta; do
-            go test -run=^$ -fuzz=Fuzz -fuzztime=10s "$package"
-          done
+          go test -run=^$ -fuzz=Fuzz -fuzztime=10s ./encoding
+          go test -run=^$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
+          go test -run=^$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
+          go test -run=^$ -fuzz=Fuzz -fuzztime=10s ./set
+          go test -run=^$ -fuzz=Fuzz -fuzztime=10s ./delta
 
   staticcheck:
     runs-on: ubuntu-latest

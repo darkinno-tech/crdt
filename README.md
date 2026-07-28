@@ -98,6 +98,32 @@ func main() {
 }
 ```
 
+### PN-Counter
+
+A PN-Counter supports independent increments and decrements. It stores
+positive and negative per-replica G-Counter components, so merges remain
+commutative, associative, and idempotent. `Value` returns an exact `*big.Int`;
+use `ValueInt64` when the application requires a bounded machine integer.
+
+```go
+counter, err := counter.NewPNCounter("cart")
+if err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Increment(7); err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Decrement(2); err != nil {
+	log.Fatal(err)
+}
+value, err := counter.Value()
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(value)
+// Output: 5
+```
+
 ### OR-Set delta replication
 
 An OR-Set uses a stable codec ID and stable encoded element bytes to identify a
@@ -195,7 +221,7 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 | --- | --- |
 | `crdt` | Common contracts, state summaries, and mutation tags. |
 | `clock` | Hybrid logical clock and persisted HLC state. |
-| `counter` | G-Counter and its delta codec. |
+| `counter` | G-Counter, PN-Counter, and their delta codecs. |
 | `set` | Add-wins OR-Set and element-codec contract. |
 | `encoding` | Versioned bounded binary frames. |
 | `delta` | Bounded delta batches and coalescers. |

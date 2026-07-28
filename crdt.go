@@ -7,10 +7,12 @@ import "strings"
 // Stable frame type assignments. Values are part of the v1 wire contract and
 // must never be reused for a different payload shape.
 const (
-	TypeIDGCounterState uint64 = 1
-	TypeIDORSetState    uint64 = 2
-	TypeIDGCounterDelta uint64 = 3
-	TypeIDORSetDelta    uint64 = 4
+	TypeIDGCounterState  uint64 = 1
+	TypeIDORSetState     uint64 = 2
+	TypeIDGCounterDelta  uint64 = 3
+	TypeIDORSetDelta     uint64 = 4
+	TypeIDPNCounterState uint64 = 5
+	TypeIDPNCounterDelta uint64 = 6
 )
 
 // CRDT is the common contract for state-based CRDTs.

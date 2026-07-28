@@ -34,6 +34,33 @@ func ExampleGCounter() {
 	// Output: 5
 }
 
+func ExamplePNCounter() {
+	left, err := counter.NewPNCounter("left")
+	if err != nil {
+		panic(err)
+	}
+	right, err := counter.NewPNCounter("right")
+	if err != nil {
+		panic(err)
+	}
+	if _, err := left.Increment(7); err != nil {
+		panic(err)
+	}
+	if _, err := right.Decrement(2); err != nil {
+		panic(err)
+	}
+	if err := left.Merge(right); err != nil {
+		panic(err)
+	}
+
+	value, err := left.Value()
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(value)
+	// Output: 5
+}
+
 func ExampleORSet() {
 	codec := exampleStringCodec{}
 	left, err := set.NewORSet("left", codec)

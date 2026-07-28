@@ -253,5 +253,5 @@ func isDeltaFrame(item []byte) bool {
 }
 
 func isDeltaType(typeID uint64) bool {
-	return typeID == crdt.TypeIDGCounterDelta || typeID == crdt.TypeIDORSetDelta
+	return typeID == crdt.TypeIDGCounterDelta || typeID == crdt.TypeIDORSetDelta || typeID == crdt.TypeIDPNCounterDelta
 }

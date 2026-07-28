@@ -91,6 +91,31 @@ func main() {
 }
 ```
 
+### PN-Counter
+
+PN-Counter 支持独立递增与递减。它将每个副本的正、负分量分别保存为
+G-Counter，因此合并仍满足可交换性、结合性和幂等性。`Value` 返回精确的
+`*big.Int`；需要有界机器整数时使用 `ValueInt64`。
+
+```go
+counter, err := counter.NewPNCounter("cart")
+if err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Increment(7); err != nil {
+	log.Fatal(err)
+}
+if _, err := counter.Decrement(2); err != nil {
+	log.Fatal(err)
+}
+value, err := counter.Value()
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(value)
+// Output: 5
+```
+
 ### OR-Set 增量复制
 
 OR-Set 使用稳定的编解码器 ID 和稳定的元素编码字节，以便在不同副本间识别
@@ -180,7 +205,7 @@ go run ./examples/collaborative-board
 | --- | --- |
 | `crdt` | 通用契约、状态摘要与变更标签。 |
 | `clock` | 混合逻辑时钟和持久化 HLC 状态。 |
-| `counter` | G-Counter 及其增量编解码器。 |
+| `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
 | `set` | 加法胜出 OR-Set 与元素编解码器契约。 |
 | `encoding` | 带边界的版本化二进制帧。 |
 | `delta` | 带边界的增量批处理和合并器。 |

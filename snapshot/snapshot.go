@@ -168,7 +168,7 @@ func (s Snapshot) valid() bool {
 }
 
 func isStateType(typeID uint64) bool {
-	return typeID == crdt.TypeIDGCounterState || typeID == crdt.TypeIDORSetState
+	return typeID == crdt.TypeIDGCounterState || typeID == crdt.TypeIDORSetState || typeID == crdt.TypeIDPNCounterState
 }
 
 func deltaTypeForState(typeID uint64) (uint64, bool) {
@@ -177,6 +177,8 @@ func deltaTypeForState(typeID uint64) (uint64, bool) {
 		return crdt.TypeIDGCounterDelta, true
 	case crdt.TypeIDORSetState:
 		return crdt.TypeIDORSetDelta, true
+	case crdt.TypeIDPNCounterState:
+		return crdt.TypeIDPNCounterDelta, true
 	default:
 		return 0, false
 	}
