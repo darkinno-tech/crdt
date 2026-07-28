@@ -76,8 +76,9 @@ func MarshalFrame(frame Frame) ([]byte, error) {
 type PayloadWriter func([]byte) error
 
 // MarshalFrameWithPayload returns the canonical v1 frame for a payload written
-// directly into its final output buffer. It owns the envelope and checksum, so
-// callers cannot produce a frame with a mismatched payload length or checksum.
+// directly into its final output buffer. When writePayload follows the
+// PayloadWriter buffer-lifetime contract, this function owns the envelope and
+// computes a checksum matching the completed payload.
 func MarshalFrameWithPayload(typeID uint64, codecID string, payloadLength int, writePayload PayloadWriter) ([]byte, error) {
 	limits := DefaultLimits()
 	if typeID == 0 || payloadLength < 0 || len(codecID) > limits.MaxCodecID || payloadLength > limits.MaxPayload {

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -51,6 +51,20 @@ type ORSet[T comparable] struct {
 type ORSetDelta[T comparable] struct {
 	adds       map[T]map[crdt.Tag]struct{}
 	tombstones map[crdt.Tag]struct{}
+}
+
+// orSetMarshalPlan is an owned, map-free snapshot used to encode one OR-Set
+// state without holding the set lock while calling an ElementCodec.
+type orSetMarshalPlan[T comparable] struct {
+	entries    []orSetMarshalPlanEntry[T]
+	liveTags   []crdt.Tag
+	tombstones []crdt.Tag
+}
+
+type orSetMarshalPlanEntry[T comparable] struct {
+	element  T
+	tagStart int
+	tagEnd   int
 }
 
 var _ crdt.CRDT[*ORSet[string]] = (*ORSet[string])(nil)
@@ -352,11 +366,13 @@ func (s *ORSet[T]) MarshalBinary() ([]byte, error) {
 		return nil, ErrNilORSet
 	}
 	s.mu.RLock()
-	adds := cloneAdds(s.elements)
-	tombstones := cloneTags(s.tombstones)
 	codec := s.codec
+	plan, err := newORSetMarshalPlan(s.elements, s.tombstones)
 	s.mu.RUnlock()
-	return marshalORSet(crdt.TypeIDORSetState, codec, adds, tombstones)
+	if err != nil {
+		return nil, err
+	}
+	return marshalORSetPlan(crdt.TypeIDORSetState, codec, plan)
 }
 
 // MarshalBinaryWithClockState returns an OR-Set state frame and the local HLC
@@ -367,12 +383,14 @@ func (s *ORSet[T]) MarshalBinaryWithClockState() ([]byte, clock.State, error) {
 		return nil, clock.State{}, ErrNilORSet
 	}
 	s.mu.RLock()
-	adds := cloneAdds(s.elements)
-	tombstones := cloneTags(s.tombstones)
 	codec := s.codec
+	plan, err := newORSetMarshalPlan(s.elements, s.tombstones)
 	clockState := s.clock.Snapshot()
 	s.mu.RUnlock()
-	encoded, err := marshalORSet(crdt.TypeIDORSetState, codec, adds, tombstones)
+	if err != nil {
+		return nil, clock.State{}, err
+	}
+	encoded, err := marshalORSetPlan(crdt.TypeIDORSetState, codec, plan)
 	if err != nil {
 		return nil, clock.State{}, err
 	}
@@ -398,13 +416,15 @@ func (s *ORSet[T]) SnapshotCurrentState() (snapshot.Snapshot, error) {
 		return snapshot.Snapshot{}, ErrNilORSet
 	}
 	s.mu.RLock()
-	adds := cloneAdds(s.elements)
-	tombstones := cloneTags(s.tombstones)
 	codec := s.codec
+	plan, err := newORSetMarshalPlan(s.elements, s.tombstones)
 	clockState := s.clock.Snapshot()
-	frontier := frontierForState(adds, tombstones)
 	s.mu.RUnlock()
-	state, err := marshalORSet(crdt.TypeIDORSetState, codec, adds, tombstones)
+	if err != nil {
+		return snapshot.Snapshot{}, err
+	}
+	frontier := frontierForORSetMarshalPlan(plan)
+	state, err := marshalORSetPlan(crdt.TypeIDORSetState, codec, plan)
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}
@@ -443,9 +463,48 @@ func marshalORSet[T comparable](typeID uint64, codec ElementCodec[T], adds map[T
 }
 
 func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}, limits frame.DecoderLimits) ([]byte, error) {
-	if err := validateState(adds, tombstones); err != nil {
+	plan, err := newORSetMarshalPlan(adds, tombstones)
+	if err != nil {
 		return nil, err
 	}
+	return marshalORSetPlanWithLimits(typeID, codec, plan, limits)
+}
+
+func newORSetMarshalPlan[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}) (orSetMarshalPlan[T], error) {
+	if err := validateState(adds, tombstones); err != nil {
+		return orSetMarshalPlan[T]{}, err
+	}
+	liveTagCount := 0
+	for _, tags := range adds {
+		liveTagCount += len(tags)
+	}
+	plan := orSetMarshalPlan[T]{
+		entries:    make([]orSetMarshalPlanEntry[T], 0, len(adds)),
+		liveTags:   make([]crdt.Tag, 0, liveTagCount),
+		tombstones: make([]crdt.Tag, 0, len(tombstones)),
+	}
+	for element, tags := range adds {
+		tagStart := len(plan.liveTags)
+		for tag := range tags {
+			plan.liveTags = append(plan.liveTags, tag)
+		}
+		plan.entries = append(plan.entries, orSetMarshalPlanEntry[T]{
+			element:  element,
+			tagStart: tagStart,
+			tagEnd:   len(plan.liveTags),
+		})
+	}
+	for tag := range tombstones {
+		plan.tombstones = append(plan.tombstones, tag)
+	}
+	return plan, nil
+}
+
+func marshalORSetPlan[T comparable](typeID uint64, codec ElementCodec[T], plan orSetMarshalPlan[T]) ([]byte, error) {
+	return marshalORSetPlanWithLimits(typeID, codec, plan, frame.DefaultLimits())
+}
+
+func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[T], plan orSetMarshalPlan[T], limits frame.DecoderLimits) ([]byte, error) {
 	codecID := codec.ID()
 	if strings.TrimSpace(codecID) == "" || len(codecID) > limits.MaxCodecID {
 		return nil, ErrInvalidCodec
@@ -455,33 +514,24 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 		tagStart int
 		tagEnd   int
 	}
-	entries := make([]entry, 0, len(adds))
-	liveTagCount := 0
-	for _, tags := range adds {
-		liveTagCount += len(tags)
-	}
-	liveTags := make([]crdt.Tag, 0, liveTagCount)
-	for element, tags := range adds {
-		encoded, err := codec.Marshal(element)
+	entries := make([]entry, 0, len(plan.entries))
+	for _, source := range plan.entries {
+		encoded, err := codec.Marshal(source.element)
 		if err != nil {
 			return nil, fmt.Errorf("%w: marshal element: %v", ErrInvalidCodec, err)
 		}
 		if len(encoded) > limits.MaxStringBytes {
 			return nil, frame.ErrFrameLimit
 		}
-		if len(tags) == 0 {
+		if source.tagStart == source.tagEnd {
 			return nil, ErrInvalidDelta
 		}
-		tagStart := len(liveTags)
-		for tag := range tags {
-			liveTags = append(liveTags, tag)
-		}
-		sort.Slice(liveTags[tagStart:], func(i, j int) bool {
-			return liveTags[tagStart+i].Compare(liveTags[tagStart+j]) < 0
+		slices.SortFunc(plan.liveTags[source.tagStart:source.tagEnd], func(left, right crdt.Tag) int {
+			return left.Compare(right)
 		})
-		entries = append(entries, entry{encoded: encoded, tagStart: tagStart, tagEnd: len(liveTags)})
+		entries = append(entries, entry{encoded: encoded, tagStart: source.tagStart, tagEnd: source.tagEnd})
 	}
-	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].encoded, entries[j].encoded) < 0 })
+	slices.SortFunc(entries, func(left, right entry) int { return bytes.Compare(left.encoded, right.encoded) })
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].encoded, entries[i].encoded) {
 			return nil, fmt.Errorf("%w: codec produced duplicate element bytes", ErrInvalidCodec)
@@ -500,7 +550,7 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 			return nil, frame.ErrFrameLimit
 		}
 		payloadSize += additional
-		for _, tag := range liveTags[item.tagStart:item.tagEnd] {
+		for _, tag := range plan.liveTags[item.tagStart:item.tagEnd] {
 			if tagCount == limits.MaxTags {
 				return nil, frame.ErrFrameLimit
 			}
@@ -515,7 +565,8 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 			tagCount++
 		}
 	}
-	tags := tagsToSortedSlice(tombstones)
+	tags := plan.tombstones
+	slices.SortFunc(tags, func(left, right crdt.Tag) int { return left.Compare(right) })
 	additional := uvarintSize(uint64(len(tags)))
 	if additional > limits.MaxPayload-payloadSize {
 		return nil, frame.ErrFrameLimit
@@ -540,7 +591,7 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 		for _, item := range entries {
 			payload = appendBytes(payload, item.encoded)
 			payload = frame.AppendUvarint(payload, uint64(item.tagEnd-item.tagStart))
-			for _, tag := range liveTags[item.tagStart:item.tagEnd] {
+			for _, tag := range plan.liveTags[item.tagStart:item.tagEnd] {
 				payload = appendTag(payload, tag)
 			}
 		}
@@ -798,6 +849,21 @@ func frontierForState[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones
 	return frontier
 }
 
+func frontierForORSetMarshalPlan[T comparable](plan orSetMarshalPlan[T]) map[string]crdt.Tag {
+	frontier := make(map[string]crdt.Tag)
+	for _, tag := range plan.liveTags {
+		if current, ok := frontier[tag.ReplicaID]; !ok || current.Compare(tag) < 0 {
+			frontier[tag.ReplicaID] = tag
+		}
+	}
+	for _, tag := range plan.tombstones {
+		if current, ok := frontier[tag.ReplicaID]; !ok || current.Compare(tag) < 0 {
+			frontier[tag.ReplicaID] = tag
+		}
+	}
+	return frontier
+}
+
 func greatestStateTag[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}) (crdt.Tag, bool) {
 	var greatest crdt.Tag
 	found := false
@@ -848,7 +914,7 @@ func tagsToSortedSlice(tags map[crdt.Tag]struct{}) []crdt.Tag {
 	for tag := range tags {
 		result = append(result, tag)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Compare(result[j]) < 0 })
+	slices.SortFunc(result, func(left, right crdt.Tag) int { return left.Compare(right) })
 	return result
 }
 

@@ -228,6 +228,26 @@ func TestORSetMarshalBinaryMatchesCanonicalFrameFixture(t *testing.T) {
 	}
 }
 
+func TestORSetMarshalBinaryPreservesCanonicalStateFrame(t *testing.T) {
+	codec := stringCodec{id: "test"}
+	value := mustNewORSet(t, "local", codec)
+	payload := []byte{1, 1, 'a', 1, 1, 'r', 1, 2, 1, 1, 'r', 3, 4}
+	want, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDORSetState, CodecID: codec.ID(), Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := value.UnmarshalBinary(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := value.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("MarshalBinary canonical frame = %x, want %x", got, want)
+	}
+}
+
 func defaultLimits() frame.DecoderLimits { return frame.DefaultLimits() }
 
 func mustSnapshot(t testing.TB, state []byte) snapshot.Snapshot {
