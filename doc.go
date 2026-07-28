@@ -12,5 +12,5 @@
 // require explicit opt-in and may change before stable promotion.
 //
 // For installation, examples, and package-level guidance, see the module
-// README at https://github.com/darkinno/crdt.
+// README at https://github.com/DarkInno/crdt.
 package crdt

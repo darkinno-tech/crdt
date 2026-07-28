@@ -8,8 +8,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/darkinno/crdt/counter"
-	"github.com/darkinno/crdt/set"
+	"github.com/DarkInno/crdt/counter"
+	"github.com/DarkInno/crdt/set"
 )
 
 type taskCodec struct{}

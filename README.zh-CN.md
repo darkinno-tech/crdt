@@ -54,13 +54,13 @@ for _, kind := range policy.FrameTypes() {
 首个公开发布标签可用后：
 
 ```sh
-go get github.com/darkinno/crdt@v1.0.0
+go get github.com/DarkInno/crdt@v1.0.0
 ```
 
 在此之前，请使用本地检出进行开发：
 
 ```sh
-git clone https://github.com/darkinno/crdt.git
+git clone https://github.com/DarkInno/crdt.git
 cd crdt
 go test ./...
 ```
@@ -79,7 +79,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/darkinno/crdt/counter"
+	"github.com/DarkInno/crdt/counter"
 )
 
 func main() {
@@ -148,7 +148,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/darkinno/crdt/set"
+	"github.com/DarkInno/crdt/set"
 )
 
 type stringCodec struct{}
@@ -318,11 +318,11 @@ go mod tidy
 go test ./...
 git tag -a v1.0.0 -m "Release v1.0.0"
 git push origin v1.0.0
-GOPROXY=proxy.golang.org go list -m github.com/darkinno/crdt@v1.0.0
+GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@v1.0.0
 ```
 
 不要移动或复用已发布标签。对于 Go 模块，首个稳定版之后的破坏性变更需要新的主
-版本模块路径，例如 `github.com/darkinno/crdt/v2`。
+版本模块路径，例如 `github.com/DarkInno/crdt/v2`。
 
 ## 贡献
 

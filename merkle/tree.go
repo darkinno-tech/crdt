@@ -8,7 +8,7 @@ import (
 	"sort"
 	"sync"
 
-	frame "github.com/darkinno/crdt/encoding"
+	frame "github.com/DarkInno/crdt/encoding"
 )
 
 var ErrInvalidState = errors.New("merkle: invalid canonical state frame")

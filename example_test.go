@@ -3,8 +3,8 @@ package crdt_test
 import (
 	"fmt"
 
-	"github.com/darkinno/crdt/counter"
-	"github.com/darkinno/crdt/set"
+	"github.com/DarkInno/crdt/counter"
+	"github.com/DarkInno/crdt/set"
 )
 
 func ExampleGCounter() {

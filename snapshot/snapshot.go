@@ -5,9 +5,9 @@ package snapshot
 import (
 	"errors"
 
-	"github.com/darkinno/crdt"
-	"github.com/darkinno/crdt/clock"
-	frame "github.com/darkinno/crdt/encoding"
+	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/clock"
+	frame "github.com/DarkInno/crdt/encoding"
 )
 
 var (

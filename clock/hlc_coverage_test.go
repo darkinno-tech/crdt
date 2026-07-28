@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/darkinno/crdt"
+	"github.com/DarkInno/crdt"
 )
 
 func TestHLCStateAccessAndExhaustionAreAtomic(t *testing.T) {

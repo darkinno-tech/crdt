@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/darkinno/crdt/counter"
-	"github.com/darkinno/crdt/delta"
-	"github.com/darkinno/crdt/merkle"
-	"github.com/darkinno/crdt/set"
+	"github.com/DarkInno/crdt/counter"
+	"github.com/DarkInno/crdt/delta"
+	"github.com/DarkInno/crdt/merkle"
+	"github.com/DarkInno/crdt/set"
 )
 
 const (

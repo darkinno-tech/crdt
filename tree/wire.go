@@ -3,10 +3,10 @@ package tree
 import (
 	"sort"
 
-	"github.com/darkinno/crdt"
-	"github.com/darkinno/crdt/clock"
-	frame "github.com/darkinno/crdt/encoding"
-	"github.com/darkinno/crdt/snapshot"
+	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/clock"
+	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/snapshot"
 )
 
 // MarshalBinary returns a deterministic, bounded framed OR-Tree state.

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/darkinno/crdt"
-	frame "github.com/darkinno/crdt/encoding"
-	"github.com/darkinno/crdt/set"
+	"github.com/DarkInno/crdt"
+	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/set"
 )
 
 func TestBatchDecoderRejectsMalformedAndMismatchedItems(t *testing.T) {

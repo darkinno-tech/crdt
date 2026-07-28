@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/darkinno/crdt"
+	"github.com/DarkInno/crdt"
 )
 
 func TestUvarintAndBytesHelpersValidateOffsetsAndBounds(t *testing.T) {

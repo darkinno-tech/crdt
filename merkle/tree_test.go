@@ -3,7 +3,7 @@ package merkle
 import (
 	"testing"
 
-	"github.com/darkinno/crdt/counter"
+	"github.com/DarkInno/crdt/counter"
 )
 
 func TestTreeRootAndDiffAreDeterministic(t *testing.T) {
