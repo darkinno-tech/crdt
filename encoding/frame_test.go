@@ -39,7 +39,7 @@ func TestFrameRejectsLimitsAndMalformedBytes(t *testing.T) {
 	}
 	malformed := append([]byte(nil), encoded...)
 	malformed = append(malformed[:4], append([]byte{0x81, 0x00}, malformed[5:]...)...)
-	checksum := crc32.Checksum(malformed[4:len(malformed)-4], crc32.MakeTable(crc32.Castagnoli))
+	checksum := crc32.Checksum(malformed[4:len(malformed)-4], castagnoliTable)
 	binary.BigEndian.PutUint32(malformed[len(malformed)-4:], checksum)
 	if _, err := UnmarshalFrame(malformed, DefaultLimits()); !errors.Is(err, ErrInvalidFrame) {
 		t.Fatalf("non-canonical frame error = %v", err)

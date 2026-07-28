@@ -24,6 +24,8 @@ const (
 var (
 	ErrInvalidFrame = errors.New("encoding: invalid frame")
 	ErrFrameLimit   = errors.New("encoding: frame limit exceeded")
+
+	castagnoliTable = crc32.MakeTable(crc32.Castagnoli)
 )
 
 // DecoderLimits bounds decoder allocation and input work. All limits must be
@@ -74,7 +76,7 @@ func MarshalFrame(frame Frame) ([]byte, error) {
 	buf = append(buf, frame.CodecID...)
 	buf = binary.AppendUvarint(buf, uint64(len(frame.Payload)))
 	buf = append(buf, frame.Payload...)
-	checksum := crc32.Checksum(buf[4:], crc32.MakeTable(crc32.Castagnoli))
+	checksum := crc32.Checksum(buf[4:], castagnoliTable)
 	return binary.BigEndian.AppendUint32(buf, checksum), nil
 }
 
@@ -87,7 +89,7 @@ func UnmarshalFrame(data []byte, limits Limits) (Frame, error) {
 		return Frame{}, ErrInvalidFrame
 	}
 	stored := binary.BigEndian.Uint32(data[len(data)-4:])
-	if crc32.Checksum(data[4:len(data)-4], crc32.MakeTable(crc32.Castagnoli)) != stored {
+	if crc32.Checksum(data[4:len(data)-4], castagnoliTable) != stored {
 		return Frame{}, ErrInvalidFrame
 	}
 	position := 4
