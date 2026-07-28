@@ -46,6 +46,32 @@ func TestValidatedSnapshotRejectsInvalidConcreteState(t *testing.T) {
 	}
 }
 
+func TestSnapshotSupportsPNCounterRecoveryPlan(t *testing.T) {
+	value, err := counter.NewPNCounter("counter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := value.Increment(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := value.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedDelta, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := snapshot.New(state, nil)
+	if err != nil {
+		t.Fatalf("snapshot.New() error = %v", err)
+	}
+	if _, err := snapshot.NewRecoveryPlan(saved, [][]byte{encodedDelta}, len(encodedDelta)); err != nil {
+		t.Fatalf("NewRecoveryPlan() error = %v", err)
+	}
+}
+
 func TestValidatedSnapshotFreezesValidationAndRejectsPanics(t *testing.T) {
 	counterState, err := encodedCounterState()
 	if err != nil {

@@ -26,7 +26,11 @@ vet:
 	go vet ./...
 
 fuzz:
-	for package in ./encoding ./counter ./set ./delta; do go test -run=^$$ -fuzz=Fuzz -fuzztime=10s $$package; done
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./encoding
+	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
+	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./set
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
 
 coverage:
 	COVERAGE_THRESHOLD=90 ./scripts/check-coverage.sh

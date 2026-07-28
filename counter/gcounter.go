@@ -18,7 +18,8 @@ var (
 	ErrInvalidReplicaID = errors.New("counter: invalid replica ID")
 	// ErrNilCounter indicates an operation received a nil counter.
 	ErrNilCounter = errors.New("counter: nil G-Counter")
-	// ErrCounterOverflow indicates an increment or aggregate value overflows.
+	// ErrCounterOverflow indicates a local component, aggregate, or fixed-width
+	// counter value would overflow.
 	ErrCounterOverflow = errors.New("counter: value overflows uint64")
 )
 

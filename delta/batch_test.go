@@ -92,6 +92,64 @@ func TestCoalescerJoinsWithoutGrowingQueue(t *testing.T) {
 	}
 }
 
+func TestBatchAndCoalescerAcceptPNCounterDeltas(t *testing.T) {
+	source, err := counter.NewPNCounter("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstDelta, err := source.Increment(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDelta, err := source.Decrement(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := firstDelta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := secondDelta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := NewBatch([][]byte{first, second}, len(first)+len(second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Items()) != 2 {
+		t.Fatalf("batch item count = %d, want 2", len(batch.Items()))
+	}
+	coalescer, err := NewCoalescer(2, len(first)+len(second), mergePNCounter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coalescer.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := coalescer.Add(second); err != nil {
+		t.Fatal(err)
+	}
+	items := coalescer.Drain().Items()
+	if len(items) != 1 {
+		t.Fatalf("coalesced item count = %d, want 1", len(items))
+	}
+	merged, err := counter.UnmarshalPNCounterDelta(items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := counter.NewPNCounter("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(merged); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := target.ValueInt64(); err != nil || got != 3 {
+		t.Fatalf("coalesced PN-Counter value = %d, %v; want 3, nil", got, err)
+	}
+}
+
 func FuzzUnmarshalBatch(f *testing.F) {
 	seed := mustEncodedDelta(f, "seed", 1)
 	batch, err := NewBatch([][]byte{seed}, len(seed))
@@ -139,6 +197,22 @@ func mergeGCounter(left, right []byte) ([]byte, error) {
 		return nil, err
 	}
 	rightDelta, err := counter.UnmarshalGCounterDelta(right)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := leftDelta.Merge(rightDelta)
+	if err != nil {
+		return nil, err
+	}
+	return merged.MarshalBinary()
+}
+
+func mergePNCounter(left, right []byte) ([]byte, error) {
+	leftDelta, err := counter.UnmarshalPNCounterDelta(left)
+	if err != nil {
+		return nil, err
+	}
+	rightDelta, err := counter.UnmarshalPNCounterDelta(right)
 	if err != nil {
 		return nil, err
 	}
