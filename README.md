@@ -26,7 +26,9 @@ despite duplicate delivery, reordering, and temporary partitions.
 - Optional exact-acknowledgement tombstone collection with membership epochs.
 - Safe concurrent access for the provided CRDT implementations.
 - Experimental framed LWW-Map, RGA text, and OR-Tree collections, enabled
-  only by an explicit per-replication-group protocol policy.
+  only by an explicit per-replication-group protocol policy. RGA v1 now has
+  bounded delayed integration and incremental visible indexing, but its
+  tombstone lifecycle remains experimental.
 
 ## Scope
 
@@ -41,11 +43,17 @@ mechanism.
 
 ## Experimental LWW-Map, RGA, and OR-Tree protocols
 
-LWW-Map (`lww.Map`), RGA text (`text`), and OR-Tree (`tree`) have deterministic
-state/delta frames, bounded decoders, and HLC-backed snapshot recovery. They
-are experimental: their APIs and tombstone lifecycle may change before stable
-promotion. A replication group must opt in explicitly and advertise the
-resulting protocol set before exchanging their frames:
+RGA text v1 (`text`, TypeIDs 11/12) accepts out-of-order deltas through a
+bounded delayed-integration queue, rejects incomplete snapshots, and uses an
+incremental indexed sequence rather than rebuilding the full visible projection
+after each edit. It remains experimental while its full tombstone lifecycle is
+validated. Persist its HLC-backed snapshot atomically.
+
+`CompactTombstones` is intentionally conservative: it can collect only deleted
+leaves after an authenticated exact-acknowledgement epoch has durably saved a
+post-compaction snapshot and retired old deltas. Nodes with descendants remain
+structural anchors. LWW-Map, RGA run-v2 (TypeIDs 19/20), and OR-Tree remain
+experimental and require explicit opt-in:
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -63,11 +71,10 @@ boundary through `NewChangeWithPolicy`, `NewInboxWithPolicy`,
 not establish wire-semantic compatibility.
 
 The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
-MV-Register, and PN-Counter protocols. The policy is neither a global switch nor a plugin
-registry: unknown and reserved frame types remain unsupported. Experimental
-LWW-Map, RGA, and OR-Tree replicas must persist HLC state with snapshots and
-retain their tombstones; exact acknowledgement-based compaction for those
-types is not yet implemented.
+MV-Register, and PN-Counter protocols. The policy is neither a global switch
+nor a plugin registry: unknown and reserved frame types remain unsupported.
+Experimental LWW-Map, RGA, and OR-Tree replicas must persist HLC state with
+snapshots and retain their tombstones.
 
 ## Requirements
 
@@ -249,9 +256,10 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   version vector, not a wall clock, proves which writes a later `Set` observes;
   recover with `register.NewMVRegisterFromSnapshot`.
 - Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
-  capability advertisement. Do not send LWW-Map, RGA, or OR-Tree frames unless
-  both peers have opted into the experimental protocol. Persist their
-  HLC-backed snapshots atomically and do not compact their tombstones yet.
+  capability advertisement. Send LWW-Map, RGA, or OR-Tree frames only when
+  both peers opt in. Persist HLC-backed snapshots atomically. RGA tombstone
+  compaction additionally requires an authenticated exact-acknowledgement epoch
+  and retirement of old deltas.
 - Keep `ElementCodec.ID`, `Marshal`, and `Unmarshal` deterministic and safe for
   concurrent calls. Encoded values must round-trip canonically.
 - Treat received bytes as untrusted. Use `UnmarshalBinaryWithLimits` and
@@ -282,7 +290,7 @@ encoders for that.
 | `counter` | G-Counter, PN-Counter, and their delta codecs. |
 | `set` | G-Set, add-wins OR-Set, and element-codec contract. |
 | `lww` | In-memory LWW-Set and experimental framed LWW-Map. |
-| `text` | Experimental framed RGA collaborative text. |
+| `text` | Experimental framed RGA collaborative text and run-v2 codec. |
 | `tree` | Experimental framed observed-remove tree. |
 | `register` | In-memory LWW/max registers and framed causal MV-Register. |
 | `encoding` | Versioned bounded binary frames. |

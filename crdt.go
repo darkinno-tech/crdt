@@ -61,6 +61,8 @@ var frameTypes = [...]FrameType{
 var experimentalFrameTypes = map[uint64]struct{}{
 	TypeIDLWWMapState: {},
 	TypeIDLWWMapDelta: {},
+	TypeIDRGAState:    {},
+	TypeIDRGADelta:    {},
 	TypeIDORTreeState: {},
 	TypeIDORTreeDelta: {},
 	TypeIDRGARunState: {},

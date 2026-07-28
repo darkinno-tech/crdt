@@ -1,25 +1,28 @@
 # CRDT collection extension design
 
 This document defines the collection boundary after the stable v1 core.
-RGA text and OR-Tree have framed codecs, bounded decoders, HLC snapshots, and
-fuzz coverage, but remain experimental until their exact tombstone-GC lifecycle
-ships. LWW collections currently provide only in-memory merge semantics; their
+LWW-Map, RGA text (including run-v2), and OR-Tree have framed codecs, bounded
+decoders, HLC snapshots, and fuzz coverage, but remain experimental until their
+exact tombstone-GC lifecycle ships. RGA text v1 now has bounded delayed
+integration, incremental indexed projection, complete snapshots, and leaf-only
+compaction guarded by an external exact-acknowledgement epoch.
+LWW-Set remains an in-memory collection and its
 reserved frame IDs must not be advertised as a wire protocol.
 
 ## Experimental protocol policy
 
 `crdt.ProtocolPolicy` is the per-replication-group opt-in boundary. Its zero
 value advertises only stable G-Counter, OR-Set, and PN-Counter frames. Setting
-`AllowExperimental` additionally advertises RGA and OR-Tree. Peers must compare
-the advertised `FrameTypes` before sending frames; this is capability
+`AllowExperimental` additionally advertises LWW-Map, RGA, and OR-Tree. Peers
+must compare the advertised `FrameTypes` before sending frames; this is capability
 negotiation, not a dynamic plugin registry and not a replacement for
 authentication, authorization, decoder limits, or application-level schema
 validation.
 
 The policy does not change frame parsing or make an unknown type acceptable.
-Callers that opt in must persist the associated HLC state and retain all RGA or
-OR-Tree tombstones. Exact acknowledgement and compaction for those types are a
-release gate before they become stable.
+Callers that opt in must persist the associated HLC state and retain all
+LWW-Map, RGA, or OR-Tree tombstones. Exact acknowledgement and compaction for
+those types are a release gate before they become stable.
 
 ## Semantics
 
@@ -28,7 +31,7 @@ release gate before they become stable.
 | PN-Counter | component-wise maximum | increment/decrement | O(replicas) | two component maps |
 | LWW-Set | largest HLC tag per element | add/remove | O(changed elements) | removed entries |
 | LWW-Map | largest HLC tag per string key | set/delete | O(changed keys) | deleted entries and tags |
-| RGA text | union nodes plus tombstones; sibling IDs sort by descending tag | insert/delete by rune offset | O(changed nodes), render O(nodes + sibling sorting) | deleted node IDs |
+| RGA text v1 | union nodes plus tombstones; sibling IDs sort by descending tag | insert/delete by rune offset | O(log n) offset lookup; O(n) render | deleted structural anchors |
 
 LWW deliberately has no hidden "add wins" tie. `crdt.Tag.Compare` orders wall
 time, logical counter, then replica ID. Every replica ID is globally unique and
@@ -44,8 +47,11 @@ are rejected.
 
 ## LWW protocol completion gate
 
-Before exporting LWW Set or LWW Map as network-replicable library primitives,
-deliver all of the following together:
+LWW-Map meets this gate as an experimental protocol: it has state and delta
+frames, bounded canonical decoders, HLC-bearing snapshots, Delta coalescing
+compatibility, independent golden-vector coverage, and fuzzing. The remaining
+LWW-Set protocol must deliver all of the following before it is exported as a
+network-replicable library primitive:
 
 1. Reserve state/delta type IDs, canonical framed codecs, bounded decoders,
    canonical re-encoding tests, and delta coalescer support.
@@ -62,13 +68,13 @@ deliver all of the following together:
 ## Performance and safety constraints
 
 - No caller-owned byte slice is retained by LWW-Map. Reads also return copies.
-- RGA rendering uses an explicit traversal stack, not recursion proportional to
-  document length. It materializes adjacency once per render and sorts only
-  siblings; a future high-throughput editor can cache an indexed projection,
-  but must invalidate it on every merge.
-- A production text integration should batch adjacent local characters into
-  chunks only after preserving the above position/order semantics. Chunking is
-  an optimization, not an alternate conflict rule.
+- RGA keeps enter/exit markers in an indexed sequence and a linked scan order,
+  so it does not rebuild adjacency for each edit. Parent children are inserted
+  deterministically by descending tag; run-v2 compacts same-replica parent
+  chains on the wire without changing scalar Position semantics.
+- RGA compaction only removes deleted leaves after external authenticated exact
+  acknowledgement, durable post-compaction checkpointing, and retirement of
+  old deltas. Descendant anchors remain retained.
 - Bound document nodes, operation bytes, sibling fan-out, and retained
   tombstones at the transport/application boundary. Checksums detect corruption
   only; authentication, authorization, encryption, rate limits, and quotas
