@@ -6,7 +6,7 @@
 它提供确定性的二进制状态帧与增量帧，使副本能在重复投递、乱序和暂时
 网络分区的情况下收敛。
 
-> 状态：首个公开模块版本为 `v1.0.0`；API 遵循语义化版本规范。
+> 状态：稳定版本由 `main` 分支发布；API 遵循语义化版本规范。
 
 ## 特性
 
@@ -55,13 +55,13 @@ OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留�
 
 ## 安装
 
-首个公开发布标签可用后：
+安装最新稳定版本：
 
 ```sh
-go get github.com/DarkInno/crdt@v1.0.0
+go get github.com/DarkInno/crdt@latest
 ```
 
-在此之前，请使用本地检出进行开发：
+本地开发请使用检出副本：
 
 ```sh
 git clone https://github.com/DarkInno/crdt.git
@@ -326,17 +326,17 @@ CI 工作流会强制执行格式化、单元测试、竞态检测、vet、解�
 运行 `make test-extreme` 可在普通和 race 插桩模式下重现高基数场景。内部分析数据
 和部署运行手册刻意保留在公开发布树之外。
 
-## 发布 `v1.0.0`
+## 发布版本
 
-发布前，请运行以上验证命令、审阅公开 API、提交审核过的发布内容，并确保仓库可
-通过模块路径公开访问。然后创建不可变的语义版本标签：
+将 `beta` 合并到 `main` 前，请运行以上验证命令、审阅公开 API，并确保仓库可通过
+模块路径公开访问。`main` 的 push 工作流会创建下一个不可变语义版本标签，并生成
+带自动生成说明的 GitHub Release；不要手工创建可能冲突的稳定标签。
 
 ```sh
 go mod tidy
-go test ./...
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
-GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@v1.0.0
+make verify
+# 合并审核通过的 beta -> main PR，然后等待 main 工作流完成。
+GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@latest
 ```
 
 不要移动或复用已发布标签。对于 Go 模块，首个稳定版之后的破坏性变更需要新的主
