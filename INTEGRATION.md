@@ -124,7 +124,7 @@ The probe demonstrates the boundary that a consuming application owns:
 5. Periodically exchange full state or Merkle summaries to discover missing
    history, then merge state to repair it. A retry queue alone cannot repair a
    delta lost before it entered that queue.
-6. Before exchanging experimental RGA or OR-Tree frames, authenticate a
+6. Before exchanging experimental LWW-Map, RGA, or OR-Tree frames, authenticate a
    connection/setup capability advertisement built from
    `crdt.ProtocolPolicy{AllowExperimental: true}.FrameTypes()`. Both peers must
    advertise the same state/delta pair before either sends that type. Unknown,
@@ -149,17 +149,17 @@ codec ID stable across replicas, make encoding deterministic, and deliberately
 version it when the byte format changes. Real tasks normally use canonical IDs,
 not arbitrary display text.
 
-## 4. Experimental RGA and OR-Tree integration
+## 4. Experimental LWW-Map, RGA, and OR-Tree integration
 
-RGA (`text`) and OR-Tree (`tree`) are framed, HLC-backed experimental
-protocols. They are suitable only after the capability check above succeeds;
+LWW-Map (`lww.Map`), RGA (`text`), and OR-Tree (`tree`) are framed, HLC-backed
+experimental protocols. They are suitable only after the capability check above succeeds;
 the policy is local to a replication group and is not a dynamic plugin
 mechanism. Use each concrete decoder after the frame type is accepted—for
 example, `text.UnmarshalRGADeltaWithLimits` for RGA deltas and
 `tree.UnmarshalDeltaWithLimits` for OR-Tree deltas. Do not dispatch an
 untrusted frame to a type merely because it has a valid checksum.
 
-Persist a local RGA or OR-Tree state frame and its HLC state atomically with the
+Persist a local LWW-Map, RGA, or OR-Tree state frame and its HLC state atomically with the
 outbox/receipt transaction. Restore a same-ID replica only through
 `SnapshotCurrentState()` and the package's `NewFromSnapshot`; state bytes alone
 cannot prove the next locally emitted tag will be unique. RGA and OR-Tree retain
@@ -199,7 +199,7 @@ make test-integration
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
 | Business semantics | Product owners have accepted add-wins and the limits of grow-only counters. |
-| Experimental protocol agreement | RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
+| Experimental protocol agreement | LWW-Map/RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
 Passing `go test` proves the library and examples at this revision. It does not

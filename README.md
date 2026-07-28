@@ -328,9 +328,9 @@ documentation update.
   vulnerabilities.
 - A controlled three-host delivery probe confirmed idempotent duplicate
   delivery and rejected unauthorized, malformed, and oversized requests.
-- The supplied benchmarks cover G-Counter and OR-Set `Merge`, `ApplyDelta`,
-  and `MarshalBinary`. Run `make benchmark` on your target hardware before
-  choosing capacity limits.
+- The supplied benchmarks cover G-Counter, PN-Counter, and OR-Set `Merge`,
+  `ApplyDelta`, and `MarshalBinary`. Run `make benchmark` on your target
+  hardware before choosing capacity limits.
 
 The scenario evaluation at the end of this README records the current local
 sample for duplicate delivery and both live-state and tombstone-heavy
@@ -387,6 +387,34 @@ fixture and method, `MarshalBinary` now uses 29,952 B and 132 allocations per
 operation, down from 96,312 B and 778 allocations. These are local
 pre-release measurements, not capacity planning or SLA guarantees; rerun
 `make benchmark` on the deployment target before setting limits.
+
+## PN-Counter performance evaluation — 2026-07-28
+
+Measured on two independent Debian 13 (`linux/amd64`) hosts, each with four
+Intel Xeon Platinum 8272CL vCPUs and 3.8 GiB memory. The benchmark binary was
+built from this revision with Go 1.26.5 and run three times per setting with
+`-benchtime=2s`; values below are rounded means. The fixture has 128 replica
+components in each positive and negative map. `MarshalBinary` includes its
+reported encoded-throughput sample in parentheses; allocation counts were
+identical in all three runs.
+
+| Host | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
+| --- | ---: | --- | --- | --- | --- |
+| `210.16.171.72` | 1 | 24.9 µs/op; 13,136 B; 6 allocs | 149.1 ns/op; 0 B; 0 allocs | 7.51 µs/op; 232 B; 10 allocs | 69.4 µs/op (55.3 MB/s); 25,680 B; 10 allocs |
+| `210.16.171.72` | 4 | 18.6 µs/op; 13,136 B; 6 allocs | 151.8 ns/op; 0 B; 0 allocs | 7.29 µs/op; 232 B; 10 allocs | 53.6 µs/op (71.7 MB/s); 25,680 B; 10 allocs |
+| `192.140.163.250` | 1 | 25.6 µs/op; 13,136 B; 6 allocs | 151.8 ns/op; 0 B; 0 allocs | 7.49 µs/op; 232 B; 10 allocs | 70.4 µs/op (54.6 MB/s); 25,680 B; 10 allocs |
+| `192.140.163.250` | 4 | 18.5 µs/op; 13,136 B; 6 allocs | 153.5 ns/op; 0 B; 0 allocs | 7.31 µs/op; 232 B; 10 allocs | 53.3 µs/op (72.1 MB/s); 25,680 B; 10 allocs |
+
+The `GOMAXPROCS=4` rows remain serial benchmark measurements, not aggregate
+four-core throughput. These controlled host samples are public regression
+evidence for this revision, not capacity limits or SLA guarantees; rerun the
+same command on the deployment target before setting production limits:
+
+```sh
+GOMAXPROCS=4 go test -run='^$' \
+  -bench='^BenchmarkPNCounter(Merge|ApplyDelta|Value|MarshalBinary)$' \
+  -benchmem -benchtime=2s ./counter
+```
 
 ## License
 
