@@ -17,6 +17,7 @@
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
+- 实验性 RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
 
 ## 范围
 
@@ -24,6 +25,25 @@
 认证、存储后端或重试策略。只有当应用提供权威且经过认证的活跃成员视图后，
 `tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该
 成员视图。校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
+
+## 实验性 RGA 与 OR-Tree 协议
+
+RGA 文本（`text`）和 OR-Tree（`tree`）已具备确定性的状态/增量帧、有边界的
+解码，以及带 HLC 的快照恢复；但在稳定发布前仍属于实验性能力，其 API 和墓碑
+生命周期仍可能调整。复制组必须显式选择并在交换这些帧前通告协议集合：
+
+```go
+policy := crdt.ProtocolPolicy{AllowExperimental: true}
+for _, kind := range policy.FrameTypes() {
+	// 在经过认证的连接握手中包含 StateID 和 DeltaID。
+	_ = kind
+}
+```
+
+零值策略仅通告稳定的 G-Counter、OR-Set 和 PN-Counter 协议。该策略既不是全局
+开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。RGA 和 OR-Tree 的
+实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；这两种类型的精确确认式
+墓碑回收尚未实现。
 
 ## 要求
 
@@ -192,6 +212,9 @@ go run ./examples/collaborative-board
   加入的成员必须从回收后的快照启动。
 - `ORSet.Compact` 仅适用于传输层能够独立证明所提供 frontier 对每个副本都是
   无缺口因果前缀的场景。
+- 将 `ProtocolPolicy.FrameTypes()` 作为经过认证的连接/建链能力通告。只有两端
+  都选择实验协议时才能发送 RGA 或 OR-Tree 帧；应原子持久化其带 HLC 的快照，
+  且暂时不要回收其墓碑。
 - 保持 `ElementCodec.ID`、`Marshal` 与 `Unmarshal` 确定性，并确保它们可安全
   并发调用。编码值必须以规范形式往返。
 - 将收到的字节视为不可信数据。请根据传输环境使用带合适限制的
@@ -207,6 +230,10 @@ go run ./examples/collaborative-board
 | `clock` | 混合逻辑时钟和持久化 HLC 状态。 |
 | `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
 | `set` | 加法胜出 OR-Set 与元素编解码器契约。 |
+| `text` | 实验性、带帧的 RGA 协作文本。 |
+| `tree` | 实验性、带帧的观察移除树。 |
+| `lww` | 内存内 LWW Set 和 Map；尚不是带帧协议。 |
+| `register` | 内存内 LWW 和 max register；尚未带帧。 |
 | `encoding` | 带边界的版本化二进制帧。 |
 | `delta` | 带边界的增量批处理和合并器。 |
 | `snapshot` | 不可变状态快照与恢复计划。 |

@@ -921,11 +921,6 @@ func appendBytes(dst, value []byte) []byte {
 	return append(dst, value...)
 }
 
-func appendString(dst []byte, value string) []byte {
-	dst = frame.AppendUvarint(dst, uint64(len(value)))
-	return append(dst, value...)
-}
-
 // Kept as package-private test seams while the canonical implementation lives
 // in encoding alongside the frame primitives.
 func appendTag(dst []byte, tag crdt.Tag) []byte { return frame.AppendTag(dst, tag) }

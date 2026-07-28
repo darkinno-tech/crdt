@@ -20,6 +20,8 @@ despite duplicate delivery, reordering, and temporary partitions.
   anti-entropy workflows.
 - Optional exact-acknowledgement tombstone collection with membership epochs.
 - Safe concurrent access for the provided CRDT implementations.
+- Experimental framed RGA text and OR-Tree collections, enabled only by an
+  explicit per-replication-group protocol policy.
 
 ## Scope
 
@@ -31,6 +33,29 @@ authenticated active-membership view. It does not discover, authenticate, or
 persist that view. A checksum
 detects accidental frame corruption; it is not an authenticity or encryption
 mechanism.
+
+## Experimental RGA and OR-Tree protocols
+
+RGA text (`text`) and OR-Tree (`tree`) have deterministic state/delta frames,
+bounded decoders, and HLC-backed snapshot recovery. They are experimental:
+their APIs and tombstone lifecycle may change before stable promotion. A
+replication group must opt in explicitly and advertise the resulting protocol
+set before exchanging their frames:
+
+```go
+policy := crdt.ProtocolPolicy{AllowExperimental: true}
+for _, kind := range policy.FrameTypes() {
+	// Include StateID and DeltaID in the authenticated connection handshake.
+	_ = kind
+}
+```
+
+The zero-value policy advertises only the stable G-Counter, OR-Set, and
+PN-Counter protocols. The policy is neither a global switch nor a plugin
+registry: unknown and reserved frame types remain unsupported. Experimental
+RGA and OR-Tree replicas must persist HLC state with snapshots and retain their
+tombstones; exact acknowledgement-based compaction for those types is not yet
+implemented.
 
 ## Requirements
 
@@ -208,6 +233,10 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   bootstrap from a post-compaction snapshot.
 - `ORSet.Compact` remains available only for transports that independently
   prove a gap-free causal prefix for every supplied frontier.
+- Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
+  capability advertisement. Do not send RGA or OR-Tree frames unless both
+  peers have opted into the experimental protocol. Persist their HLC-backed
+  snapshots atomically and do not compact their tombstones yet.
 - Keep `ElementCodec.ID`, `Marshal`, and `Unmarshal` deterministic and safe for
   concurrent calls. Encoded values must round-trip canonically.
 - Treat received bytes as untrusted. Use `UnmarshalBinaryWithLimits` and
@@ -223,6 +252,10 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 | `clock` | Hybrid logical clock and persisted HLC state. |
 | `counter` | G-Counter, PN-Counter, and their delta codecs. |
 | `set` | Add-wins OR-Set and element-codec contract. |
+| `text` | Experimental framed RGA collaborative text. |
+| `tree` | Experimental framed observed-remove tree. |
+| `lww` | In-memory LWW Set and Map; not yet a framed protocol. |
+| `register` | In-memory LWW and max registers; not yet framed. |
 | `encoding` | Versioned bounded binary frames. |
 | `delta` | Bounded delta batches and coalescers. |
 | `snapshot` | Immutable state snapshots and recovery plans. |
