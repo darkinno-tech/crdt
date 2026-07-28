@@ -139,6 +139,19 @@ func main() {
 要使移除操作被其他副本观察到，应发送返回的移除增量或合并状态。未观察到某个
 标签的移除与该标签的新增并发时，元素仍然存在（加法胜出语义）。
 
+## 端到端集成
+
+可复现的本地 HTTP 投递演练、生产集成检查清单、快照/重启指引，以及应当采集的
+收敛证据，见[端到端集成教程](INTEGRATION.zh-CN.md)。
+[可运行的协作任务看板示例](examples/collaborative-board)演示重复投递、网络分区期间
+的 add/remove 冲突，以及从 OR-Set 快照恢复：
+
+```sh
+go run ./examples/collaborative-board
+```
+
+英文版本见 [integration tutorial](INTEGRATION.md)。
+
 ## 在分布式系统中的正确使用方式
 
 - 为每个存活逻辑副本提供全局唯一且非空的副本 ID。
