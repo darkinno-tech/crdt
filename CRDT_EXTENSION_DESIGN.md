@@ -1,8 +1,25 @@
 # CRDT collection extension design
 
-This document defines the next collection boundary. The in-memory LWW and RGA
-implementations provide the merge semantics and validation surface; they must
-not be advertised as transport-ready until the framing work below lands.
+This document defines the collection boundary after the stable v1 core.
+RGA text and OR-Tree have framed codecs, bounded decoders, HLC snapshots, and
+fuzz coverage, but remain experimental until their exact tombstone-GC lifecycle
+ships. LWW collections currently provide only in-memory merge semantics; their
+reserved frame IDs must not be advertised as a wire protocol.
+
+## Experimental protocol policy
+
+`crdt.ProtocolPolicy` is the per-replication-group opt-in boundary. Its zero
+value advertises only stable G-Counter, OR-Set, and PN-Counter frames. Setting
+`AllowExperimental` additionally advertises RGA and OR-Tree. Peers must compare
+the advertised `FrameTypes` before sending frames; this is capability
+negotiation, not a dynamic plugin registry and not a replacement for
+authentication, authorization, decoder limits, or application-level schema
+validation.
+
+The policy does not change frame parsing or make an unknown type acceptable.
+Callers that opt in must persist the associated HLC state and retain all RGA or
+OR-Tree tombstones. Exact acknowledgement and compaction for those types are a
+release gate before they become stable.
 
 ## Semantics
 
@@ -25,16 +42,16 @@ the tombstone is retained and wins when the node eventually arrives. Unknown
 parents are allowed for reordering; completed cycles and conflicting node IDs
 are rejected.
 
-## Protocol completion gate
+## LWW protocol completion gate
 
-Before exporting these types as network-replicable library primitives, deliver
-all of the following together:
+Before exporting LWW Set or LWW Map as network-replicable library primitives,
+deliver all of the following together:
 
 1. Reserve state/delta type IDs, canonical framed codecs, bounded decoders,
    canonical re-encoding tests, and delta coalescer support.
 2. Add snapshots that include HLC state, plus explicit tombstone-compaction
-   preconditions. LWW and RGA cannot silently discard deleted entries while an
-   offline replica may still hold an older write/node.
+   preconditions. LWW cannot silently discard deleted entries while an offline
+   replica may still hold an older write.
 3. Keep all decoded values bounded by application-selected frame limits. Reject
    malformed UTF-8, non-canonical integers, duplicate IDs, tag conflicts,
    unresolved parents in complete snapshots, and cycles.
@@ -90,5 +107,6 @@ observed-remove rooted forest with these rules:
 
 This keeps merge a set union plus tombstone subtraction, preserving
 commutativity, associativity, idempotence, and a mechanically testable no-cycle
-invariant. Tree framing, bounded decode, snapshot/HLC recovery, and exact
-tombstone GC must ship as one unit.
+invariant. Tree framing, bounded decode, and snapshot/HLC recovery are
+implemented experimentally. Exact tombstone acknowledgement and compaction
+remain required before stable promotion.
