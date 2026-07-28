@@ -113,6 +113,10 @@ rm -rf "$scenario_dir"
    持久化、认证或业务授权。
 5. 定期交换完整状态或 Merkle 摘要以发现缺失历史，再合并状态修复。单靠重试队列
    无法修复进入队列前已经丢失的 delta。
+6. 交换实验性 RGA 或 OR-Tree 帧前，必须对由
+   `crdt.ProtocolPolicy{AllowExperimental: true}.FrameTypes()` 生成的连接/建链
+   能力通告完成认证。只有双方都通告同一组 state/delta 类型时才可发送该类型；
+   未知、仅预留或未共同启用的类型都应作为协议错误处理。
 
 OR-Set 接收端的核心形态如下：
 
@@ -132,7 +136,21 @@ if err := workboard.ApplyDelta(delta); err != nil {
 codec ID 和确定性编码；字节格式变化时要显式版本化。这里的 `taskCodec` 仅为示例，
 真实任务通常应使用规范化 ID，而不是任意展示文本。
 
-## 4. 恢复、反熵与墓碑
+## 4. 实验性 RGA 与 OR-Tree 集成
+
+RGA（`text`）和 OR-Tree（`tree`）是带帧、带 HLC 的实验性协议，只有通过上述
+能力检查后才能使用；该策略仅属于一个复制组，并不是动态插件机制。帧类型被接受
+后仍应调用具体解码器，例如 RGA delta 使用 `text.UnmarshalRGADeltaWithLimits`，
+OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧的校验和有效
+就按某种类型分派它。
+
+必须在同一 outbox/接收记录事务中，原子持久化本地 RGA 或 OR-Tree 状态帧及其 HLC
+状态。复用同一 replica ID 时，只能通过 `SnapshotCurrentState()` 和各包的
+`NewFromSnapshot` 恢复；仅有状态字节不能证明下一枚本地标签唯一。RGA 和 OR-Tree
+为处理乱序投递而保留删除墓碑；它们的精确确认式回收尚未实现，因此实验性接入必须
+为墓碑设定预算并监控、继续保留它们，不能调用通用 GC。
+
+## 5. 恢复、反熵与墓碑
 
 新副本或恢复副本应从完整状态快照启动。OR-Set 绝不能只从 `MarshalBinary()` 字节
 恢复相同 ID 的副本，否则下一枚 HLC 标签可能与此前本地标签冲突。应原子保存状态帧
@@ -159,6 +177,7 @@ make test-integration
 | 分区修复 | 副本经快照引导或状态/Merkle 交换修复后收敛。 |
 | 输入安全 | 解码前已认证；有边界的解码器拒绝损坏、超限、类型或 codec 不匹配帧。 |
 | 业务语义 | 产品方已接受 add-wins 及只增计数器的限制。 |
+| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 RGA/OR-Tree；其 HLC 状态已持久化且墓碑被保留。 |
 | 运维归属 | outbox 重试、监控、备份、成员退役和墓碑策略均有明确负责人。 |
 
 `go test` 通过只证明当前修订中的库和示例；它不证明浏览器、移动端、生产网络、
