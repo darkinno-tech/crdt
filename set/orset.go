@@ -300,7 +300,7 @@ func (s *ORSet[T]) ApplyDelta(delta ORSetDelta[T]) error {
 	if s == nil {
 		return ErrNilORSet
 	}
-	if err := validateState(delta.adds, delta.tombstones); err != nil {
+	if err := validateDeltaState(delta.adds, delta.tombstones); err != nil {
 		return err
 	}
 	if tag, ok := greatestStateTag(delta.adds, delta.tombstones); ok {
@@ -318,10 +318,10 @@ func (s *ORSet[T]) ApplyDelta(delta ORSetDelta[T]) error {
 // Merge joins other into d and returns a new delta without modifying either
 // input delta.
 func (d ORSetDelta[T]) Merge(other ORSetDelta[T]) (ORSetDelta[T], error) {
-	if err := validateState(d.adds, d.tombstones); err != nil {
+	if err := validateDeltaState(d.adds, d.tombstones); err != nil {
 		return ORSetDelta[T]{}, err
 	}
-	if err := validateState(other.adds, other.tombstones); err != nil {
+	if err := validateDeltaState(other.adds, other.tombstones); err != nil {
 		return ORSetDelta[T]{}, err
 	}
 	adds := cloneAdds(d.adds)
@@ -447,10 +447,16 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 		return nil, ErrInvalidCodec
 	}
 	type entry struct {
-		encoded []byte
-		tags    []crdt.Tag
+		encoded  []byte
+		tagStart int
+		tagEnd   int
 	}
 	entries := make([]entry, 0, len(adds))
+	liveTagCount := 0
+	for _, tags := range adds {
+		liveTagCount += len(tags)
+	}
+	liveTags := make([]crdt.Tag, 0, liveTagCount)
 	for element, tags := range adds {
 		encoded, err := codec.Marshal(element)
 		if err != nil {
@@ -459,11 +465,17 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 		if len(encoded) > limits.MaxStringBytes {
 			return nil, frame.ErrFrameLimit
 		}
-		entryTags := tagsToSortedSlice(tags)
-		if len(entryTags) == 0 {
+		if len(tags) == 0 {
 			return nil, ErrInvalidDelta
 		}
-		entries = append(entries, entry{encoded: encoded, tags: entryTags})
+		tagStart := len(liveTags)
+		for tag := range tags {
+			liveTags = append(liveTags, tag)
+		}
+		sort.Slice(liveTags[tagStart:], func(i, j int) bool {
+			return liveTags[tagStart+i].Compare(liveTags[tagStart+j]) < 0
+		})
+		entries = append(entries, entry{encoded: encoded, tagStart: tagStart, tagEnd: len(liveTags)})
 	}
 	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].encoded, entries[j].encoded) < 0 })
 	for i := 1; i < len(entries); i++ {
@@ -478,12 +490,13 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 	payloadSize := uvarintSize(uint64(len(entries)))
 	tagCount := 0
 	for _, item := range entries {
-		additional := uvarintSize(uint64(len(item.encoded))) + len(item.encoded) + uvarintSize(uint64(len(item.tags)))
+		tagCountForElement := item.tagEnd - item.tagStart
+		additional := uvarintSize(uint64(len(item.encoded))) + len(item.encoded) + uvarintSize(uint64(tagCountForElement))
 		if additional > limits.MaxPayload-payloadSize {
 			return nil, frame.ErrFrameLimit
 		}
 		payloadSize += additional
-		for _, tag := range item.tags {
+		for _, tag := range liveTags[item.tagStart:item.tagEnd] {
 			if tagCount == limits.MaxTags {
 				return nil, frame.ErrFrameLimit
 			}
@@ -518,20 +531,24 @@ func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], 
 		payloadSize += additional
 		tagCount++
 	}
-	payload := make([]byte, 0, payloadSize)
-	payload = frame.AppendUvarint(payload, uint64(len(entries)))
-	for _, item := range entries {
-		payload = appendBytes(payload, item.encoded)
-		payload = frame.AppendUvarint(payload, uint64(len(item.tags)))
-		for _, tag := range item.tags {
+	return frame.MarshalFrameWithPayload(typeID, codecID, payloadSize, func(payload []byte) error {
+		payload = frame.AppendUvarint(payload[:0], uint64(len(entries)))
+		for _, item := range entries {
+			payload = appendBytes(payload, item.encoded)
+			payload = frame.AppendUvarint(payload, uint64(item.tagEnd-item.tagStart))
+			for _, tag := range liveTags[item.tagStart:item.tagEnd] {
+				payload = appendTag(payload, tag)
+			}
+		}
+		payload = frame.AppendUvarint(payload, uint64(len(tags)))
+		for _, tag := range tags {
 			payload = appendTag(payload, tag)
 		}
-	}
-	payload = frame.AppendUvarint(payload, uint64(len(tags)))
-	for _, tag := range tags {
-		payload = appendTag(payload, tag)
-	}
-	return frame.MarshalFrame(frame.Frame{TypeID: typeID, CodecID: codecID, Payload: payload})
+		if len(payload) != payloadSize {
+			return frame.ErrInvalidFrame
+		}
+		return nil
+	})
 }
 
 // UnmarshalBinary validates data completely before atomically replacing s's
@@ -655,12 +672,18 @@ func joinState[T comparable](destinationAdds map[T]map[crdt.Tag]struct{}, destin
 		destinationTombstones[tag] = struct{}{}
 	}
 	for element, tags := range sourceAdds {
-		if destinationAdds[element] == nil {
-			destinationAdds[element] = make(map[crdt.Tag]struct{})
-		}
 		for tag := range tags {
+			if _, removed := destinationTombstones[tag]; removed {
+				continue
+			}
+			if destinationAdds[element] == nil {
+				destinationAdds[element] = make(map[crdt.Tag]struct{})
+			}
 			destinationAdds[element][tag] = struct{}{}
 		}
+	}
+	if len(sourceTombstones) == 0 {
+		return
 	}
 	for element, tags := range destinationAdds {
 		for tag := range tags {
@@ -686,6 +709,37 @@ func validateState[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones ma
 		if !tag.Valid() {
 			return ErrInvalidDelta
 		}
+	}
+	return nil
+}
+
+// validateDeltaState additionally rejects tag conflicts that cannot occur in a
+// delta produced by this package or decoded from a canonical frame. Keeping the
+// stronger check at the delta boundary protects direct package use without
+// adding a tag-index allocation to complete-state Merge and Marshal paths.
+func validateDeltaState[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}) error {
+	if err := validateState(adds, tombstones); err != nil {
+		return err
+	}
+	trackTags := len(adds) > 1 || (len(adds) > 0 && len(tombstones) > 0)
+	if !trackTags {
+		return nil
+	}
+	var seen map[crdt.Tag]struct{}
+	seen = make(map[crdt.Tag]struct{})
+	for _, tags := range adds {
+		for tag := range tags {
+			if _, duplicate := seen[tag]; duplicate {
+				return ErrInvalidDelta
+			}
+			seen[tag] = struct{}{}
+		}
+	}
+	for tag := range tombstones {
+		if _, duplicate := seen[tag]; duplicate {
+			return ErrInvalidDelta
+		}
+		seen[tag] = struct{}{}
 	}
 	return nil
 }
@@ -776,9 +830,14 @@ func appendBytes(dst, value []byte) []byte {
 }
 
 func appendTag(dst []byte, tag crdt.Tag) []byte {
-	dst = appendBytes(dst, []byte(tag.ReplicaID))
+	dst = appendString(dst, tag.ReplicaID)
 	dst = frame.AppendUvarint(dst, tag.WallTime)
 	return frame.AppendUvarint(dst, tag.Logical)
+}
+
+func appendString(dst []byte, value string) []byte {
+	dst = frame.AppendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
 }
 
 func readTag(data []byte, pos, maxStringBytes int) (crdt.Tag, int, bool) {

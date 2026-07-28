@@ -1,6 +1,7 @@
 package set
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -131,6 +132,72 @@ func TestORSetRejectsNonCanonicalTagsAndCodecCollisions(t *testing.T) {
 		t.Fatalf("Snapshot() error = %v", err)
 	} else if _, ok := saved.ClockState(); !ok {
 		t.Fatal("Snapshot() did not preserve clock state")
+	}
+}
+
+func TestORSetFastJoinPreservesTombstonesAndRejectsConflictingTags(t *testing.T) {
+	codec := stringCodec{id: "example.com/join-invariants/v1"}
+	source := mustNewORSet(t, "source", codec)
+	oldAdd, err := source.Add("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remove, err := source.Remove("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustNewORSet(t, "target", codec)
+	if err := target.ApplyDelta(remove); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(oldAdd); err != nil {
+		t.Fatal(err)
+	}
+	if target.Contains("old") || target.State().ElementCount != 0 || target.State().TombstoneCount != 1 {
+		t.Fatalf("tombstone-first delivery state = %#v", target.State())
+	}
+
+	before, err := target.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeClock := target.ClockState()
+	tag := crdt.Tag{ReplicaID: "conflict", WallTime: 1, Logical: 1}
+	invalidDeltas := []ORSetDelta[string]{
+		{adds: map[string]map[crdt.Tag]struct{}{"left": {tag: {}}, "right": {tag: {}}}},
+		{adds: map[string]map[crdt.Tag]struct{}{"left": {tag: {}}}, tombstones: map[crdt.Tag]struct{}{tag: {}}},
+	}
+	for _, invalid := range invalidDeltas {
+		if err := target.ApplyDelta(invalid); !errors.Is(err, ErrInvalidDelta) {
+			t.Fatalf("ApplyDelta(conflicting tags) error = %v, want %v", err, ErrInvalidDelta)
+		}
+		after, err := target.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(after, before) || target.ClockState() != beforeClock {
+			t.Fatal("invalid delta modified receiver state or clock")
+		}
+	}
+}
+
+func TestORSetMarshalBinaryMatchesCanonicalFrameFixture(t *testing.T) {
+	codec := stringCodec{id: "test"}
+	adds := map[string]map[crdt.Tag]struct{}{
+		"a": {{ReplicaID: "r", WallTime: 1, Logical: 2}: {}},
+	}
+	tombstones := map[crdt.Tag]struct{}{{ReplicaID: "r", WallTime: 3, Logical: 4}: {}}
+	got, err := marshalORSetWithLimits(crdt.TypeIDORSetState, codec, adds, tombstones, defaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte{1, 1, 'a', 1, 1, 'r', 1, 2, 1, 1, 'r', 3, 4}
+	want, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDORSetState, CodecID: codec.ID(), Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("MarshalBinary fixture = %x, want %x", got, want)
 	}
 }
 

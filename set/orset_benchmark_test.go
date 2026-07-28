@@ -33,8 +33,51 @@ func BenchmarkORSetApplyDelta(b *testing.B) {
 	}
 }
 
+// BenchmarkORSetApplyDeltaParallelDuplicate measures receiver lock contention
+// under concurrent delivery of the same already-observed delta.
+func BenchmarkORSetApplyDeltaParallelDuplicate(b *testing.B) {
+	target, source := benchmarkORSets(b)
+	delta, err := source.Add("delta-element")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := target.ApplyDelta(delta); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(parallel *testing.PB) {
+		for parallel.Next() {
+			if err := target.ApplyDelta(delta); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
 func BenchmarkORSetMarshalBinary(b *testing.B) {
 	value, _ := benchmarkORSets(b)
+	encoded, err := value.MarshalBinary()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(encoded)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := value.MarshalBinary(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkORSetMarshalBinaryTombstoneHeavy(b *testing.B) {
+	value, _ := benchmarkORSets(b)
+	for element := 0; element < benchmarkORSetElements; element++ {
+		if _, err := value.Remove(fmt.Sprintf("element-%03d", element)); err != nil {
+			b.Fatal(err)
+		}
+	}
 	encoded, err := value.MarshalBinary()
 	if err != nil {
 		b.Fatal(err)

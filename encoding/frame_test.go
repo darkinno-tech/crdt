@@ -28,6 +28,33 @@ func TestFrameRoundTripAndRejectsTampering(t *testing.T) {
 	}
 }
 
+func TestMarshalFrameWithPayloadMatchesFrameAndRejectsWriterFailures(t *testing.T) {
+	t.Parallel()
+	payload := []byte("state")
+	want, err := MarshalFrame(Frame{TypeID: 1, CodecID: "example.com/string/v1", Payload: payload})
+	if err != nil {
+		t.Fatalf("MarshalFrame() error = %v", err)
+	}
+	got, err := MarshalFrameWithPayload(1, "example.com/string/v1", len(payload), func(destination []byte) error {
+		copy(destination, payload)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarshalFrameWithPayload() error = %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("MarshalFrameWithPayload() = %x, want %x", got, want)
+	}
+
+	writerErr := errors.New("writer failed")
+	if _, err := MarshalFrameWithPayload(1, "", 1, func([]byte) error { return writerErr }); !errors.Is(err, writerErr) {
+		t.Fatalf("writer error = %v, want %v", err, writerErr)
+	}
+	if _, err := MarshalFrameWithPayload(1, "", 1, nil); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("nil writer error = %v, want %v", err, ErrInvalidFrame)
+	}
+}
+
 func TestFrameRejectsLimitsAndMalformedBytes(t *testing.T) {
 	t.Parallel()
 	encoded, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("x")})

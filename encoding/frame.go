@@ -64,18 +64,40 @@ type Frame struct {
 
 // MarshalFrame returns the canonical v1 encoding of frame.
 func MarshalFrame(frame Frame) ([]byte, error) {
+	return MarshalFrameWithPayload(frame.TypeID, frame.CodecID, len(frame.Payload), func(payload []byte) error {
+		copy(payload, frame.Payload)
+		return nil
+	})
+}
+
+// PayloadWriter writes exactly one framed payload into the supplied buffer. The
+// buffer has the requested payload length and is only valid for the duration of
+// the call. Writers must not retain or modify it after returning.
+type PayloadWriter func([]byte) error
+
+// MarshalFrameWithPayload returns the canonical v1 frame for a payload written
+// directly into its final output buffer. It owns the envelope and checksum, so
+// callers cannot produce a frame with a mismatched payload length or checksum.
+func MarshalFrameWithPayload(typeID uint64, codecID string, payloadLength int, writePayload PayloadWriter) ([]byte, error) {
 	limits := DefaultLimits()
-	if frame.TypeID == 0 || len(frame.CodecID) > limits.MaxCodecID || len(frame.Payload) > limits.MaxPayload {
+	if typeID == 0 || payloadLength < 0 || len(codecID) > limits.MaxCodecID || payloadLength > limits.MaxPayload {
 		return nil, ErrFrameLimit
 	}
-	buf := make([]byte, 0, 4+binary.MaxVarintLen64*4+len(frame.CodecID)+len(frame.Payload)+4)
+	if writePayload == nil {
+		return nil, ErrInvalidFrame
+	}
+	buf := make([]byte, 0, 4+binary.MaxVarintLen64*4+len(codecID)+payloadLength+4)
 	buf = append(buf, 'C', 'R', 'D', 'T')
 	buf = binary.AppendUvarint(buf, FormatVersion)
-	buf = binary.AppendUvarint(buf, frame.TypeID)
-	buf = binary.AppendUvarint(buf, uint64(len(frame.CodecID)))
-	buf = append(buf, frame.CodecID...)
-	buf = binary.AppendUvarint(buf, uint64(len(frame.Payload)))
-	buf = append(buf, frame.Payload...)
+	buf = binary.AppendUvarint(buf, typeID)
+	buf = binary.AppendUvarint(buf, uint64(len(codecID)))
+	buf = append(buf, codecID...)
+	buf = binary.AppendUvarint(buf, uint64(payloadLength))
+	payloadStart := len(buf)
+	buf = buf[:payloadStart+payloadLength]
+	if err := writePayload(buf[payloadStart:]); err != nil {
+		return nil, err
+	}
 	checksum := crc32.Checksum(buf[4:], castagnoliTable)
 	return binary.BigEndian.AppendUint32(buf, checksum), nil
 }
