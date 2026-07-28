@@ -2,6 +2,8 @@ name: Test
 
 on:
   push:
+    branches:
+      - "**"
   pull_request:
 
 permissions:
@@ -70,3 +72,62 @@ jobs:
         uses: golangci/golangci-lint-action@0a35821d5c230e903fcfe077583637dea1b27b47 # v9.0.0
         with:
           version: v2.11
+
+  prerelease-tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
+    needs: [test, staticcheck, coverage, docker, golangci]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: beta-prerelease-tag
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Create pre-release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+          stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
+          if [[ -z "${stable_tag}" ]]; then
+            echo "No stable vMAJOR.MINOR.PATCH tag found" >&2
+            exit 1
+          fi
+
+          version="${stable_tag#v}"
+          IFS=. read -r major minor patch <<< "${version}"
+          if [[ ! "${patch}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid stable tag: ${stable_tag}" >&2
+            exit 1
+          fi
+          prefix="v${major}.${minor}.$((10#${patch} + 1))-beta."
+
+          while IFS= read -r existing_tag; do
+            if [[ "$(git rev-list -n 1 "${existing_tag}")" == "${GITHUB_SHA}" ]]; then
+              echo "tag=${existing_tag}" >> "${GITHUB_OUTPUT}"
+              echo "Pre-release tag already exists: ${existing_tag}"
+              exit 0
+            fi
+          done < <(git tag --list "${prefix}*" --sort=-v:refname)
+
+          max=0
+          while IFS= read -r existing_tag; do
+            number="${existing_tag#"${prefix}"}"
+            if [[ "${number}" =~ ^[0-9]+$ ]] && (( 10#${number} > max )); then
+              max=$((10#${number}))
+            fi
+          done < <(git tag --list "${prefix}*")
+
+          tag="${prefix}$((max + 1))"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "${tag}" --message "Pre-release ${tag}"
+          git push origin "${tag}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Report pre-release tag
+        run: echo "Created pre-release tag ${{ steps.tag.outputs.tag }}"
