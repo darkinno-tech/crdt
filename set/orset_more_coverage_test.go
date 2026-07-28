@@ -150,11 +150,15 @@ func TestORSetFastJoinPreservesTombstonesAndRejectsConflictingTags(t *testing.T)
 	if err := target.ApplyDelta(remove); err != nil {
 		t.Fatal(err)
 	}
+	clockAfterRemove := target.ClockState()
 	if err := target.ApplyDelta(oldAdd); err != nil {
 		t.Fatal(err)
 	}
 	if target.Contains("old") || target.State().ElementCount != 0 || target.State().TombstoneCount != 1 {
 		t.Fatalf("tombstone-first delivery state = %#v", target.State())
+	}
+	if target.ClockState() != clockAfterRemove {
+		t.Fatal("tombstone-covered add advanced receiver clock")
 	}
 
 	before, err := target.MarshalBinary()
@@ -178,6 +182,29 @@ func TestORSetFastJoinPreservesTombstonesAndRejectsConflictingTags(t *testing.T)
 		if !bytes.Equal(after, before) || target.ClockState() != beforeClock {
 			t.Fatal("invalid delta modified receiver state or clock")
 		}
+	}
+}
+
+func TestORSetDuplicateDeltaDoesNotAdvanceClock(t *testing.T) {
+	codec := stringCodec{id: "example.com/duplicate-clock/v1"}
+	source := mustNewORSet(t, "source", codec)
+	delta, err := source.Add("item")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustNewORSet(t, "target", codec)
+	if err := target.ApplyDelta(delta); err != nil {
+		t.Fatal(err)
+	}
+	clockAfterFirstApply := target.ClockState()
+	if err := target.ApplyDelta(delta); err != nil {
+		t.Fatal(err)
+	}
+	if target.ClockState() != clockAfterFirstApply {
+		t.Fatal("duplicate delta advanced receiver clock")
+	}
+	if !target.Contains("item") {
+		t.Fatal("duplicate delta lost the original add")
 	}
 }
 

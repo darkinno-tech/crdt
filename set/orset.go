@@ -295,13 +295,17 @@ func (s *ORSet[T]) Merge(other *ORSet[T]) error {
 	return nil
 }
 
-// ApplyDelta joins delta into s.
+// ApplyDelta joins delta into s. A delta already represented by s returns
+// without advancing the local HLC or taking the receiver write lock.
 func (s *ORSet[T]) ApplyDelta(delta ORSetDelta[T]) error {
 	if s == nil {
 		return ErrNilORSet
 	}
 	if err := validateDeltaState(delta.adds, delta.tombstones); err != nil {
 		return err
+	}
+	if s.subsumes(delta.adds, delta.tombstones) {
+		return nil
 	}
 	if tag, ok := greatestStateTag(delta.adds, delta.tombstones); ok {
 		if err := s.clock.Witness(tag); err != nil {
@@ -695,6 +699,30 @@ func joinState[T comparable](destinationAdds map[T]map[crdt.Tag]struct{}, destin
 			delete(destinationAdds, element)
 		}
 	}
+}
+
+// subsumes reports whether every mutation in source is already represented by
+// s. A local tombstone also covers an incoming live add with the same tag.
+func (s *ORSet[T]) subsumes(sourceAdds map[T]map[crdt.Tag]struct{}, sourceTombstones map[crdt.Tag]struct{}) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for tag := range sourceTombstones {
+		if _, exists := s.tombstones[tag]; !exists {
+			return false
+		}
+	}
+	for element, tags := range sourceAdds {
+		destinationTags := s.elements[element]
+		for tag := range tags {
+			if _, removed := s.tombstones[tag]; removed {
+				continue
+			}
+			if _, exists := destinationTags[tag]; !exists {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateState[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}) error {
