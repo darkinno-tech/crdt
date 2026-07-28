@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,7 @@ func (stringCodec) Unmarshal(data []byte) (string, error) { return string(data),
 type probe struct {
 	counter *counter.GCounter
 	set     *set.ORSet[string]
-	token   []byte
+	token   [sha256.Size]byte
 }
 
 type probeState struct {
@@ -134,7 +135,7 @@ func newProbe(replicaID, token string) (*probe, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &probe{counter: counterValue, set: setValue, token: []byte(token)}, nil
+	return &probe{counter: counterValue, set: setValue, token: sha256.Sum256([]byte(token))}, nil
 }
 
 func serve(listen, replicaID, token string, timeout time.Duration) error {
@@ -171,8 +172,8 @@ func (p *probe) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (p *probe) authorized(request *http.Request) bool {
-	provided := []byte(request.Header.Get("X-CRDT-Probe-Token"))
-	return len(provided) == len(p.token) && subtle.ConstantTimeCompare(provided, p.token) == 1
+	provided := sha256.Sum256([]byte(request.Header.Get("X-CRDT-Probe-Token")))
+	return subtle.ConstantTimeCompare(provided[:], p.token[:]) == 1
 }
 
 func (p *probe) applyCounter(writer http.ResponseWriter, request *http.Request) {

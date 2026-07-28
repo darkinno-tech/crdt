@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,6 +69,25 @@ func TestProbeAuthenticatesAndDeduplicatesDelivery(t *testing.T) {
 	}
 	if !receiver.set.Contains("item") {
 		t.Fatal("receiver did not retain delivered OR-Set element")
+	}
+}
+
+func TestProbeRejectsSameLengthAndDifferentLengthTokens(t *testing.T) {
+	value, err := newProbe("receiver", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range []string{"secreu", "short", "a much longer incorrect token"} {
+		request := httptest.NewRequest(http.MethodGet, "/state", nil)
+		request.Header.Set("X-CRDT-Probe-Token", token)
+		if value.authorized(request) {
+			t.Fatalf("authorized incorrect token %q", token)
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/state", nil)
+	request.Header.Set("X-CRDT-Probe-Token", "secret")
+	if !value.authorized(request) {
+		t.Fatal("rejected valid token")
 	}
 }
 
@@ -322,6 +343,89 @@ func TestProbePropagatesBodyCloseFailures(t *testing.T) {
 	})}
 	if _, err := fetchState(statusClient, "http://example.invalid", "secret"); !errors.Is(err, closeFailure) {
 		t.Fatalf("fetchState() status close error = %v, want close failure", err)
+	}
+}
+
+func TestProbeConcurrentDuplicateAndUnauthorizedTraffic(t *testing.T) {
+	receiver, err := newProbe("receiver", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(receiver)
+	defer server.Close()
+
+	source, err := newProbe("sender", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counterDelta, err := source.counter.Increment(11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counterData, err := counterDelta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDelta, err := source.set.Add("concurrent-item")
+	if err != nil {
+		t.Fatal(err)
+	}
+	setData, err := setDelta.MarshalBinary(stringCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 96
+	errCh := make(chan error, workers)
+	var group sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		group.Add(1)
+		go func(worker int) {
+			defer group.Done()
+			if worker%3 == 0 {
+				request, err := http.NewRequest(http.MethodPost, server.URL+"/counter", bytes.NewReader(counterData))
+				if err != nil {
+					errCh <- err
+					return
+				}
+				request.Header.Set("X-CRDT-Probe-Token", "incorrect-token")
+				response, err := server.Client().Do(request)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				closeErr := response.Body.Close()
+				if closeErr != nil {
+					errCh <- closeErr
+					return
+				}
+				if response.StatusCode != http.StatusUnauthorized {
+					errCh <- fmt.Errorf("unauthorized request status = %d", response.StatusCode)
+				}
+				return
+			}
+			endpoint, data := "/counter", counterData
+			if worker%2 == 0 {
+				endpoint, data = "/orset", setData
+			}
+			if err := postRepeated(server.Client(), server.URL+endpoint, "secret", data, 3); err != nil {
+				errCh <- err
+			}
+		}(worker)
+	}
+	group.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, err := receiver.counter.Value(); err != nil || got != 11 {
+		t.Fatalf("counter value = %d, %v; want 11, nil", got, err)
+	}
+	if !receiver.set.Contains("concurrent-item") {
+		t.Fatal("concurrent OR-Set delta was not retained")
 	}
 }
 
