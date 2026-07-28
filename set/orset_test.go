@@ -275,6 +275,40 @@ func TestORSetCompactsOnlyAtStableFrontier(t *testing.T) {
 	}
 }
 
+func TestORSetCompactsOnlyExplicitAcknowledgedTombstones(t *testing.T) {
+	t.Parallel()
+	codec := stringCodec{id: "example.com/string/v1"}
+	value := mustNewORSet(t, "replica", codec)
+	if _, err := value.Add("first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Remove("first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Add("second"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Remove("second"); err != nil {
+		t.Fatal(err)
+	}
+	tags := value.TombstoneTags()
+	if len(tags) != 2 || tags[0].Compare(tags[1]) >= 0 {
+		t.Fatalf("TombstoneTags() = %#v, want two sorted tags", tags)
+	}
+	if removed, err := value.CompactTombstones(tags[:1]); err != nil || removed != 1 {
+		t.Fatalf("CompactTombstones(first) = %d, %v; want 1, nil", removed, err)
+	}
+	if got := value.State().TombstoneCount; got != 1 {
+		t.Fatalf("tombstones after exact compaction = %d, want 1", got)
+	}
+	if removed, err := value.CompactTombstones([]crdt.Tag{{}}); !errors.Is(err, ErrInvalidFrontier) || removed != 0 {
+		t.Fatalf("CompactTombstones(invalid) = %d, %v; want 0, %v", removed, err, ErrInvalidFrontier)
+	}
+	if got := value.State().TombstoneCount; got != 1 {
+		t.Fatalf("invalid compaction changed tombstones: %d", got)
+	}
+}
+
 func TestORSetSnapshotCurrentStateCarriesDerivedFrontier(t *testing.T) {
 	t.Parallel()
 	codec := stringCodec{id: "example.com/string/v1"}

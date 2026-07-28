@@ -91,8 +91,11 @@ func (s *ORSet[T]) ClockState() clock.State {
 }
 
 // Frontier returns the greatest known tag for every replica in the current
-// live-add and tombstone state. It is suitable for producing an acknowledgement
-// frontier or for storing alongside a snapshot; the returned map is a copy.
+// live-add and tombstone state. It is useful for diagnostics and for storing
+// alongside a snapshot; the returned map is a copy. A frontier derived from
+// independently delivered deltas is not, by itself, proof that every earlier
+// tag was received, so it must not be used as a tombstone-GC acknowledgement
+// unless the replication layer separately guarantees gap-free causal delivery.
 func (s *ORSet[T]) Frontier() map[string]crdt.Tag {
 	if s == nil {
 		return nil
@@ -100,6 +103,18 @@ func (s *ORSet[T]) Frontier() map[string]crdt.Tag {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return frontierForState(s.elements, s.tombstones)
+}
+
+// TombstoneTags returns a sorted copy of every tombstone currently retained by
+// s. It is intended for an acknowledgement protocol that confirms individual
+// tombstones; callers cannot mutate the returned slice to change s.
+func (s *ORSet[T]) TombstoneTags() []crdt.Tag {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return tagsToSortedSlice(s.tombstones)
 }
 
 // NewORSetFromSnapshot restores an OR-Set and its persisted local HLC state.
@@ -176,9 +191,10 @@ func (s *ORSet[T]) Remove(element T) (ORSetDelta[T], error) {
 }
 
 // Compact removes tombstones that every active replica has acknowledged. The
-// caller must provide the pointwise minimum acknowledgement frontier across
-// all active replicas; omitting a replica or using its local frontier is not
-// safe. Rejoining replicas must bootstrap from a post-compaction snapshot.
+// caller must provide a frontier whose every prefix is proven complete for
+// every active replica. A greatest-observed-tag frontier from independently
+// delivered, out-of-order deltas does not meet that requirement. Rejoining
+// replicas must bootstrap from a post-compaction snapshot.
 func (s *ORSet[T]) Compact(stableFrontier map[string]crdt.Tag) (int, error) {
 	if s == nil {
 		return 0, ErrNilORSet
@@ -191,6 +207,31 @@ func (s *ORSet[T]) Compact(stableFrontier map[string]crdt.Tag) (int, error) {
 	removed := 0
 	for tag := range s.tombstones {
 		if acknowledged, ok := stableFrontier[tag.ReplicaID]; ok && tag.Compare(acknowledged) <= 0 {
+			delete(s.tombstones, tag)
+			removed++
+		}
+	}
+	return removed, nil
+}
+
+// CompactTombstones removes exactly the supplied tombstones. It is safe for a
+// coordinator that has independently proved acknowledgement for each tag; a
+// tag that is not currently a tombstone is ignored. The input is completely
+// validated before s is modified.
+func (s *ORSet[T]) CompactTombstones(acknowledged []crdt.Tag) (int, error) {
+	if s == nil {
+		return 0, ErrNilORSet
+	}
+	for _, tag := range acknowledged {
+		if !tag.Valid() {
+			return 0, ErrInvalidFrontier
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for _, tag := range acknowledged {
+		if _, exists := s.tombstones[tag]; exists {
 			delete(s.tombstones, tag)
 			removed++
 		}
