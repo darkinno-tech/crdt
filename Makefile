@@ -29,6 +29,7 @@ fuzz:
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./encoding
 	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
 	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
+	go test -run=^$$ -fuzz=FuzzMapUnmarshal -fuzztime=10s ./lww
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./set
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=10s ./text
