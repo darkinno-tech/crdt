@@ -134,3 +134,56 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report pre-release tag
         run: echo "Created pre-release tag ${{ steps.tag.outputs.tag }}"
+
+  release-tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, staticcheck, coverage, docker, golangci]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: main-release-tag
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Create release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+
+          stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
+          if [[ -z "${stable_tag}" ]]; then
+            echo "No stable vMAJOR.MINOR.PATCH tag found" >&2
+            exit 1
+          fi
+
+          version="${stable_tag#v}"
+          IFS=. read -r major minor patch <<< "${version}"
+          if [[ ! "${patch}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid stable tag: ${stable_tag}" >&2
+            exit 1
+          fi
+          tag="v${major}.${minor}.$((10#${patch} + 1))"
+
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "${tag}")"
+            if [[ "${tagged_commit}" == "${GITHUB_SHA}" ]]; then
+              echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+              echo "Release tag already exists for this commit: ${tag}"
+              exit 0
+            fi
+            echo "Refusing to replace ${tag}, which points to ${tagged_commit}" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "${tag}" --message "Release ${tag}"
+          git push origin "${tag}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Report release tag
+        run: echo "Created release tag ${{ steps.tag.outputs.tag }}"
