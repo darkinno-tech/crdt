@@ -28,6 +28,11 @@ const (
 	TypeIDMVRegisterDelta uint64 = 16
 	TypeIDORTreeState     uint64 = 17
 	TypeIDORTreeDelta     uint64 = 18
+	// RGA run frames retain scalar Position semantics while compacting linear
+	// same-replica insertion chains. They are separately negotiated v2 wire
+	// shapes; TypeIDRGAState and TypeIDRGADelta remain immutable v1 contracts.
+	TypeIDRGARunState uint64 = 19
+	TypeIDRGARunDelta uint64 = 20
 )
 
 // FrameType describes one fully implemented framed CRDT protocol. The type
@@ -48,6 +53,7 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
 	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
 	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
+	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
 }
 
 // experimentalFrameTypes are fully framed protocols whose public API and
@@ -55,12 +61,12 @@ var frameTypes = [...]FrameType{
 // ProtocolPolicy's zero value, so an application must opt in per replication
 // group before advertising or accepting them from a peer.
 var experimentalFrameTypes = map[uint64]struct{}{
-	TypeIDRGAState:    {},
-	TypeIDRGADelta:    {},
 	TypeIDLWWMapState: {},
 	TypeIDLWWMapDelta: {},
 	TypeIDORTreeState: {},
 	TypeIDORTreeDelta: {},
+	TypeIDRGARunState: {},
+	TypeIDRGARunDelta: {},
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group
@@ -72,7 +78,7 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // TypeID remains necessary but is not sufficient: applications still own
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
-	// AllowExperimental includes the framed LWW-Map, RGA, and OR-Tree protocols.
+	// AllowExperimental includes framed LWW-Map, RGA run-v2, and OR-Tree protocols.
 	// Keep it false until the replication group has accepted their experimental
 	// API and tombstone-retention lifecycle.
 	AllowExperimental bool

@@ -115,6 +115,168 @@ func TestRGAStateCountsOnlyRootReachableNodes(t *testing.T) {
 	}
 }
 
+func TestRGAQueuesMissingParentsAndReplaysWhenTheyArrive(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := source.Insert(0, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := source.Insert(1, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(child); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.PendingCount(); got != 1 {
+		t.Fatalf("PendingCount before parent = %d, want 1", got)
+	}
+	missing := target.MissingParents()
+	if len(missing) != 1 || missing[0] != parentNodeID(parent) {
+		t.Fatalf("MissingParents = %#v", missing)
+	}
+	if got := target.String(); got != "" {
+		t.Fatalf("text before parent = %q", got)
+	}
+	if err := target.ApplyDelta(parent); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.PendingCount(); got != 0 {
+		t.Fatalf("PendingCount after parent = %d, want 0", got)
+	}
+	if got := target.String(); got != "ab" {
+		t.Fatalf("text after replay = %q, want ab", got)
+	}
+}
+
+func TestRGAIntegratesNewChildAgainstExistingParent(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := source.Insert(0, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := New("remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.ApplyDelta(base); err != nil {
+		t.Fatal(err)
+	}
+	child, err := remote.Insert(1, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(child); err != nil {
+		t.Fatal(err)
+	}
+	if target.PendingCount() != 0 || target.String() != "ab" {
+		t.Fatalf("existing-parent insert pending=%d text=%q", target.PendingCount(), target.String())
+	}
+}
+
+func TestRGAPendingLimitsRejectAtomically(t *testing.T) {
+	options := DefaultOptions()
+	options.MaxPendingNodes = 1
+	options.MaxPendingBytes = 1 << 20
+	target, err := NewWithOptions("target", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := Position{ReplicaID: "missing", WallTime: 1}
+	first := Position{ReplicaID: "remote", WallTime: 2}
+	second := Position{ReplicaID: "remote", WallTime: 3}
+	delta := Delta{nodes: map[Position]node{
+		first:  {parent: missing, rune: 'a'},
+		second: {parent: missing, rune: 'b'},
+	}, tombstones: map[Position]struct{}{}}
+	if err := target.ApplyDelta(delta); err != ErrResourceLimit {
+		t.Fatalf("ApplyDelta limit = %v, want %v", err, ErrResourceLimit)
+	}
+	if target.PendingCount() != 0 || target.String() != "" || len(target.MissingParents()) != 0 {
+		t.Fatalf("limit failure mutated target: pending=%d text=%q missing=%#v", target.PendingCount(), target.String(), target.MissingParents())
+	}
+
+	// A single delta may contain a complete parent chain without consuming the
+	// pending budget after deterministic integration.
+	options.MaxPendingBytes = 128
+	resolved, err := NewWithOptions("resolved", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolved.Insert(0, "abc"); err != nil {
+		t.Fatalf("complete local chain rejected: %v", err)
+	}
+	if got := resolved.String(); got != "abc" {
+		t.Fatalf("resolved text = %q", got)
+	}
+}
+
+func TestRGACompactsOnlyStableLeafTombstones(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Insert(0, "ab"); err != nil {
+		t.Fatal(err)
+	}
+	firstDelete, err := value.Delete(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := tombstoneNodeID(firstDelete)
+	if _, err := value.CompactTombstones([]Position{first}); err != ErrUnsafeCompaction {
+		t.Fatalf("compact structural parent = %v, want %v", err, ErrUnsafeCompaction)
+	}
+	secondDelete, err := value.Delete(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := tombstoneNodeID(secondDelete)
+	if removed, err := value.CompactTombstones([]Position{second}); err != nil || removed != 1 {
+		t.Fatalf("compact leaf = %d, %v", removed, err)
+	}
+	if removed, err := value.CompactTombstones([]Position{first}); err != nil || removed != 1 {
+		t.Fatalf("compact former parent = %d, %v", removed, err)
+	}
+	if got := value.String(); got != "" || len(value.TombstoneTags()) != 0 || value.State().TombstoneCount != 0 {
+		t.Fatalf("compacted state text=%q tombstones=%#v snapshot=%+v", got, value.TombstoneTags(), value.State())
+	}
+	if _, err := value.MarshalBinary(); err != nil {
+		t.Fatalf("compacted state marshal: %v", err)
+	}
+}
+
+func parentNodeID(delta Delta) Position {
+	for id := range delta.nodes {
+		return id
+	}
+	return Position{}
+}
+
+func tombstoneNodeID(delta Delta) Position {
+	for id := range delta.tombstones {
+		return id
+	}
+	return Position{}
+}
+
 func TestRGARejectsCycle(t *testing.T) {
 	value, err := New("local")
 	if err != nil {

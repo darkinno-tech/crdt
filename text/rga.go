@@ -25,6 +25,13 @@ var (
 	// recoverable state frame must include the complete parent closure.
 	ErrIncompleteState = errors.New("text: incomplete RGA state")
 	ErrTagConflict     = errors.New("text: conflicting node for one tag")
+	// ErrUnsafeCompaction means a tombstone still anchors local or unresolved
+	// descendants, so removing it would change RGA ordering or permit a stale
+	// insertion to become visible.
+	ErrUnsafeCompaction = errors.New("text: unsafe RGA tombstone compaction")
+	// ErrResourceLimit indicates that accepting a delta would exceed the
+	// receiver's configured in-memory safety limits.
+	ErrResourceLimit = errors.New("text: RGA resource limit exceeded")
 )
 
 // Position is a stable, opaque identifier for one Unicode scalar value.
@@ -43,44 +50,90 @@ type Delta struct {
 	tombstones map[Position]struct{}
 }
 
+// Options bounds retained RGA metadata. Values must be positive. The defaults
+// match the maximum element count of one default framed payload while keeping
+// unresolved dependency state substantially smaller than a full document.
+// Applications handling untrusted peers should choose limits appropriate to a
+// replication group instead of relying on process-wide memory availability.
+type Options struct {
+	MaxNodes        int
+	MaxTombstones   int
+	MaxPendingNodes int
+	MaxPendingBytes int
+}
+
+// DefaultOptions returns conservative per-RGA retention limits.
+func DefaultOptions() Options {
+	return Options{
+		MaxNodes:        1 << 20,
+		MaxTombstones:   1 << 20,
+		MaxPendingNodes: 1 << 16,
+		MaxPendingBytes: 4 << 20,
+	}
+}
+
+func (o Options) valid() bool {
+	return o.MaxNodes > 0 && o.MaxTombstones > 0 && o.MaxPendingNodes > 0 && o.MaxPendingBytes > 0
+}
+
 // RGA is a collaborative text CRDT. A tombstone retained for a deleted
 // position wins even if it arrives before the corresponding insertion.
 type RGA struct {
-	mu         sync.RWMutex
-	replicaID  string
-	clock      *clock.HLC
-	nodes      map[Position]node
-	tombstones map[Position]struct{}
-	version    uint64
-
-	// projection caches the ordered visible positions for the current version.
-	// It has its own lock so frequent readers do not contend with CRDT writes.
-	// A projection is replaced as a whole and never mutated after publication.
-	projectionMu      sync.Mutex
-	projection        []Position
-	projectionVersion uint64
+	mu        sync.RWMutex
+	replicaID string
+	clock     *clock.HLC
+	options   Options
+	// nodes contains only integrated nodes: every non-root parent is present
+	// in nodes. pending holds nodes whose parent has not arrived. Splitting the
+	// two makes delayed integration explicit, bounded, and snapshot-safe.
+	nodes           map[Position]node
+	pending         map[Position]node
+	waitingByParent map[Position]map[Position]struct{}
+	pendingBytes    int
+	tombstones      map[Position]struct{}
+	version         uint64
+	sequence        *sequenceIndex
+	children        map[Position][]Position
 }
 
 var _ crdt.CRDT[*RGA] = (*RGA)(nil)
 var _ crdt.DeltaCapable[*RGA, Delta] = (*RGA)(nil)
 
-func New(replicaID string) (*RGA, error) { return NewFromClock(clock.State{ReplicaID: replicaID}) }
+func New(replicaID string) (*RGA, error) { return NewWithOptions(replicaID, DefaultOptions()) }
+
+// NewWithOptions constructs an RGA with explicit retention limits.
+func NewWithOptions(replicaID string, options Options) (*RGA, error) {
+	return NewFromClockWithOptions(clock.State{ReplicaID: replicaID}, options)
+}
 
 func NewFromClock(state clock.State) (*RGA, error) {
+	return NewFromClockWithOptions(state, DefaultOptions())
+}
+
+// NewFromClockWithOptions restores an RGA clock with explicit retention
+// limits. Clock state must be persisted atomically with a complete snapshot
+// before reusing its replica ID.
+func NewFromClockWithOptions(state clock.State, options Options) (*RGA, error) {
 	if !(crdt.Tag{ReplicaID: state.ReplicaID}).Valid() {
 		return nil, ErrInvalidReplicaID
+	}
+	if !options.valid() {
+		return nil, ErrResourceLimit
 	}
 	hlc, err := clock.NewHLCFromState(state)
 	if err != nil {
 		return nil, err
 	}
 	return &RGA{
-		replicaID:         state.ReplicaID,
-		clock:             hlc,
-		nodes:             make(map[Position]node),
-		tombstones:        make(map[Position]struct{}),
-		projection:        []Position{},
-		projectionVersion: 0,
+		replicaID:       state.ReplicaID,
+		clock:           hlc,
+		options:         options,
+		nodes:           make(map[Position]node),
+		pending:         make(map[Position]node),
+		waitingByParent: make(map[Position]map[Position]struct{}),
+		tombstones:      make(map[Position]struct{}),
+		sequence:        newSequenceIndex(),
+		children:        make(map[Position][]Position),
 	}, nil
 }
 
@@ -105,16 +158,19 @@ func (r *RGA) Insert(offset int, value string) (Delta, error) {
 		return Delta{}, ErrInvalidText
 	}
 	runes := []rune(value)
-	visible, _ := r.visibleProjection()
-	if offset > len(visible) {
+	r.mu.RLock()
+	previous, hasPrevious := r.sequence.visibleAt(offset - 1)
+	visibleCount := visibleCount(r.sequence.root)
+	r.mu.RUnlock()
+	if offset > visibleCount {
 		return Delta{}, ErrRange
 	}
 	if len(runes) == 0 {
 		return Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{})}, nil
 	}
 	parent := Position{}
-	if offset > 0 {
-		parent = visible[offset-1]
+	if hasPrevious {
+		parent = previous
 	}
 	delta := Delta{nodes: make(map[Position]node, len(runes)), tombstones: make(map[Position]struct{})}
 	for _, valueRune := range runes {
@@ -141,14 +197,22 @@ func (r *RGA) Delete(offset, count int) (Delta, error) {
 	if offset < 0 || count < 0 {
 		return Delta{}, ErrRange
 	}
-	visible, _ := r.visibleProjection()
-	if offset > len(visible) || count > len(visible)-offset {
+	r.mu.RLock()
+	visibleCount := visibleCount(r.sequence.root)
+	if offset > visibleCount || count > visibleCount-offset {
+		r.mu.RUnlock()
 		return Delta{}, ErrRange
 	}
 	delta := Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{}, count)}
-	for _, id := range visible[offset : offset+count] {
+	for index := 0; index < count; index++ {
+		id, ok := r.sequence.visibleAt(offset + index)
+		if !ok {
+			r.mu.RUnlock()
+			return Delta{}, ErrRange
+		}
 		delta.tombstones[id] = struct{}{}
 	}
+	r.mu.RUnlock()
 	if err := r.ApplyDelta(delta); err != nil {
 		return Delta{}, err
 	}
@@ -159,20 +223,16 @@ func (r *RGA) String() string {
 	if r == nil {
 		return ""
 	}
-	for {
-		visible, version := r.visibleProjection()
-		r.mu.RLock()
-		if r.version != version {
-			r.mu.RUnlock()
-			continue
-		}
-		result := make([]rune, 0, len(visible))
-		for _, id := range visible {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := make([]rune, 0, visibleCount(r.sequence.root))
+	for current := r.sequence.entries[Position{}].next; current != nil; current = current.next {
+		if current.visible {
+			id := current.position
 			result = append(result, r.nodes[id].rune)
 		}
-		r.mu.RUnlock()
-		return string(result)
 	}
+	return string(result)
 }
 
 // Positions returns a copy of visible stable IDs in display order.
@@ -180,15 +240,9 @@ func (r *RGA) Positions() []Position {
 	if r == nil {
 		return nil
 	}
-	for {
-		visible, version := r.visibleProjection()
-		r.mu.RLock()
-		current := r.version
-		r.mu.RUnlock()
-		if current == version {
-			return append([]Position(nil), visible...)
-		}
-	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.sequence.visiblePositions()
 }
 
 func (r *RGA) ApplyDelta(delta Delta) error {
@@ -200,32 +254,43 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !acyclicAgainst(delta.nodes, r.nodes) {
+	known := make(map[Position]node, len(r.nodes)+len(r.pending))
+	for id, item := range r.nodes {
+		known[id] = item
+	}
+	for id, item := range r.pending {
+		known[id] = item
+	}
+	if !acyclicAgainst(delta.nodes, known) {
 		return ErrInvalidDelta
 	}
 	for id, incoming := range delta.nodes {
-		current, exists := r.nodes[id]
+		current, exists := known[id]
 		if exists && current != incoming {
 			return ErrTagConflict
 		}
+	}
+	newNodes, newPendingNodes, newPendingBytes := r.deltaCapacity(delta)
+	if len(r.nodes)+len(r.pending)+newNodes > r.options.MaxNodes ||
+		len(r.pending)+newPendingNodes > r.options.MaxPendingNodes ||
+		r.pendingBytes+newPendingBytes > r.options.MaxPendingBytes ||
+		len(r.tombstones)+newTombstones(delta.tombstones, r.tombstones) > r.options.MaxTombstones {
+		return ErrResourceLimit
 	}
 	if tag, ok := greatestTag(delta); ok {
 		if err := r.clock.Witness(tag); err != nil {
 			return err
 		}
 	}
-	if len(r.nodes) == 0 && len(delta.nodes) > 0 {
-		r.nodes = make(map[Position]node, len(delta.nodes))
-	}
-	if len(r.tombstones) == 0 && len(delta.tombstones) > 0 {
-		r.tombstones = make(map[Position]struct{}, len(delta.tombstones))
-	}
 	changed := false
 	for id, incoming := range delta.nodes {
-		if _, exists := r.nodes[id]; exists {
+		if _, exists := known[id]; exists {
 			continue
 		}
-		r.nodes[id] = incoming
+		r.enqueuePending(id, incoming)
+		changed = true
+	}
+	if r.integrateReady() {
 		changed = true
 	}
 	for id := range delta.tombstones {
@@ -233,6 +298,7 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 			continue
 		}
 		r.tombstones[id] = struct{}{}
+		r.sequence.setVisible(id, false)
 		changed = true
 	}
 	if changed {
@@ -250,8 +316,116 @@ func (r *RGA) Merge(other *RGA) error {
 	}
 	other.mu.RLock()
 	delta := Delta{nodes: cloneNodes(other.nodes), tombstones: cloneTombstones(other.tombstones)}
+	for id, item := range other.pending {
+		delta.nodes[id] = item
+	}
 	other.mu.RUnlock()
 	return r.ApplyDelta(delta)
+}
+
+// PendingCount reports the number of accepted nodes still waiting for a
+// missing parent. It is useful for replication diagnostics and backpressure.
+func (r *RGA) PendingCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.pending)
+}
+
+// MissingParents returns stable IDs that must arrive before pending nodes can
+// integrate. The returned slice is sorted and safe for callers to retain.
+func (r *RGA) MissingParents() []Position {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	parents := make([]Position, 0, len(r.waitingByParent))
+	for parent := range r.waitingByParent {
+		if parent.Valid() && len(r.waitingByParent[parent]) > 0 {
+			parents = append(parents, parent)
+		}
+	}
+	r.mu.RUnlock()
+	sort.Slice(parents, func(i, j int) bool { return parents[i].Compare(parents[j]) < 0 })
+	return parents
+}
+
+// TombstoneTags returns every retained deletion tag in canonical order. It is
+// an acknowledgement input, not proof that a tag is safe to collect.
+func (r *RGA) TombstoneTags() []Position {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return sortedTombstoneIDs(r.tombstones)
+}
+
+// CompactTombstones physically removes exactly the requested tombstoned leaf
+// nodes. It is deliberately stricter than OR-Set compaction: an RGA deletion
+// remains a structural anchor while any integrated or pending child refers to
+// it. Call this only after an authenticated, exact-acknowledgement epoch has
+// durably checkpointed a post-compaction snapshot and retired old deltas.
+//
+// The operation is all-or-nothing. Unknown tags are ignored; invalid tags,
+// unresolved dependencies, non-leaf nodes, or tombstones received before
+// their insertion return ErrUnsafeCompaction without changing the RGA.
+func (r *RGA) CompactTombstones(tags []Position) (int, error) {
+	if r == nil {
+		return 0, ErrNilText
+	}
+	for _, tag := range tags {
+		if !tag.Valid() {
+			return 0, ErrUnsafeCompaction
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.pending) > 0 {
+		return 0, ErrUnsafeCompaction
+	}
+	compact := make([]Position, 0, len(tags))
+	seen := make(map[Position]struct{}, len(tags))
+	for _, tag := range tags {
+		if _, duplicate := seen[tag]; duplicate {
+			continue
+		}
+		seen[tag] = struct{}{}
+		if _, tombstoned := r.tombstones[tag]; !tombstoned {
+			continue
+		}
+		if _, exists := r.nodes[tag]; !exists || len(r.children[tag]) > 0 || len(r.waitingByParent[tag]) > 0 || r.sequence.entries[tag] == nil || r.sequence.exits[tag] == nil {
+			return 0, ErrUnsafeCompaction
+		}
+		compact = append(compact, tag)
+	}
+	for _, tag := range compact {
+		item := r.nodes[tag]
+		siblings := r.children[item.parent]
+		for index, candidate := range siblings {
+			if candidate == tag {
+				copy(siblings[index:], siblings[index+1:])
+				siblings = siblings[:len(siblings)-1]
+				break
+			}
+		}
+		if len(siblings) == 0 {
+			delete(r.children, item.parent)
+		} else {
+			r.children[item.parent] = siblings
+		}
+		if !r.sequence.removeLeaf(tag) {
+			return 0, ErrUnsafeCompaction
+		}
+		delete(r.nodes, tag)
+		delete(r.tombstones, tag)
+	}
+	if len(compact) > 0 {
+		r.version++
+	}
+	return len(compact), nil
 }
 
 func (d Delta) Merge(other Delta) (Delta, error) {
@@ -278,76 +452,184 @@ func (r *RGA) State() crdt.StateSnapshot {
 	if r == nil {
 		return crdt.StateSnapshot{Type: "rga-text"}
 	}
-	for {
-		visible, version := r.visibleProjection()
-		r.mu.RLock()
-		if r.version == version {
-			state := crdt.StateSnapshot{Type: "rga-text", ReplicaID: r.replicaID, ElementCount: len(visible), TombstoneCount: len(r.tombstones)}
-			r.mu.RUnlock()
-			return state
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return crdt.StateSnapshot{Type: "rga-text", ReplicaID: r.replicaID, ElementCount: visibleCount(r.sequence.root), TombstoneCount: len(r.tombstones)}
+}
+
+func (r *RGA) enqueuePending(id Position, item node) {
+	r.pending[id] = item
+	if r.waitingByParent[item.parent] == nil {
+		r.waitingByParent[item.parent] = make(map[Position]struct{})
+	}
+	r.waitingByParent[item.parent][id] = struct{}{}
+	r.pendingBytes += nodeBytes(id, item)
+}
+
+// integrateReady drains every root-reachable pending node iteratively. Child
+// IDs are sorted before scheduling so dependency replay is deterministic and
+// never depends on Go map iteration order.
+func (r *RGA) integrateReady() bool {
+	parents := make([]Position, 0, len(r.waitingByParent))
+	for parent := range r.waitingByParent {
+		if !parent.Valid() {
+			parents = append(parents, parent)
+			continue
 		}
-		r.mu.RUnlock()
+		if _, ok := r.nodes[parent]; ok {
+			parents = append(parents, parent)
+		}
 	}
+	sort.Slice(parents, func(i, j int) bool { return parents[i].Compare(parents[j]) < 0 })
+	ready := make([]Position, 0)
+	for _, parent := range parents {
+		ready = append(ready, sortedWaitingIDs(r.waitingByParent[parent])...)
+	}
+	changed := false
+	for len(ready) > 0 {
+		id := ready[0]
+		ready = ready[1:]
+		item, ok := r.pending[id]
+		if !ok {
+			continue
+		}
+		delete(r.pending, id)
+		r.pendingBytes -= nodeBytes(id, item)
+		delete(r.waitingByParent[item.parent], id)
+		if len(r.waitingByParent[item.parent]) == 0 {
+			delete(r.waitingByParent, item.parent)
+		}
+		r.nodes[id] = item
+		r.integrateNode(id, item)
+		changed = true
+		ready = append(ready, sortedWaitingIDs(r.waitingByParent[id])...)
+	}
+	return changed
 }
 
-// visibleProjection returns an immutable ordered slice paired with the state
-// version it represents. The slow adjacency/sort pass runs once after a write,
-// not once per reader.
-func (r *RGA) visibleProjection() ([]Position, uint64) {
-	r.mu.RLock()
-	version := r.version
-	r.mu.RUnlock()
-	r.projectionMu.Lock()
-	defer r.projectionMu.Unlock()
-	if r.projectionVersion == version {
-		return r.projection, version
+func (r *RGA) integrateNode(id Position, item node) {
+	siblings := r.children[item.parent]
+	insertAt := sort.Search(len(siblings), func(index int) bool {
+		return siblings[index].Compare(id) < 0
+	})
+	anchor := r.sequence.entries[item.parent]
+	if insertAt > 0 {
+		anchor = r.sequence.exits[siblings[insertAt-1]]
 	}
-	r.mu.RLock()
-	version = r.version
-	nodes := cloneNodes(r.nodes)
-	tombstones := cloneTombstones(r.tombstones)
-	r.mu.RUnlock()
-	projection := buildVisible(nodes, tombstones)
-	r.projection = projection
-	r.projectionVersion = version
-	return projection, version
+	if anchor == nil {
+		panic("text: integrating node without integrated parent")
+	}
+	siblings = append(siblings, Position{})
+	copy(siblings[insertAt+1:], siblings[insertAt:])
+	siblings[insertAt] = id
+	r.children[item.parent] = siblings
+	_, deleted := r.tombstones[id]
+	r.sequence.insertAfter(anchor, id, !deleted)
 }
 
-func buildVisible(nodes map[Position]node, tombstones map[Position]struct{}) []Position {
-	children := make(map[Position][]Position, len(nodes))
+func buildSequence(nodes map[Position]node, tombstones map[Position]struct{}) (*sequenceIndex, map[Position][]Position, error) {
+	value := &RGA{
+		nodes:      nodes,
+		tombstones: tombstones,
+		sequence:   newSequenceIndex(),
+		children:   make(map[Position][]Position),
+	}
+	byParent := make(map[Position][]Position, len(nodes))
 	for id, item := range nodes {
+		byParent[item.parent] = append(byParent[item.parent], id)
+	}
+	for parent := range byParent {
+		sort.Slice(byParent[parent], func(i, j int) bool { return byParent[parent][i].Compare(byParent[parent][j]) < 0 })
+	}
+	ready := append([]Position(nil), byParent[Position{}]...)
+	integrated := 0
+	for len(ready) > 0 {
+		id := ready[0]
+		ready = ready[1:]
+		item, ok := nodes[id]
+		if !ok || value.sequence.entries[item.parent] == nil {
+			return nil, nil, ErrInvalidDelta
+		}
+		value.integrateNode(id, item)
+		integrated++
+		ready = append(ready, byParent[id]...)
+	}
+	if integrated != len(nodes) {
+		return nil, nil, ErrInvalidDelta
+	}
+	return value.sequence, value.children, nil
+}
+
+func sortedWaitingIDs(entries map[Position]struct{}) []Position {
+	ids := make([]Position, 0, len(entries))
+	for id := range entries {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].Compare(ids[j]) < 0 })
+	return ids
+}
+
+func (r *RGA) deltaCapacity(delta Delta) (nodes, pendingNodes, pendingBytes int) {
+	newItems := make(map[Position]node, len(delta.nodes))
+	for id, item := range delta.nodes {
+		if _, exists := r.nodes[id]; exists {
+			continue
+		}
+		if _, exists := r.pending[id]; exists {
+			continue
+		}
+		nodes++
+		newItems[id] = item
+	}
+	// Discover every new node that can integrate using only existing integrated
+	// parents plus parents in this delta. This makes one large local paste a
+	// single resolved batch rather than falsely charging every later character
+	// against the pending limit.
+	children := make(map[Position][]Position, len(newItems))
+	ready := make([]Position, 0, len(newItems))
+	for id, item := range newItems {
 		children[item.parent] = append(children[item.parent], id)
-	}
-	for parent := range children {
-		// Descending sibling tags make a later insertion immediately after its
-		// predecessor appear before older siblings (including deleted ones and
-		// their descendants). This preserves the public "insert before offset"
-		// contract while retaining a deterministic concurrent tie-break.
-		sort.Slice(children[parent], func(i, j int) bool { return children[parent][i].Compare(children[parent][j]) > 0 })
-	}
-	visibleCapacity := len(nodes) - len(tombstones)
-	if visibleCapacity < 0 {
-		visibleCapacity = 0
-	}
-	visible := make([]Position, 0, visibleCapacity)
-	// An explicit stack avoids recursion proportional to a pasted-text length.
-	stack := append([]Position(nil), children[Position{}]...)
-	for left, right := 0, len(stack)-1; left < right; left, right = left+1, right-1 {
-		stack[left], stack[right] = stack[right], stack[left]
-	}
-	for len(stack) > 0 {
-		index := len(stack) - 1
-		id := stack[index]
-		stack = stack[:index]
-		if _, deleted := tombstones[id]; !deleted {
-			visible = append(visible, id)
+		if !item.parent.Valid() {
+			ready = append(ready, id)
+			continue
 		}
-		childIDs := children[id]
-		for index := len(childIDs) - 1; index >= 0; index-- {
-			stack = append(stack, childIDs[index])
+		if _, exists := r.nodes[item.parent]; exists {
+			ready = append(ready, id)
 		}
 	}
-	return visible
+	resolved := make(map[Position]struct{}, len(ready))
+	for len(ready) > 0 {
+		id := ready[len(ready)-1]
+		ready = ready[:len(ready)-1]
+		if _, seen := resolved[id]; seen {
+			continue
+		}
+		resolved[id] = struct{}{}
+		ready = append(ready, children[id]...)
+	}
+	for id, item := range newItems {
+		if _, ok := resolved[id]; !ok {
+			pendingNodes++
+			pendingBytes += nodeBytes(id, item)
+		}
+	}
+	return nodes, pendingNodes, pendingBytes
+}
+
+func newTombstones(incoming, existing map[Position]struct{}) int {
+	count := 0
+	for id := range incoming {
+		if _, ok := existing[id]; !ok {
+			count++
+		}
+	}
+	return count
+}
+
+func nodeBytes(id Position, item node) int {
+	// Account for IDs, links, rune, and map entries conservatively enough to
+	// apply backpressure without depending on Go runtime internals.
+	return 64 + len(id.ReplicaID) + len(item.parent.ReplicaID)
 }
 
 func validateDelta(delta Delta) error {
