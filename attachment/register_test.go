@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
+	"io"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -247,6 +248,48 @@ func TestRegisterConcurrentAccess(t *testing.T) {
 	}
 }
 
+func TestReferenceVerifyStreamsExactContent(t *testing.T) {
+	content := bytes.Repeat([]byte("attachment-content"), 4_096)
+	ref := Reference{
+		ObjectID:  "object-verified",
+		MediaType: "video/mp4",
+		Size:      uint64(len(content)),
+		Digest:    sha256.Sum256(content),
+	}
+	if err := ref.Verify(bytes.NewReader(content)); err != nil {
+		t.Fatalf("Verify() = %v", err)
+	}
+	if err := ref.Verify(bytes.NewReader(content[:len(content)-1])); !errors.Is(err, ErrContentMismatch) {
+		t.Fatalf("short content = %v", err)
+	}
+	if err := ref.Verify(bytes.NewReader(append(append([]byte(nil), content...), 'x'))); !errors.Is(err, ErrContentMismatch) {
+		t.Fatalf("oversized content = %v", err)
+	}
+	tampered := append([]byte(nil), content...)
+	tampered[0] ^= 1
+	if err := ref.Verify(bytes.NewReader(tampered)); !errors.Is(err, ErrContentMismatch) {
+		t.Fatalf("wrong digest = %v", err)
+	}
+	if err := ref.Verify(nil); !errors.Is(err, ErrInvalidReference) {
+		t.Fatalf("nil reader = %v", err)
+	}
+	invalid := ref
+	invalid.MediaType = "video/mp4; codecs=hvc1"
+	if err := invalid.Verify(bytes.NewReader(content)); !errors.Is(err, ErrInvalidReference) {
+		t.Fatalf("invalid reference = %v", err)
+	}
+	readerErr := errors.New("storage unavailable")
+	if err := ref.Verify(errorReader{err: readerErr}); !errors.Is(err, readerErr) {
+		t.Fatalf("reader error = %v", err)
+	}
+	if err := ref.Verify(zeroReader{}); !errors.Is(err, io.ErrNoProgress) {
+		t.Fatalf("zero-progress reader = %v", err)
+	}
+	if err := ref.Verify(invalidCountReader{}); !errors.Is(err, ErrContentMismatch) {
+		t.Fatalf("invalid reader count = %v", err)
+	}
+}
+
 func TestRegisterLifecycleMergeAndErrorPaths(t *testing.T) {
 	if _, err := NewFromClockWithOptions(clock.State{}, DefaultOptions()); err == nil {
 		t.Fatal("invalid replica clock accepted")
@@ -383,6 +426,18 @@ func TestRegisterLifecycleMergeAndErrorPaths(t *testing.T) {
 func testReference(seed, mediaType string, size uint64) Reference {
 	return Reference{ObjectID: "object-" + seed, MediaType: mediaType, Size: size, Digest: sha256.Sum256([]byte(seed))}
 }
+
+type errorReader struct{ err error }
+
+func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
+
+type zeroReader struct{}
+
+func (zeroReader) Read([]byte) (int, error) { return 0, nil }
+
+type invalidCountReader struct{}
+
+func (invalidCountReader) Read(data []byte) (int, error) { return len(data) + 1, nil }
 
 func mustRegister(t testing.TB, replicaID string) *Register {
 	t.Helper()

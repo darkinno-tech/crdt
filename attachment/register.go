@@ -5,8 +5,11 @@
 package attachment
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"errors"
+	"fmt"
+	"io"
 	"mime"
 	"strings"
 	"sync"
@@ -26,6 +29,7 @@ var (
 	ErrInvalidKey       = errors.New("attachment: invalid key")
 	ErrResourceLimit    = errors.New("attachment: resource limit exceeded")
 	ErrInvalidDelta     = errors.New("attachment: invalid delta")
+	ErrContentMismatch  = errors.New("attachment: content does not match reference")
 )
 
 const (
@@ -47,6 +51,45 @@ type Reference struct {
 	MediaType string
 	Size      uint64
 	Digest    [sha256.Size]byte
+}
+
+// Verify streams one downloaded object and checks its exact byte length and
+// SHA-256 digest. It neither buffers the object nor performs I/O beyond the
+// supplied reader, so storage selection and authorization remain application
+// concerns. A short, oversized, or differently hashed object returns
+// ErrContentMismatch.
+func (r Reference) Verify(reader io.Reader) error {
+	if reader == nil || r.validateSyntax() != nil {
+		return ErrInvalidReference
+	}
+	hash := sha256.New()
+	var total uint64
+	var buffer [32 << 10]byte
+	for {
+		count, err := reader.Read(buffer[:])
+		if count < 0 || count > len(buffer) {
+			return ErrContentMismatch
+		}
+		if count > 0 {
+			if total > r.Size || uint64(count) > r.Size-total {
+				return ErrContentMismatch
+			}
+			total += uint64(count)
+			// hash.Hash.Write for SHA-256 is documented to return a nil error.
+			_, _ = hash.Write(buffer[:count])
+		}
+		switch {
+		case err == io.EOF:
+			if total != r.Size || !bytes.Equal(hash.Sum(nil), r.Digest[:]) {
+				return ErrContentMismatch
+			}
+			return nil
+		case err != nil:
+			return fmt.Errorf("attachment: read content: %w", err)
+		case count == 0:
+			return fmt.Errorf("attachment: read content: %w", io.ErrNoProgress)
+		}
+	}
 }
 
 // Options bounds metadata retained by one Register. MaxObjectBytes bounds the
@@ -445,7 +488,17 @@ func validateKey(key string, options Options) error {
 }
 
 func (r Reference) validate(options Options) error {
-	if r.ObjectID == "" || strings.TrimSpace(r.ObjectID) != r.ObjectID || !utf8.ValidString(r.ObjectID) || len(r.ObjectID) > options.MaxObjectIDBytes || r.Size > options.MaxObjectBytes {
+	if err := r.validateSyntax(); err != nil {
+		return err
+	}
+	if len(r.ObjectID) > options.MaxObjectIDBytes || r.Size > options.MaxObjectBytes {
+		return ErrInvalidReference
+	}
+	return nil
+}
+
+func (r Reference) validateSyntax() error {
+	if r.ObjectID == "" || strings.TrimSpace(r.ObjectID) != r.ObjectID || !utf8.ValidString(r.ObjectID) {
 		return ErrInvalidReference
 	}
 	for _, value := range r.ObjectID {

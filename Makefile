@@ -27,6 +27,7 @@ vet:
 
 fuzz:
 	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=10s ./attachment
+	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=10s ./attachment
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./encoding
 	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
 	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
