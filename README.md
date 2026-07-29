@@ -486,22 +486,22 @@ go run ./cmd/crdt-sync-probe -mode send \
   -replica sender -token-file ./probe.token -duplicates 3
 ```
 
-The probe can also exercise experimental RGA delta delivery, but it does not
-perform manifest or capability negotiation. `/rga` is disabled unless each
-receiver and sender explicitly select the **same** `-rga-protocol` (`v1` or
-`run-v2`). A mutation response is an empty `204` with
+The probe also exercises RGA delta delivery, but it does not perform manifest
+or capability negotiation. `/rga` defaults to stable run-v2 (TypeIDs 19/20).
+Legacy scalar v1 (11/12) remains an experimental, explicit
+`-rga-protocol=v1` opt-in for both endpoints; mismatched frames are rejected
+before text mutates. A mutation response is an empty `204` with
 `X-CRDT-Apply-Micros`; use the final authenticated `/state` response to compare
 `text.protocol`, visible rune count, SHA-256, and pending dependencies.
 
 ```sh
-# Both receivers use the same explicitly selected experimental wire shape.
-go run ./cmd/crdt-sync-probe -mode serve -replica receiver \
-  -rga-protocol run-v2 -token-file ./probe.token
+# New probe sessions use run-v2 without an extra protocol flag.
+go run ./cmd/crdt-sync-probe -mode serve -replica receiver -token-file ./probe.token
 
 go run ./cmd/crdt-sync-probe -mode send \
   -target http://receiver-a:49511,http://receiver-b:49511 \
   -replica text-sender -token-file ./probe.token \
-  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -counter-increment 0 -element '' \
   -rga-runes 4096 -rga-rune 'λ' -duplicates 3
 ```
 

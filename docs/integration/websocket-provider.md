@@ -183,6 +183,14 @@ trailing-byte encodings. It is a transport envelope, not a replacement for
 the library frame, CRDT-specific decoder, snapshot format, or membership
 protocol.
 
+## Controlled benchmark evidence
+
+The controlled Linux/amd64 results for duplicate admission and end-to-end
+loopback fan-out are recorded in the [2026-07-29 benchmark report](../operations/benchmark-2026-07-29.md).
+Each fan-out operation waits for every observer to decode and install the
+change; it is not a WAN latency, browser, TLS, durable-store, or production
+capacity claim.
+
 ## Required production work
 
 Before using this pattern outside a controlled integration environment, the

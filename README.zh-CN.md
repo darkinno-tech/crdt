@@ -410,20 +410,20 @@ go run ./cmd/crdt-sync-probe -mode send \
   -replica sender -token-file ./probe.token -duplicates 3
 ```
 
-探针也可以验证实验性 RGA delta 投递，但它不执行 Manifest 或能力协商。只有接收端和
-发送端都显式选择**同一个** `-rga-protocol`（`v1` 或 `run-v2`）时才会开放 `/rga`。
-变更请求返回带 `X-CRDT-Apply-Micros` 的空 `204`；应使用最终的认证 `/state` 响应比较
-`text.protocol`、可见 rune 数、SHA-256 和未决依赖。
+探针也可以验证 RGA delta 投递，但它不执行 Manifest 或能力协商。`/rga` 默认使用稳定的
+run-v2（TypeID 19/20）。旧标量 v1（11/12）仍是实验性格式，只有接收端和发送端均显式选择
+`-rga-protocol=v1` 时才可使用；格式不匹配的帧会在修改文本前被拒绝。变更请求返回带
+`X-CRDT-Apply-Micros` 的空 `204`；应使用最终的认证 `/state` 响应比较 `text.protocol`、
+可见 rune 数、SHA-256 和未决依赖。
 
 ```sh
-# 两个接收端必须选择同一个实验性 wire shape。
-go run ./cmd/crdt-sync-probe -mode serve -replica receiver \
-  -rga-protocol run-v2 -token-file ./probe.token
+# 新建探针会话无需传协议参数，默认就是 run-v2。
+go run ./cmd/crdt-sync-probe -mode serve -replica receiver -token-file ./probe.token
 
 go run ./cmd/crdt-sync-probe -mode send \
   -target http://receiver-a:49511,http://receiver-b:49511 \
   -replica text-sender -token-file ./probe.token \
-  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -counter-increment 0 -element '' \
   -rga-runes 4096 -rga-rune 'λ' -duplicates 3
 ```
 

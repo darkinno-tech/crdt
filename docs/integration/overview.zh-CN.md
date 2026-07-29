@@ -97,25 +97,25 @@ rm -rf "$scenario_dir"
 请求体上限为 1 MiB。它没有 TLS、持久化状态、成员管理、重放策略或授权模型，绝不能
 暴露到公网。
 
-### 可选的实验性 RGA 诊断路径
+### RGA 诊断边界
 
-`/rga` 默认关闭，只用于受控地验证一种显式选择的 RGA frame shape；它不会协商 Manifest
-或生产级 `ProtocolPolicy`。每个接收端和发送端必须使用相同的
-`-rga-protocol=v1` 或 `-rga-protocol=run-v2`。该路由的单个 delta 最多为 16 MiB、最多
-生成 200,000 个 rune，成功后返回空 `204`，最终收敛信息只从 `/state` 获取。
+`/rga` 默认使用稳定的 RGA run-v2（TypeID 19/20）。它仅用于受控诊断，不会协商 Manifest
+或生产级 `ProtocolPolicy`。旧标量 v1（TypeID 11/12）仍是实验性格式，发送端和接收端都必须
+显式使用 `-rga-protocol=v1`；格式不匹配的帧会在修改文本前被拒绝。该路由的单个 delta
+最多为 16 MiB、最多生成 200,000 个 rune，成功后返回空 `204`，最终收敛信息只从 `/state`
+获取。
 
 ```sh
-# 在上面的两个接收端进程中加入相同的协议 flag，然后执行：
+# 两个接收端和此发送端不传协议参数时，默认都是稳定的 run-v2。
 go run ./cmd/crdt-sync-probe -mode send \
   -target http://127.0.0.1:49511,http://127.0.0.1:49512 \
   -replica text-gate -token-file "$scenario_dir/probe.token" \
-  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -counter-increment 0 -element '' \
   -rga-runes 4096 -rga-rune 'λ' -duplicates 3
 ```
 
-两个最终 `text` 对象的 `protocol`、`runes`、`sha256` 必须一致，且 `pending` 为零。v1
-接收端会在修改文本前拒绝 run-v2 帧（反向同理）。这只证明被演练的内存内重复/乱序路径，
-不能证明 HLC 持久化、恢复、成员关系或墓碑 GC 安全性。
+两个最终 `text` 对象的 `protocol`、`runes`、`sha256` 必须一致，且 `pending` 为零。这只证明
+被演练的内存内重复/乱序路径，不能证明 HLC 持久化、恢复、成员关系或墓碑 GC 安全性。
 
 ## 3. 接入生产传输层时由应用负责的契约
 
