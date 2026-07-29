@@ -1,6 +1,10 @@
 package attachment
 
-import "testing"
+import (
+	"bytes"
+	"crypto/sha256"
+	"testing"
+)
 
 func FuzzUnmarshalDelta(f *testing.F) {
 	source, err := New("seed")
@@ -25,6 +29,22 @@ func FuzzUnmarshalDelta(f *testing.F) {
 		target := mustRegister(t, "target")
 		if err := target.ApplyDelta(change); err != nil {
 			t.Fatalf("accepted delta did not apply: %v", err)
+		}
+	})
+}
+
+func FuzzReferenceVerify(f *testing.F) {
+	f.Add([]byte("verified media"))
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, content []byte) {
+		ref := Reference{
+			ObjectID:  "object-fuzz",
+			MediaType: "application/octet-stream",
+			Size:      uint64(len(content)),
+			Digest:    sha256.Sum256(content),
+		}
+		if err := ref.Verify(bytes.NewReader(content)); err != nil {
+			t.Fatalf("Verify() = %v", err)
 		}
 	})
 }

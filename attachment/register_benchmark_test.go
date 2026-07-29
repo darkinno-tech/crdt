@@ -1,6 +1,8 @@
 package attachment
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"testing"
 )
@@ -42,6 +44,24 @@ func BenchmarkRegisterMarshalThousandReferences(b *testing.B) {
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
 		if _, err := value.MarshalBinary(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkReferenceVerifyOneMiB(b *testing.B) {
+	content := bytes.Repeat([]byte("m"), 1<<20)
+	ref := Reference{
+		ObjectID:  "object-benchmark-verify",
+		MediaType: "video/mp4",
+		Size:      uint64(len(content)),
+		Digest:    sha256.Sum256(content),
+	}
+	b.SetBytes(int64(len(content)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := ref.Verify(bytes.NewReader(content)); err != nil {
 			b.Fatal(err)
 		}
 	}
