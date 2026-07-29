@@ -109,6 +109,21 @@ func UnmarshalMapDeltaWithLimits(data []byte, limits frame.Limits) (MapDelta, er
 	return MapDelta{entries: entries}, nil
 }
 
+// UnmarshalMapDeltaWithOptions decodes one bounded, canonical LWW-Map delta
+// while enforcing the receiver's retained-state limits before allocating or
+// copying entries beyond them. It is intended for bounded wrappers that must
+// validate a delta before constructing a Map receiver.
+func UnmarshalMapDeltaWithOptions(data []byte, limits frame.Limits, options MapOptions) (MapDelta, error) {
+	if !options.valid() {
+		return MapDelta{}, ErrResourceLimit
+	}
+	entries, err := unmarshalMapWithOptions(data, crdt.TypeIDLWWMapDelta, limits, &options)
+	if err != nil {
+		return MapDelta{}, err
+	}
+	return MapDelta{entries: entries}, nil
+}
+
 // UnmarshalBinary atomically replaces m with a valid complete LWW-Map state.
 func (m *Map) UnmarshalBinary(data []byte) error {
 	return m.UnmarshalBinaryWithLimits(data, frame.DefaultLimits())
@@ -120,7 +135,7 @@ func (m *Map) UnmarshalBinaryWithLimits(data []byte, limits frame.Limits) error 
 	if m == nil || m.clock == nil {
 		return ErrNilMap
 	}
-	entries, err := unmarshalMap(data, crdt.TypeIDLWWMapState, limits)
+	entries, err := unmarshalMapWithOptions(data, crdt.TypeIDLWWMapState, limits, &m.options)
 	if err != nil {
 		return err
 	}
@@ -221,6 +236,13 @@ func NewMapFromSnapshotWithOptions(saved snapshot.Snapshot, options MapOptions) 
 }
 
 func unmarshalMap(data []byte, expectedType uint64, limits frame.Limits) (map[string]mapEntry, error) {
+	return unmarshalMapWithOptions(data, expectedType, limits, nil)
+}
+
+func unmarshalMapWithOptions(data []byte, expectedType uint64, limits frame.Limits, options *MapOptions) (map[string]mapEntry, error) {
+	if options != nil && !options.valid() {
+		return nil, ErrResourceLimit
+	}
 	decoded, err := frame.UnmarshalFrame(data, limits)
 	if err != nil {
 		return nil, err
@@ -233,13 +255,22 @@ func unmarshalMap(data []byte, expectedType uint64, limits frame.Limits) (map[st
 	if !ok || count > uint64(limits.MaxElements) || count > uint64(limits.MaxTags) {
 		return nil, frame.ErrInvalidFrame
 	}
+	if options != nil && count > uint64(options.MaxEntries) {
+		return nil, ErrResourceLimit
+	}
 	position = next
 	entries := make(map[string]mapEntry, int(count))
 	previous := ""
+	keyLimit := 0
+	valueLimit := 0
+	if options != nil {
+		keyLimit = options.MaxKeyBytes
+		valueLimit = options.MaxValueBytes
+	}
 	for index := uint64(0); index < count; index++ {
-		keyBytes, next, ok := frame.ReadBytes(decoded.Payload, position, limits.MaxStringBytes)
-		if !ok {
-			return nil, frame.ErrInvalidFrame
+		keyBytes, next, err := readMapBytes(decoded.Payload, position, limits.MaxStringBytes, keyLimit)
+		if err != nil {
+			return nil, err
 		}
 		key := string(keyBytes)
 		if key == "" || (index > 0 && previous >= key) {
@@ -258,9 +289,9 @@ func unmarshalMap(data []byte, expectedType uint64, limits frame.Limits) (map[st
 		position = next
 		entry := mapEntry{tag: tag, present: present == 1}
 		if entry.present {
-			value, next, ok := frame.ReadBytes(decoded.Payload, position, limits.MaxStringBytes)
-			if !ok {
-				return nil, frame.ErrInvalidFrame
+			value, next, err := readMapBytes(decoded.Payload, position, limits.MaxStringBytes, valueLimit)
+			if err != nil {
+				return nil, err
 			}
 			entry.value = append([]byte(nil), value...)
 			position = next
@@ -278,6 +309,20 @@ func unmarshalMap(data []byte, expectedType uint64, limits frame.Limits) (map[st
 		return nil, frame.ErrInvalidFrame
 	}
 	return entries, nil
+}
+
+// readMapBytes matches frame.ReadBytes while distinguishing a receiver-local
+// map budget from an invalid wire frame. It performs the length check before
+// slicing or copying the declared bytes.
+func readMapBytes(data []byte, position, frameLimit, optionLimit int) ([]byte, int, error) {
+	length, next, ok := frame.ReadUvarint(data, position)
+	if !ok || next > len(data) || frameLimit < 0 || length > uint64(len(data)-next) || length > uint64(frameLimit) {
+		return nil, position, frame.ErrInvalidFrame
+	}
+	if optionLimit > 0 && length > uint64(optionLimit) {
+		return nil, position, ErrResourceLimit
+	}
+	return data[next : next+int(length)], next + int(length), nil
 }
 
 func sortedMapKeys(entries map[string]mapEntry) []string {

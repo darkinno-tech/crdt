@@ -103,6 +103,37 @@ func BenchmarkMapMarshalTenThousandKeys(b *testing.B) {
 	}
 }
 
+// BenchmarkMapRejectOverLimitState measures the bounded decoder's rejection
+// path. The target stays unchanged, so the same oversized state can be reused
+// without hiding work in per-iteration setup.
+func BenchmarkMapRejectOverLimitState(b *testing.B) {
+	source, err := NewMap("source")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := 0; index < 10_000; index++ {
+		if err := source.Set("key-"+strconv.Itoa(index), []byte("value")); err != nil {
+			b.Fatal(err)
+		}
+	}
+	state, err := source.MarshalBinary()
+	if err != nil {
+		b.Fatal(err)
+	}
+	target, err := NewMapWithOptions("target", MapOptions{MaxEntries: 1, MaxKeyBytes: 32, MaxValueBytes: 32})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(state)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := target.UnmarshalBinary(state); err != ErrResourceLimit {
+			b.Fatalf("UnmarshalBinary() = %v, want %v", err, ErrResourceLimit)
+		}
+	}
+}
+
 func BenchmarkSetApplyDeltaTenElements(b *testing.B) {
 	source, err := NewSet[string]("source")
 	if err != nil {
