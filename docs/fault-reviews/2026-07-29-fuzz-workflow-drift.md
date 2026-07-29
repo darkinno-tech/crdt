@@ -88,7 +88,7 @@ fuzz，因此运行时间略增，但本地 `make verify` 与远程检查将一�
 ### 4.2 测试与流程
 
 - [x] 修复后运行 `make fuzz`、完整单元测试、race 和 vet。
-- [ ] 推送修复并确认远程 beta CI 使用同一 fuzz 清单后通过。
+- [x] 已在 beta Test 运行 `30386948856` 中确认远程 CI 使用同一 fuzz 清单并通过。
 - [x] 将“新增 fuzz target 后检查 Makefile 与工作流是否共用入口”加入本次变更验收。
 
 ## 5. 经验总结（一句话）

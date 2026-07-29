@@ -177,9 +177,12 @@ Persist a local LWW-Map, RGA, or OR-Tree state frame and its HLC state atomicall
 outbox/receipt transaction. Restore a same-ID replica only through
 `SnapshotCurrentState()` and the package's `NewFromSnapshot`; state bytes alone
 cannot prove the next locally emitted tag will be unique. RGA and OR-Tree retain
-delete tombstones for out-of-order delivery. Exact acknowledgement-based
-compaction for them is not implemented, so an experimental integration must
-budget, monitor, and retain those tombstones rather than calling a generic GC.
+delete tombstones for out-of-order delivery. RGA's `CompactTombstones` can
+remove only deleted leaves; the application must first establish an authenticated
+exact-acknowledgement epoch, durably save a post-compaction snapshot, and retire
+old deltas. LWW-Map and OR-Tree still have no exact-acknowledgement compaction,
+so integrations must budget, monitor, and retain their tombstones rather than
+calling a generic GC.
 
 ## 6. Recovery, anti-entropy, and tombstones
 
