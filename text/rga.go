@@ -43,6 +43,17 @@ type node struct {
 	rune   rune
 }
 
+// deltaPlan separates validation-time reachability from mutation. A fully
+// resolved plan can bypass the pending indexes altogether; an incomplete plan
+// still uses the bounded out-of-order path below.
+type deltaPlan struct {
+	nodes        map[Position]node
+	children     map[Position][]Position
+	roots        []Position
+	pendingNodes int
+	pendingBytes int
+}
+
 // Delta is a joinable partial RGA state. Nodes and tombstones are deliberately
 // opaque so a malformed delta cannot be assembled by direct field mutation.
 type Delta struct {
@@ -268,10 +279,10 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 	if !acyclicAgainst(delta.nodes, r.pending) {
 		return ErrInvalidDelta
 	}
-	newNodes, newPendingNodes, newPendingBytes := r.deltaCapacity(delta)
-	if len(r.nodes)+len(r.pending)+newNodes > r.options.MaxNodes ||
-		len(r.pending)+newPendingNodes > r.options.MaxPendingNodes ||
-		r.pendingBytes+newPendingBytes > r.options.MaxPendingBytes ||
+	plan := r.planDelta(delta)
+	if len(r.nodes)+len(r.pending)+len(plan.nodes) > r.options.MaxNodes ||
+		len(r.pending)+plan.pendingNodes > r.options.MaxPendingNodes ||
+		r.pendingBytes+plan.pendingBytes > r.options.MaxPendingBytes ||
 		len(r.tombstones)+newTombstones(delta.tombstones, r.tombstones) > r.options.MaxTombstones {
 		return ErrResourceLimit
 	}
@@ -280,16 +291,12 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 			return err
 		}
 	}
-	changed := false
-	for id, incoming := range delta.nodes {
-		if _, exists := r.nodes[id]; exists {
-			continue
+	changed := r.integrateResolved(plan)
+	if plan.pendingNodes > 0 {
+		for id, incoming := range plan.nodes {
+			r.enqueuePending(id, incoming)
 		}
-		if _, exists := r.pending[id]; exists {
-			continue
-		}
-		r.enqueuePending(id, incoming)
-		changed = true
+		changed = len(plan.nodes) > 0
 	}
 	if r.integrateReady() {
 		changed = true
@@ -467,6 +474,24 @@ func (r *RGA) enqueuePending(id Position, item node) {
 	r.pendingBytes += nodeBytes(id, item)
 }
 
+// integrateResolved adds a complete batch in parent-before-child order without
+// allocating transient pending indexes. The caller must pass a plan with no
+// unresolved nodes; planDelta establishes that invariant before state changes.
+func (r *RGA) integrateResolved(plan deltaPlan) bool {
+	if len(plan.nodes) == 0 || plan.pendingNodes != 0 {
+		return false
+	}
+	ready := plan.roots
+	for index := 0; index < len(ready); index++ {
+		id := ready[index]
+		item := plan.nodes[id]
+		r.nodes[id] = item
+		r.integrateNode(id, item)
+		ready = append(ready, plan.children[id]...)
+	}
+	return true
+}
+
 // integrateReady drains every root-reachable pending node iteratively. Child
 // IDs are sorted before scheduling so dependency replay is deterministic and
 // never depends on Go map iteration order.
@@ -570,8 +595,8 @@ func sortedWaitingIDs(entries map[Position]struct{}) []Position {
 	return ids
 }
 
-func (r *RGA) deltaCapacity(delta Delta) (nodes, pendingNodes, pendingBytes int) {
-	newItems := make(map[Position]node, len(delta.nodes))
+func (r *RGA) planDelta(delta Delta) deltaPlan {
+	plan := deltaPlan{nodes: make(map[Position]node, len(delta.nodes))}
 	for id, item := range delta.nodes {
 		if _, exists := r.nodes[id]; exists {
 			continue
@@ -579,42 +604,52 @@ func (r *RGA) deltaCapacity(delta Delta) (nodes, pendingNodes, pendingBytes int)
 		if _, exists := r.pending[id]; exists {
 			continue
 		}
-		nodes++
-		newItems[id] = item
+		plan.nodes[id] = item
 	}
 	// Discover every new node that can integrate using only existing integrated
 	// parents plus parents in this delta. This makes one large local paste a
 	// single resolved batch rather than falsely charging every later character
 	// against the pending limit.
-	children := make(map[Position][]Position, len(newItems))
-	ready := make([]Position, 0, len(newItems))
-	for id, item := range newItems {
-		children[item.parent] = append(children[item.parent], id)
+	plan.children = make(map[Position][]Position, len(plan.nodes))
+	plan.roots = make([]Position, 0, len(plan.nodes))
+	for id, item := range plan.nodes {
+		plan.children[item.parent] = append(plan.children[item.parent], id)
 		if !item.parent.Valid() {
-			ready = append(ready, id)
+			plan.roots = append(plan.roots, id)
 			continue
 		}
 		if _, exists := r.nodes[item.parent]; exists {
-			ready = append(ready, id)
+			plan.roots = append(plan.roots, id)
 		}
 	}
+	ready := plan.roots
 	resolved := make(map[Position]struct{}, len(ready))
-	for len(ready) > 0 {
-		id := ready[len(ready)-1]
-		ready = ready[:len(ready)-1]
+	for index := 0; index < len(ready); index++ {
+		id := ready[index]
 		if _, seen := resolved[id]; seen {
 			continue
 		}
 		resolved[id] = struct{}{}
-		ready = append(ready, children[id]...)
+		ready = append(ready, plan.children[id]...)
 	}
-	for id, item := range newItems {
+	for id, item := range plan.nodes {
 		if _, ok := resolved[id]; !ok {
-			pendingNodes++
-			pendingBytes += nodeBytes(id, item)
+			plan.pendingNodes++
+			plan.pendingBytes += nodeBytes(id, item)
 		}
 	}
-	return nodes, pendingNodes, pendingBytes
+	if plan.pendingNodes == 0 {
+		sortPositions(plan.roots)
+		for parent, children := range plan.children {
+			sortPositions(children)
+			plan.children[parent] = children
+		}
+	}
+	return plan
+}
+
+func sortPositions(ids []Position) {
+	sort.Slice(ids, func(i, j int) bool { return ids[i].Compare(ids[j]) < 0 })
 }
 
 func newTombstones(incoming, existing map[Position]struct{}) int {

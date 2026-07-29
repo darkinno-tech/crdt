@@ -191,6 +191,45 @@ func TestRGAIntegratesNewChildAgainstExistingParent(t *testing.T) {
 	}
 }
 
+func TestRGAResolvedBatchUnblocksQueuedDescendant(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := source.Insert(0, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := source.Insert(1, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(child); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.PendingCount(); got != 1 {
+		t.Fatalf("PendingCount before resolved batch = %d, want 1", got)
+	}
+	if err := target.ApplyDelta(parent); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.PendingCount(); got != 0 {
+		t.Fatalf("PendingCount after resolved batch = %d, want 0", got)
+	}
+	if got := target.String(); got != "ab" {
+		t.Fatalf("text after resolved batch = %q, want ab", got)
+	}
+	target.mu.RLock()
+	defer target.mu.RUnlock()
+	if len(target.waitingByParent) != 0 {
+		t.Fatalf("resolved batch retained pending indexes: %#v", target.waitingByParent)
+	}
+}
+
 func TestRGAPendingLimitsRejectAtomically(t *testing.T) {
 	options := DefaultOptions()
 	options.MaxPendingNodes = 1
