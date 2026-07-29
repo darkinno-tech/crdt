@@ -229,7 +229,7 @@ func main() {
 ## 端到端集成
 
 可复现的本地 HTTP 投递演练、生产集成检查清单、快照/重启指引，以及应当采集的
-收敛证据，见[端到端集成教程](INTEGRATION.zh-CN.md)。
+收敛证据，见[端到端集成教程](docs/integration/overview.zh-CN.md)。
 [可运行的协作任务看板示例](examples/collaborative-board)演示重复投递、网络分区期间
 的 add/remove 冲突，以及从 OR-Set 快照恢复：
 
@@ -259,9 +259,9 @@ RGA 文本组和附件引用组，使用快照恢复两个接收状态，并在�
 go run ./examples/attachment-collaboration
 ```
 
-Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](ATTACHMENT_INTEGRATION.zh-CN.md)。
+Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](docs/integration/attachment.zh-CN.md)。
 
-英文版本见 [integration tutorial](INTEGRATION.md)。
+英文版本见 [integration tutorial](docs/integration/overview.md)。
 
 ## 在分布式系统中的正确使用方式
 

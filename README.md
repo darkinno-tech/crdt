@@ -260,7 +260,7 @@ tag remains present (add-wins semantics).
 
 For a reproducible local HTTP delivery exercise, a production-integration
 checklist, snapshot/restart guidance, and the expected convergence evidence,
-see the [end-to-end integration tutorial](INTEGRATION.md). The
+see the [end-to-end integration tutorial](docs/integration/overview.md). The
 [runnable collaborative-workboard example](examples/collaborative-board)
 models duplicate delivery, a partitioned add/remove conflict, and recovery
 from an OR-Set snapshot:
@@ -295,11 +295,11 @@ download through `Reference.Verify` before accepting it:
 go run ./examples/attachment-collaboration
 ```
 
-See [attachment reference integration](ATTACHMENT_INTEGRATION.md) for the
+See [attachment reference integration](docs/integration/attachment.md) for the
 manifest fields, limits, storage boundary, deletion retention, and verification
 requirements.
 
-For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
+For the Chinese versions, see [集成教程](docs/integration/overview.zh-CN.md) and
 [协作任务示例](examples/collaborative-board) and
 [仓库复制示例](examples/warehouse-replication) and
 [实验协作示例](examples/experimental-collaboration).

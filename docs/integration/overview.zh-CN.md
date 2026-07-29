@@ -1,6 +1,6 @@
 # 端到端集成教程
 
-[English](INTEGRATION.md) | [简体中文](INTEGRATION.zh-CN.md)
+[English](overview.md) | [简体中文](overview.zh-CN.md)
 
 本教程将库原语串成可验证链路：两个 HTTP 接收端接收同一份编码 delta，重复投递
 被验证为幂等；业务示例覆盖网络分区、add-wins 冲突和安全的 OR-Set 重启。HTTP
@@ -40,7 +40,7 @@ open-tasks=[close-shift inspect-pump replace-filter]
 后将其移除；调度端同时再次添加同一任务。新 add 带有不同标签，因而能在已观察
 到的 remove 后保留，这就是 add-wins。随后程序通过 `SnapshotCurrentState` 保存
 状态、以相同 ID 恢复现场副本，并安全地产生新变更。源码见
-[examples/collaborative-board/main.go](examples/collaborative-board/main.go)。
+[examples/collaborative-board/main.go](../../examples/collaborative-board/main.go)。
 
 ## 2. 在本地执行真实 HTTP 投递
 
@@ -175,8 +175,8 @@ OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧�
 
 附件引用只有元数据。外围应用负责存储授权、上传/下载、扫描、加密和重试。已授权下载后、解码或
 渲染前必须调用 `Reference.Verify`；它以流式方式校验并拒绝截断、超长或 SHA-256 不匹配对象。
-完整流程和限制清单见[附件引用集成文档](ATTACHMENT_INTEGRATION.zh-CN.md)及其
-[可运行示例](examples/attachment-collaboration)。
+完整流程和限制清单见[附件引用集成文档](attachment.zh-CN.md)及其
+[可运行示例](../../examples/attachment-collaboration)。
 
 ## 6. 恢复、反熵与墓碑
 

@@ -1,6 +1,6 @@
 # End-to-end integration tutorial
 
-[English](INTEGRATION.md) | [简体中文](INTEGRATION.zh-CN.md)
+[English](overview.md) | [简体中文](overview.zh-CN.md)
 
 This tutorial connects the library primitives into a verifiable flow: two HTTP
 receivers accept the same encoded deltas, duplicate delivery is observed as
@@ -44,7 +44,7 @@ partitioned, it removes `inspect-pump` after observing it while dispatch
 independently adds that task again. The new add has a different tag, so it
 survives the observed remove: this is add-wins. It then creates
 `SnapshotCurrentState`, restores a same-ID field replica, and emits a new
-mutation safely. See [the source](examples/collaborative-board/main.go).
+mutation safely. See [the source](../../examples/collaborative-board/main.go).
 
 ## 2. Exercise local HTTP delivery
 
@@ -203,8 +203,8 @@ An attachment reference is metadata only. The surrounding application owns
 storage authorization, uploads/downloads, scanning, encryption, and retries.
 After an authorized download, call `Reference.Verify` before decode or render;
 it streams the object, rejects short/oversized content, and compares SHA-256.
-The [attachment integration guide](ATTACHMENT_INTEGRATION.md) and its
-[runnable example](examples/attachment-collaboration) provide the complete
+The [attachment integration guide](attachment.md) and its
+[runnable example](../../examples/attachment-collaboration) provide the complete
 flow and limits checklist.
 
 ## 6. Recovery, anti-entropy, and tombstones

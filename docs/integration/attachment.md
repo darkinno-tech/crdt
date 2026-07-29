@@ -4,7 +4,7 @@
 video, and arbitrary binary data. It replicates bounded, immutable references;
 it never transfers object bytes.
 
-Use the [runnable attachment collaboration example](examples/attachment-collaboration)
+Use the [runnable attachment collaboration example](../../examples/attachment-collaboration)
 for the complete text + attachment + manifest + snapshot + verification flow:
 
 ```sh
