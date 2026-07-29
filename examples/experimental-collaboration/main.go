@@ -54,7 +54,9 @@ func run(writer io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("replicate asset tree: %w", err)
 	}
-	fmt.Fprintf(writer, "assignee=%s\nnote=%s\nasset-tree-nodes=%d\n", assignee, note, nodeCount)
+	if _, err := fmt.Fprintf(writer, "assignee=%s\nnote=%s\nasset-tree-nodes=%d\n", assignee, note, nodeCount); err != nil {
+		return fmt.Errorf("write replication result: %w", err)
+	}
 	return nil
 }
 

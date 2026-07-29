@@ -7,9 +7,9 @@
 | 日期 | 2026-07-29 |
 | 发现人 | Codex 自动验证 |
 | 严重程度 | P3-轻微 |
-| 影响范围 | `set.GSet` 与 `register.MVRegister` 的新增协议交付；未发布、无线上影响 |
-| 关联 Issue/PR | 无 |
-| 关联提交 | 未提交 |
+| 影响范围 | `set.GSet` 与 `register.MVRegister` 的新增协议交付；已随 `v1.0.5` 发布 |
+| 关联 Issue/PR | #9 |
+| 关联提交 | `42c6016` |
 
 ## 1. 问题描述
 

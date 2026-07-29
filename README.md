@@ -6,7 +6,7 @@
 It provides deterministic binary state and delta frames so replicas can converge
 despite duplicate delivery, reordering, and temporary partitions.
 
-> Status: first public module release `v1.0.0`; APIs follow semantic versioning.
+> Status: stable releases are published from `main`; APIs follow semantic versioning.
 
 ## Architecture at a glance
 
@@ -20,10 +20,10 @@ feature-parity, or performance claim.
 - State-based **G-Counter** with joinable, type-isolated deltas.
 - Grow-only **G-Set** with a caller-defined element codec and joinable deltas.
 - Add-wins observed-remove **OR-Set** with a caller-defined element codec.
-- Causally replicated **MV-Register** that preserves concurrent opaque-byte
-  writes instead of resolving them by wall clock.
 - Experimental delta-replicated **LWW-Map** with opaque byte values and
   deterministic HLC conflict resolution.
+- Causally replicated **MV-Register** that preserves concurrent opaque-byte
+  writes instead of resolving them by wall clock.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -89,13 +89,13 @@ snapshots and retain their tombstones.
 
 ## Install
 
-After the first public release tag is available:
+Install the latest stable release:
 
 ```sh
-go get github.com/DarkInno/crdt@v1.0.0
+go get github.com/DarkInno/crdt@latest
 ```
 
-Until then, use a local checkout for development:
+For development, use a local checkout:
 
 ```sh
 git clone https://github.com/DarkInno/crdt.git
@@ -402,18 +402,19 @@ Run `make test-extreme` to repeat the high-cardinality scenario in normal and
 race-instrumented modes. Internal investigation data and deployment runbooks
 are intentionally kept outside the public release tree.
 
-## Publishing `v1.0.0`
+## Publishing releases
 
-Before publishing, run the verification commands above, review the public API,
-commit the reviewed release contents, and ensure the repository is publicly
-reachable at the module path. Then create an immutable semantic-version tag:
+Before merging `beta` into `main`, run the verification commands above, review
+the public API, and ensure the repository is publicly reachable at the module
+path. The `main` push workflow creates the next immutable semantic-version tag
+and a GitHub Release with generated notes. Do not create a competing stable tag
+by hand.
 
 ```sh
 go mod tidy
-go test ./...
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
-GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@v1.0.0
+make verify
+# Merge the reviewed beta -> main pull request, then wait for the main workflow.
+GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@latest
 ```
 
 Do not move or reuse a published tag. For Go modules, breaking changes after

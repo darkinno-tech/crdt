@@ -46,10 +46,10 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta},
 	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, UsesHLC: true},
 	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
-	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
-	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
 	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, UsesHLC: true},
 	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
+	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
+	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
 	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
 	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
 }

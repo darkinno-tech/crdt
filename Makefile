@@ -10,7 +10,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./clock ./counter ./delta ./encoding ./lww ./merkle ./register ./set ./snapshot ./text ./tree ./cmd/crdt-analyze ./cmd/crdt-sync-probe; do go test $$package; done
+	for package in . ./clock ./counter ./delta ./encoding ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./cmd/crdt-analyze ./cmd/crdt-sync-probe; do go test $$package; done
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -29,9 +29,12 @@ fuzz:
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./encoding
 	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
 	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
-	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./set
+	go test -run=^$$ -fuzz=FuzzMapUnmarshal -fuzztime=10s ./lww
+	go test -run=^$$ -fuzz=FuzzGSetUnmarshalBinary -fuzztime=10s ./set
+	go test -run=^$$ -fuzz=FuzzORSetUnmarshalBinary -fuzztime=10s ./set
 	go test -run=^$$ -fuzz=FuzzMVRegisterUnmarshal -fuzztime=10s ./register
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
+	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=10s ./replica
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=10s ./text
 	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=10s ./tree
 

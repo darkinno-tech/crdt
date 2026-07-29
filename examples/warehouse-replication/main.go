@@ -34,7 +34,9 @@ func run(writer io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("replicate status: %w", err)
 	}
-	fmt.Fprintf(writer, "inventory=%v\nconcurrent-statuses=%v\nrecovered-status=%s\n", items, statuses, recoveredStatus)
+	if _, err := fmt.Fprintf(writer, "inventory=%v\nconcurrent-statuses=%v\nrecovered-status=%s\n", items, statuses, recoveredStatus); err != nil {
+		return fmt.Errorf("write replication result: %w", err)
+	}
 	return nil
 }
 

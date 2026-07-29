@@ -85,10 +85,10 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 		{TypeIDGCounterState, TypeIDGCounterDelta, false},
 		{TypeIDORSetState, TypeIDORSetDelta, true},
 		{TypeIDPNCounterState, TypeIDPNCounterDelta, false},
-		{TypeIDGSetState, TypeIDGSetDelta, false},
-		{TypeIDMVRegisterState, TypeIDMVRegisterDelta, false},
 		{TypeIDLWWMapState, TypeIDLWWMapDelta, true},
 		{TypeIDRGAState, TypeIDRGADelta, true},
+		{TypeIDGSetState, TypeIDGSetDelta, false},
+		{TypeIDMVRegisterState, TypeIDMVRegisterDelta, false},
 		{TypeIDORTreeState, TypeIDORTreeDelta, true},
 		{TypeIDRGARunState, TypeIDRGARunDelta, true},
 	} {
