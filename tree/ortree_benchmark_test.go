@@ -94,6 +94,62 @@ func BenchmarkORTreeCreateAndCompactLeafTombstones1024(b *testing.B) {
 	}
 }
 
+func BenchmarkORTreeApplyDeltaLinearChain(b *testing.B) {
+	delta := linearTreeDelta(100_000)
+	b.SetBytes(100_000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		target, err := NewWithOptions("target", Options{MaxNodes: 200_000, MaxTombstones: 200_000, MaxValueBytes: 1})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := target.ApplyDelta(delta); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkORTreeRejectOverLimitLinearChain(b *testing.B) {
+	delta := linearTreeDelta(100_000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		target, err := NewWithOptions("target", Options{MaxNodes: 1, MaxTombstones: 1, MaxValueBytes: 1})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := target.ApplyDelta(delta); err != ErrResourceLimit {
+			b.Fatalf("ApplyDelta() = %v, want %v", err, ErrResourceLimit)
+		}
+	}
+}
+
+func BenchmarkORTreeApplyDuplicateDelta(b *testing.B) {
+	source, err := New("source")
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, delta, err := source.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := target.ApplyDelta(delta); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := target.ApplyDelta(delta); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func benchmarkORTreeTombstones(b testing.TB, count int) (*ORTree, []NodeID) {
 	b.Helper()
 	value, err := New("benchmark")

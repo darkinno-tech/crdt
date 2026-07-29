@@ -7,6 +7,7 @@ package attachment
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -40,6 +41,12 @@ const (
 
 	descriptorVersion = 1
 	maxMediaTypeBytes = 127
+
+	// descriptorMaxOverhead covers the four canonical uvarints plus the fixed
+	// media-type and SHA-256 fields. Keeping this bound in sync with
+	// marshalReference lets the underlying LWW map reject impossible metadata
+	// before it allocates and copies it.
+	descriptorMaxOverhead = 4*binary.MaxVarintLen64 + maxMediaTypeBytes + sha256.Size
 )
 
 // Reference describes immutable content held by an application-owned object
@@ -92,9 +99,10 @@ func (r Reference) Verify(reader io.Reader) error {
 	}
 }
 
-// Options bounds metadata retained by one Register. MaxObjectBytes bounds the
-// declared external object size to prevent a replicated reference from causing
-// an unbounded fetch or allocation in a consumer.
+// Options bounds metadata retained by one Register and its underlying LWW-Map.
+// MaxObjectBytes bounds the declared external object size to prevent a
+// replicated reference from causing an unbounded fetch or allocation in a
+// consumer.
 type Options struct {
 	MaxEntries       int
 	MaxKeyBytes      int
@@ -114,8 +122,19 @@ func DefaultOptions() Options {
 	}
 }
 
-func (o Options) valid() bool {
-	return o.MaxEntries > 0 && o.MaxKeyBytes > 0 && o.MaxObjectIDBytes > 0 && o.MaxObjectBytes > 0
+func (o Options) lwwOptions() (lww.MapOptions, bool) {
+	if o.MaxEntries <= 0 || o.MaxKeyBytes <= 0 || o.MaxObjectIDBytes <= 0 || o.MaxObjectBytes == 0 {
+		return lww.MapOptions{}, false
+	}
+	maxInt := int(^uint(0) >> 1)
+	if o.MaxObjectIDBytes > maxInt-descriptorMaxOverhead {
+		return lww.MapOptions{}, false
+	}
+	return lww.MapOptions{
+		MaxEntries:    o.MaxEntries,
+		MaxKeyBytes:   o.MaxKeyBytes,
+		MaxValueBytes: o.MaxObjectIDBytes + descriptorMaxOverhead,
+	}, true
 }
 
 // Delta is an opaque, joinable attachment-reference change. Its LWW-Map frame
@@ -146,12 +165,13 @@ func NewWithOptions(replicaID string, options Options) (*Register, error) {
 
 // NewFromClockWithOptions restores a replica clock with explicit limits.
 func NewFromClockWithOptions(state clock.State, options Options) (*Register, error) {
-	if !options.valid() {
+	mapOptions, ok := options.lwwOptions()
+	if !ok {
 		return nil, ErrResourceLimit
 	}
-	values, err := lww.NewMapFromClock(state)
+	values, err := lww.NewMapFromClockWithOptions(state, mapOptions)
 	if err != nil {
-		return nil, err
+		return nil, normalizeMapError(err)
 	}
 	return &Register{values: values, options: options}, nil
 }
@@ -190,7 +210,7 @@ func (r *Register) Put(key string, ref Reference) (Delta, error) {
 	}
 	change, err := r.values.SetWithDelta(key, encoded)
 	if err != nil {
-		return Delta{}, err
+		return Delta{}, normalizeMapError(err)
 	}
 	return Delta{value: change}, nil
 }
@@ -211,7 +231,7 @@ func (r *Register) Delete(key string) (Delta, error) {
 	}
 	change, err := r.values.DeleteWithDelta(key)
 	if err != nil {
-		return Delta{}, err
+		return Delta{}, normalizeMapError(err)
 	}
 	return Delta{value: change}, nil
 }
@@ -260,7 +280,7 @@ func (r *Register) ApplyDelta(change Delta) error {
 	if r.wouldExceed(change.value.Keys()) {
 		return ErrResourceLimit
 	}
-	return r.values.ApplyDelta(change.value)
+	return normalizeMapError(r.values.ApplyDelta(change.value))
 }
 
 // Merge joins another validated register without retaining caller-owned data.
@@ -279,12 +299,16 @@ func (r *Register) Merge(other *Register) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	incoming, err := lww.NewMapFromClock(r.values.ClockState())
+	mapOptions, ok := r.options.lwwOptions()
+	if !ok {
+		return ErrResourceLimit
+	}
+	incoming, err := lww.NewMapFromClockWithOptions(r.values.ClockState(), mapOptions)
 	if err != nil {
-		return err
+		return normalizeMapError(err)
 	}
 	if err := incoming.UnmarshalBinary(encoded); err != nil {
-		return err
+		return normalizeMapError(err)
 	}
 	if err := validateMap(incoming, r.options); err != nil {
 		return err
@@ -292,7 +316,7 @@ func (r *Register) Merge(other *Register) error {
 	if r.wouldExceed(incoming.EntryKeys()) {
 		return ErrResourceLimit
 	}
-	return r.values.Merge(incoming)
+	return normalizeMapError(r.values.Merge(incoming))
 }
 
 // State reports attachment metadata counts without exposing references.
@@ -316,6 +340,34 @@ func (r *Register) Frontier() map[string]crdt.Tag {
 	frontier := r.values.Frontier()
 	r.mu.Unlock()
 	return frontier
+}
+
+// TombstoneTags returns retained delete tags in canonical order. The tags are
+// evidence to report to a tombstonegc.Coordinator, not proof that a caller may
+// remove metadata by itself.
+func (r *Register) TombstoneTags() []crdt.Tag {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	tags := r.values.TombstoneTags()
+	r.mu.Unlock()
+	return tags
+}
+
+// CompactTombstones removes only requested delete metadata. Invoke it only
+// after every active member has acknowledged the exact tags in one
+// authenticated membership epoch, a post-compaction snapshot is durable, and
+// obsolete deltas are retired. Unknown tags are ignored; invalid or live tags
+// leave the register unchanged.
+func (r *Register) CompactTombstones(tags []crdt.Tag) (int, error) {
+	if r == nil {
+		return 0, ErrNilRegister
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed, err := r.values.CompactTombstones(tags)
+	return removed, normalizeMapError(err)
 }
 
 func (r *Register) wouldExceed(keys []string) bool {
@@ -348,12 +400,16 @@ func (r *Register) UnmarshalBinaryWithLimits(data []byte, limits frame.Limits) e
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	candidate, err := lww.NewMapFromClock(r.values.ClockState())
+	mapOptions, ok := r.options.lwwOptions()
+	if !ok {
+		return ErrResourceLimit
+	}
+	candidate, err := lww.NewMapFromClockWithOptions(r.values.ClockState(), mapOptions)
 	if err != nil {
-		return err
+		return normalizeMapError(err)
 	}
 	if err := candidate.UnmarshalBinaryWithLimits(data, limits); err != nil {
-		return err
+		return normalizeMapError(err)
 	}
 	if candidate.EntryCount() > r.options.MaxEntries {
 		return ErrResourceLimit
@@ -361,7 +417,7 @@ func (r *Register) UnmarshalBinaryWithLimits(data []byte, limits frame.Limits) e
 	if err := validateMap(candidate, r.options); err != nil {
 		return err
 	}
-	return r.values.UnmarshalBinaryWithLimits(data, limits)
+	return normalizeMapError(r.values.UnmarshalBinaryWithLimits(data, limits))
 }
 
 // UnmarshalBinary uses the library's default outer-frame bounds.
@@ -384,12 +440,13 @@ func (d Delta) Merge(other Delta) (Delta, error) {
 // UnmarshalDeltaWithLimits decodes a bounded LWW-Map delta and validates the
 // immutable attachment descriptor schema before returning it to a caller.
 func UnmarshalDeltaWithLimits(data []byte, limits frame.Limits, options Options) (Delta, error) {
-	if !options.valid() {
+	mapOptions, ok := options.lwwOptions()
+	if !ok {
 		return Delta{}, ErrResourceLimit
 	}
-	change, err := lww.UnmarshalMapDeltaWithLimits(data, limits)
+	change, err := lww.UnmarshalMapDeltaWithOptions(data, limits, mapOptions)
 	if err != nil {
-		return Delta{}, err
+		return Delta{}, normalizeMapError(err)
 	}
 	delta := Delta{value: change}
 	if err := delta.validate(options); err != nil {
@@ -429,12 +486,13 @@ func (r *Register) SnapshotCurrentState() (snapshot.Snapshot, error) {
 // NewFromSnapshotWithOptions restores a complete attachment register. The
 // caller must use the same limits used by its replication group.
 func NewFromSnapshotWithOptions(saved snapshot.Snapshot, options Options) (*Register, error) {
-	if !options.valid() {
+	mapOptions, ok := options.lwwOptions()
+	if !ok {
 		return nil, ErrResourceLimit
 	}
-	values, err := lww.NewMapFromSnapshot(saved)
+	values, err := lww.NewMapFromSnapshotWithOptions(saved, mapOptions)
 	if err != nil {
-		return nil, err
+		return nil, normalizeMapError(err)
 	}
 	if values.EntryCount() > options.MaxEntries {
 		return nil, ErrResourceLimit
@@ -473,6 +531,13 @@ func validateMap(values *lww.Map, options Options) error {
 		_, err := unmarshalReference(value, options)
 		return err
 	})
+}
+
+func normalizeMapError(err error) error {
+	if errors.Is(err, lww.ErrResourceLimit) {
+		return ErrResourceLimit
+	}
+	return err
 }
 
 func validateKey(key string, options Options) error {

@@ -53,6 +53,7 @@ mechanism.
 | Feature | Surface | Default |
 | --- | --- | --- |
 | `FeatureWebSocket` | `GET <mount>/ws`, subprotocol `crdt-sync-v1` | Disabled |
+| `FeatureWebSocketBatch` | negotiated `crdt-sync-v2` batch envelope over WebSocket | Disabled |
 | `FeatureHTTP` | `POST` changes plus `GET` Server-Sent Events | Disabled |
 
 For a mount of `/crdt/`, the HTTP routes are:
@@ -68,6 +69,29 @@ base64url path from the supplied `replica.Manifest`. `DialWebSocket` and
 A successful client return is also the live-subscription linearization point:
 the relay registers the peer before it sends that confirmation, so a caller may
 publish immediately without a post-handshake event window.
+
+## Opt-in WebSocket batch
+
+`FeatureWebSocketBatch` is disabled by default and is valid only together with
+`FeatureWebSocket`. When both the relay and a client explicitly enable it,
+their WebSocket handshake can negotiate `crdt-sync-v2`; otherwise the client
+falls back to `crdt-sync-v1` and `PublishBatch` returns `ErrBatchUnsupported`.
+
+A batch is transport coalescing, not an atomic CRDT or storage transaction.
+Every item retains its own dot and canonical v1 envelope. The relay validates
+and authorizes every item before the first Inbox mutation, then admits items in
+order. If an application callback or pending-state limit rejects a later item,
+the relay forwards every earlier accepted item before closing the publishing
+connection. The caller must retain each original item in its durable outbox and
+retry independently after an ambiguous result.
+
+Batch messages are bounded by `MaxMessageBytes` and `MaxBatchChanges`. The
+default is 16 items and it cannot exceed `MaxQueuedMessages`, so a v1 WebSocket
+or SSE peer receives all queued item messages or is disconnected without an
+application-level partial queue insertion. The client and relay each enforce
+their configured item bound; keep them compatible (the defaults match).
+Batch-capable WebSocket peers receive one batch envelope; HTTP and SSE stay on
+their documented single-change v1 envelope.
 
 ## What the reference guarantees
 
@@ -159,7 +183,7 @@ go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=10s ./extensions
 
 # Loopback transport cost on the current machine; do not treat it as an SLA.
 go test -run='^$' \
-  -bench='Benchmark(GroupReceive|WebSocketPublish|HTTPPublish)Loopback$' \
+  -bench='Benchmark(GroupReceive|WebSocket(Batch)?Publish|HTTPPublish)Loopback$' \
   -benchmem ./extensions
 ```
 

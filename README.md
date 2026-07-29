@@ -38,10 +38,12 @@ feature-parity, or performance claim.
 - Safe concurrent access for the provided CRDT implementations.
 - Opt-in manifest-bound WebSocket and HTTP/SSE live-relay reference surfaces;
   disabled unless an application explicitly enables them.
-- Experimental framed LWW-Set, LWW-Map, RGA text, and OR-Tree collections, enabled
-  only by an explicit per-replication-group protocol policy. RGA v1 now has
-  bounded delayed integration and incremental visible indexing, but its
-  tombstone lifecycle remains experimental.
+- A single-writer durable WebSocket relay reference with a bbolt operation log,
+  exact-dot binding, bounded replay, and reconnect support.
+- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, and OR-Tree
+  collections, enabled only by an explicit per-replication-group protocol
+  policy. New Go RGA groups use compact run-v2 frames; the RGA tombstone
+  lifecycle still requires careful retention and exact-acknowledgement handling.
 
 ## Scope
 
@@ -51,12 +53,21 @@ or retry policy. The optional [`extensions`](docs/integration/extensions.md) pac
 explicitly enabled WebSocket and HTTP/SSE live-relay reference surfaces, but it
 does not start a listener or provide durability, replay, reconnect, TLS,
 anti-entropy, or identity/session management. Those remain application-owned.
+The optional [WebSocket provider reference](docs/integration/websocket-provider.md)
+is likewise a bounded, manifest-bound integration adapter; it does not provide
+durable delivery, recovery, TLS, membership, authorization policy, or
+production operations.
+The separate [`durable`](docs/integration/durable-provider.md) reference adds
+one persistent operation log and reconnect/replay flow for a single process and
+one protected storage volume. It still does not provide clustered storage,
+application CRDT checkpoint transactions, TLS, identity/session lifecycle,
+membership, or tombstone GC.
 `tombstonegc.Coordinator` performs safe automatic collection only after the
 application supplies an authoritative, authenticated active-membership view.
 It does not discover, authenticate, or persist that view. A checksum detects
 accidental frame corruption; it is not an authenticity or encryption mechanism.
 
-## Experimental LWW-Set, LWW-Map, RGA, and OR-Tree protocols
+## Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree protocols
 
 LWW-Set (`lww.Set`, TypeIDs 7/8) encodes generic elements through an
 application-supplied canonical `lww.ElementCodec`. It retains remove metadata,
@@ -70,11 +81,19 @@ incremental indexed sequence rather than rebuilding the full visible projection
 after each edit. It remains experimental while its full tombstone lifecycle is
 validated. Persist its HLC-backed snapshot atomically.
 
+New Go RGA groups select compact run-v2 frames (TypeIDs 19/20) through
+`crdt.DefaultRGAFrameType()`. A run-v2 group must encode with
+`Delta.MarshalRunBinary`, use `RGA.MarshalRunBinary` and
+`RGA.SnapshotRunCurrentState` for complete state, and bind those same IDs in
+its manifest. The run encoding preserves scalar RGA position semantics, but a
+manifest still represents exactly one wire protocol: do not mix it with a
+legacy v1 client or frame stream.
+
 `CompactTombstones` is intentionally conservative: it can collect only deleted
 leaves after an authenticated exact-acknowledgement epoch has durably saved a
 post-compaction snapshot and retired old deltas. Nodes with descendants remain
-structural anchors. LWW-Set, LWW-Map, RGA run-v2 (TypeIDs 19/20), and OR-Tree remain
-experimental and require explicit opt-in:
+structural anchors. LWW-Set, LWW-Map, legacy scalar RGA v1 (TypeIDs 11/12),
+and OR-Tree remain experimental and require explicit opt-in:
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -86,16 +105,44 @@ for _, kind := range policy.FrameTypes() {
 
 Before an experimental frame is accepted, bind it to a `replica.Manifest` in
 the authenticated handshake. The manifest includes the group, schema, epoch,
-codec, and semantics version; pass the same explicit policy to each replica
-boundary through `NewChangeWithPolicy`, `NewInboxWithPolicy`,
-`NewCheckpointWithPolicy`, and `NewSessionWithPolicy`. Frame type IDs alone do
-not establish wire-semantic compatibility.
+codec, and semantics version. To keep one explicit opt-in while constructing a
+group's local replica objects, create a
+`replica.NewSessionBuilder(..., policy)` and use its `NewChange`, `NewInbox`,
+`NewCheckpoint`, and `NewSession` methods. The builder remains a local helper,
+not a handshake: the zero policy still rejects experimental manifests, and
+frame type IDs alone do not establish wire-semantic compatibility. The
+individual `*WithPolicy` constructors remain available for isolated use.
 
-The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
-MV-Register, and PN-Counter protocols. The policy is neither a global switch
-nor a plugin registry: unknown and reserved frame types remain unsupported.
-Experimental LWW-Set, LWW-Map, RGA, and OR-Tree replicas must persist HLC state with
-snapshots and retain their tombstones.
+The zero-value policy advertises G-Counter, G-Set, OR-Set, MV-Register,
+PN-Counter, and default RGA run-v2 protocols. The policy is neither a global
+switch nor a plugin registry: unknown and reserved frame types remain
+unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree replicas
+must persist HLC state with snapshots and retain their tombstones.
+
+## Browser and JavaScript mobile clients
+
+The repository includes a bounded TypeScript frame-envelope decoder and a Go/
+Wasm RGA client runtime under [`clients/typescript`](clients/typescript/README.md).
+The default artifact uses run-v2 TypeIDs 19/20 and semantics version 2, matching
+`crdt.DefaultRGAFrameType()`. The Wasm layer reuses the Go RGA merge,
+out-of-order, tombstone, and HLC implementation so a browser/WebView can merge
+locally instead of waiting for server arbitration.
+
+Build and exercise the client boundary with:
+
+```sh
+make wasm
+make typescript-test
+make wasm-test
+```
+
+Authenticate the exact manifest (including protocol IDs and semantic version)
+before passing a received frame to the runtime; CRC-32C does not authenticate a
+peer. Persist the client snapshot's state, clock, and frontier atomically.
+Native mobile apps without a compatible WebAssembly runtime must follow the
+[RGA run-v2 wire protocol](docs/protocol/rga-run-v2.md) and its vectors before
+joining a run-v2 group. Split a local editor transaction above 64 KiB or 16,384
+runes before insertion.
 
 ## Experimental attachment references
 
@@ -310,6 +357,11 @@ service:
 go run ./examples/extensions-provider
 ```
 
+For persistent operation replay and reconnect behavior, use the separate
+[durable WebSocket relay reference](docs/integration/durable-provider.md). It
+is a single-writer bbolt deployment shape with bounded replay rather than a
+replacement for a replicated database or application checkpoint transaction.
+
 See [attachment reference integration](docs/integration/attachment.md) for the
 manifest fields, limits, storage boundary, deletion retention, and verification
 requirements.
@@ -319,6 +371,7 @@ For the Chinese versions, see [集成教程](docs/integration/overview.zh-CN.md)
 [仓库复制示例](examples/warehouse-replication) and
 [实验协作示例](examples/experimental-collaboration) and
 [可选传输扩展](docs/integration/extensions.zh-CN.md).
+另见[可持久化 WebSocket relay 参考实现](docs/integration/durable-provider.zh-CN.md)。
 
 ## Correct use in a distributed system
 
@@ -418,9 +471,10 @@ go run ./cmd/crdt-analyze -file ./state.frame
 
 `crdt-sync-probe` is a short-lived HTTP test utility for exercising duplicate
 delta delivery across hosts. It is not a production replication service. Its
-default listener is loopback-only; a non-empty token is required for every
-endpoint. Prefer `-token-file` (mode `0600`) over `-token`, and bind a public
-address only for a controlled test window.
+default listener is enforced as loopback-only; a non-empty token is required
+for every endpoint. Prefer `-token-file` (mode `0600`) over `-token`. A
+non-loopback bind requires the deliberate `-allow-non-loopback` flag and is
+only appropriate for a firewall-restricted test window.
 
 ```sh
 # On each receiver.
@@ -431,6 +485,32 @@ go run ./cmd/crdt-sync-probe -mode send \
   -target http://receiver-a:49511,http://receiver-b:49511 \
   -replica sender -token-file ./probe.token -duplicates 3
 ```
+
+The probe can also exercise experimental RGA delta delivery, but it does not
+perform manifest or capability negotiation. `/rga` is disabled unless each
+receiver and sender explicitly select the **same** `-rga-protocol` (`v1` or
+`run-v2`). A mutation response is an empty `204` with
+`X-CRDT-Apply-Micros`; use the final authenticated `/state` response to compare
+`text.protocol`, visible rune count, SHA-256, and pending dependencies.
+
+```sh
+# Both receivers use the same explicitly selected experimental wire shape.
+go run ./cmd/crdt-sync-probe -mode serve -replica receiver \
+  -rga-protocol run-v2 -token-file ./probe.token
+
+go run ./cmd/crdt-sync-probe -mode send \
+  -target http://receiver-a:49511,http://receiver-b:49511 \
+  -replica text-sender -token-file ./probe.token \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
+```
+
+RGA probe input is bounded to 16 MiB and 200,000 runes per generated delta;
+those are diagnostic limits, not a production capacity recommendation. It has
+no durable HLC state, outbox, replay, recovery, or tombstone-GC authority.
+`run-v2` can compact linear same-replica frames, but canonical decoding is a
+separate CPU and allocation trade-off; benchmark both wire shapes on the target
+machine before selecting one.
 
 Use `make test-unit` to run packages independently and `make test-integration`
 for the three-replica, recovery, batching, encoding, and anti-entropy flow.

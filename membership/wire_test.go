@@ -1,6 +1,7 @@
 package membership
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"testing"
@@ -45,7 +46,7 @@ func TestWireRoundTripsSignedMessages(t *testing.T) {
 	}
 
 	tag := crdt.Tag{ReplicaID: "api", WallTime: 2, Logical: 1}
-	receipt, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: setup.view.Epoch, ViewHash: setup.view.Hash(), MemberID: "api", Incarnation: 1, Sequence: 1, Tags: []crdt.Tag{tag}}, setup.members["api"])
+	receipt, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: setup.view.Epoch, ViewHash: setup.view.Hash(), MemberID: "api", Incarnation: 1, Sequence: 1, CheckpointID: testCheckpointID("api", 1), Tags: []crdt.Tag{tag}}, setup.members["api"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestWireRejectsTruncationTrailingBytesAndNonCanonicalVarints(t *testing.T) 
 	if _, err := MarshalGossipMessage(GossipMessage{}); !errors.Is(err, ErrInvalidGossip) {
 		t.Fatalf("empty gossip marshal = %v", err)
 	}
-	receipt, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: 1, ViewHash: setup.view.Hash(), MemberID: "api", Incarnation: 1, Sequence: 1, Tags: []crdt.Tag{{ReplicaID: "api", WallTime: 1}}}, setup.members["api"])
+	receipt, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: 1, ViewHash: setup.view.Hash(), MemberID: "api", Incarnation: 1, Sequence: 1, CheckpointID: testCheckpointID("api", 1), Tags: []crdt.Tag{{ReplicaID: "api", WallTime: 1}}}, setup.members["api"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,5 +116,35 @@ func TestWireRejectsTruncationTrailingBytesAndNonCanonicalVarints(t *testing.T) 
 	}
 	if _, err := MarshalReceipt(Receipt{}); !errors.Is(err, ErrInvalidReceipt) {
 		t.Fatalf("empty receipt marshal = %v", err)
+	}
+}
+
+func TestUnmarshalReceiptRejectsZeroCheckpointID(t *testing.T) {
+	setup := newFixture(t, 1, "api")
+	checkpointID := testCheckpointID("api", 1)
+	receipt, err := SignReceipt(Receipt{
+		GroupID:      setup.view.GroupID,
+		Epoch:        setup.view.Epoch,
+		ViewHash:     setup.view.Hash(),
+		MemberID:     "api",
+		Incarnation:  1,
+		Sequence:     1,
+		CheckpointID: checkpointID,
+		Tags:         []crdt.Tag{{ReplicaID: "api", WallTime: 1}},
+	}, setup.members["api"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := MarshalReceipt(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointOffset := bytes.Index(encoded, checkpointID[:])
+	if checkpointOffset < 0 {
+		t.Fatal("encoded receipt did not contain checkpoint ID")
+	}
+	copy(encoded[checkpointOffset:checkpointOffset+len(checkpointID)], make([]byte, len(checkpointID)))
+	if _, err := UnmarshalReceipt(encoded); !errors.Is(err, ErrInvalidReceipt) {
+		t.Fatalf("UnmarshalReceipt(zero checkpoint ID) = %v, want %v", err, ErrInvalidReceipt)
 	}
 }

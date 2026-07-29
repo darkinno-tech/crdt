@@ -71,6 +71,45 @@ func BenchmarkWebSocketPublishLoopback(b *testing.B) {
 	}, delivered)
 }
 
+func BenchmarkWebSocketBatchPublishLoopback(b *testing.B) {
+	const batchSize = 8
+	server, manifest := newBenchmarkRelay(b, FeatureWebSocket|FeatureWebSocketBatch)
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	delivered := make(chan struct{}, batchSize)
+	client, err := DialWebSocket(context.Background(), endpoint, manifest, ClientConfig{
+		Header:        bearerHeader("writer"),
+		EnableBatches: true,
+		OnChange: func(replica.Change) error {
+			delivered <- struct{}{}
+			return nil
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = client.Close() })
+	writer, err := counter.NewGCounter("writer")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		changes := make([]replica.Change, 0, batchSize)
+		for index := 0; index < batchSize; index++ {
+			changes = append(changes, benchmarkCounterChange(b, writer, manifest, uint64(iteration*batchSize+index+1)))
+		}
+		if err := client.PublishBatch(context.Background(), changes); err != nil {
+			b.Fatal(err)
+		}
+		for index := 0; index < batchSize; index++ {
+			<-delivered
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(batchSize), "changes/op")
+}
+
 func BenchmarkHTTPPublishLoopback(b *testing.B) {
 	server, manifest := newBenchmarkRelay(b, FeatureHTTP)
 	delivered := make(chan struct{}, 1)

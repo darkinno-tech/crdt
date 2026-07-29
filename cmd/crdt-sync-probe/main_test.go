@@ -5,18 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/DarkInno/crdt/counter"
+	"github.com/DarkInno/crdt/text"
 )
 
 func TestProbeAuthenticatesAndDeduplicatesDelivery(t *testing.T) {
-	receiver, err := newProbe("receiver", "secret")
+	receiver, err := newProbe("receiver", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +51,7 @@ func TestProbeAuthenticatesAndDeduplicatesDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	setSource, err := newProbe("set-sender", "secret")
+	setSource, err := newProbe("set-sender", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +76,7 @@ func TestProbeAuthenticatesAndDeduplicatesDelivery(t *testing.T) {
 }
 
 func TestProbeRejectsSameLengthAndDifferentLengthTokens(t *testing.T) {
-	value, err := newProbe("receiver", "secret")
+	value, err := newProbe("receiver", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +95,7 @@ func TestProbeRejectsSameLengthAndDifferentLengthTokens(t *testing.T) {
 }
 
 func TestProbeRejectsMalformedBody(t *testing.T) {
-	receiver, err := newProbe("receiver", "secret")
+	receiver, err := newProbe("receiver", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestLoadTokenReadsBoundedFile(t *testing.T) {
 	if _, err := loadToken("", oversizedPath); err == nil {
 		t.Fatal("loadToken() accepted oversized file")
 	}
-	if _, err := newProbe("", "secret"); err == nil {
+	if _, err := newProbe("", "secret", rgaProtocolV1); err == nil {
 		t.Fatal("newProbe() accepted empty replica")
 	}
 	emptyPath := t.TempDir() + "/empty-token"
@@ -155,11 +158,11 @@ func TestParseTargetsNormalizesAndDeduplicates(t *testing.T) {
 }
 
 func TestSendBroadcastsOneDeltaToEveryTarget(t *testing.T) {
-	left, err := newProbe("left", "secret")
+	left, err := newProbe("left", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	right, err := newProbe("right", "secret")
+	right, err := newProbe("right", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +171,7 @@ func TestSendBroadcastsOneDeltaToEveryTarget(t *testing.T) {
 	rightServer := httptest.NewServer(right)
 	defer rightServer.Close()
 
-	if err := send(leftServer.URL+","+rightServer.URL, "sender", "secret", 9, "shared", 4, time.Second); err != nil {
+	if err := send(leftServer.URL+","+rightServer.URL, "sender", "secret", rgaProtocolV1, 9, "shared", 0, "", 4, time.Second); err != nil {
 		t.Fatal(err)
 	}
 	for _, receiver := range []*probe{left, right} {
@@ -193,14 +196,138 @@ func TestSendBroadcastsOneDeltaToEveryTarget(t *testing.T) {
 	}
 }
 
+func TestSendBroadcastsExplicitRGADeltaAndRejectsProtocolMismatch(t *testing.T) {
+	for _, protocol := range []rgaProtocol{rgaProtocolV1, rgaProtocolRunV2} {
+		t.Run(string(protocol), func(t *testing.T) {
+			left, err := newProbe("left", "secret", protocol)
+			if err != nil {
+				t.Fatal(err)
+			}
+			right, err := newProbe("right", "secret", protocol)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leftServer := httptest.NewServer(left)
+			defer leftServer.Close()
+			rightServer := httptest.NewServer(right)
+			defer rightServer.Close()
+
+			const runes = 64
+			if err := send(leftServer.URL+","+rightServer.URL, "rga-sender", "secret", protocol, 0, "", runes, "λ", 3, time.Second); err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Repeat("λ", runes)
+			for _, receiver := range []*probe{left, right} {
+				if got := receiver.rga.String(); got != want {
+					t.Fatalf("RGA text = %q, want %q", got, want)
+				}
+				state := receiver.state()
+				if state.Text.Protocol != string(protocol) || state.Text.Runes != runes || state.Text.Pending != 0 || state.Text.SHA256 == "" {
+					t.Fatalf("RGA state = %+v", state.Text)
+				}
+			}
+		})
+	}
+
+	legacy, err := newProbe("legacy", "secret", rgaProtocolV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runFrame, err := newRGADelta("sender", rgaProtocolRunV2, 1, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/rga", bytes.NewReader(runFrame))
+	request.Header.Set("X-CRDT-Probe-Token", "secret")
+	response := httptest.NewRecorder()
+	legacy.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || legacy.rga.String() != "" {
+		t.Fatalf("v1 receiver accepted run-v2 frame: status=%d text=%q", response.Code, legacy.rga.String())
+	}
+	if _, err := newRGADelta("sender", rgaProtocolV1, maxRGARunesPerDelivery+1, "x"); err == nil {
+		t.Fatal("newRGADelta accepted a rune count above its limit")
+	}
+	if _, err := newRGADelta("sender", rgaProtocolV1, 1, "xy"); err == nil {
+		t.Fatal("newRGADelta accepted multiple runes")
+	}
+	disabled, err := newProbe("disabled", "secret", rgaProtocolDisabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1Frame, err := newRGADelta("sender", rgaProtocolV1, 1, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabledRequest := httptest.NewRequest(http.MethodPost, "/rga", bytes.NewReader(v1Frame))
+	disabledRequest.Header.Set("X-CRDT-Probe-Token", "secret")
+	disabledResponse := httptest.NewRecorder()
+	disabled.ServeHTTP(disabledResponse, disabledRequest)
+	if disabledResponse.Code != http.StatusNotFound || disabled.rga.String() != "" {
+		t.Fatalf("disabled RGA endpoint status=%d text=%q", disabledResponse.Code, disabled.rga.String())
+	}
+	if err := run([]string{
+		"-mode", "send", "-target", "http://127.0.0.1:1", "-token", "secret", "-replica", "sender", "-counter-increment", "0", "-element", "", "-rga-runes", "1",
+	}); err == nil {
+		t.Fatal("run accepted RGA delivery without an explicit protocol")
+	}
+}
+
 func TestServeRejectsInvalidListenAddress(t *testing.T) {
-	if err := serve("[", "receiver", "secret", time.Second); err == nil {
+	if err := serve("[", "receiver", "secret", rgaProtocolV1, time.Second, false); err == nil {
 		t.Fatal("serve() accepted invalid address")
+	}
+	if err := validateListenAddress("0.0.0.0:49511", false); err == nil {
+		t.Fatal("loopback-only probe accepted a public listen address")
+	}
+	for _, address := range []string{"127.0.0.1:49511", "[::1]:49511", "localhost:49511"} {
+		if err := validateListenAddress(address, false); err != nil {
+			t.Fatalf("loopback address %q rejected: %v", address, err)
+		}
+	}
+	if err := validateListenAddress("0.0.0.0:49511", true); err != nil {
+		t.Fatalf("explicit non-loopback opt-in rejected: %v", err)
+	}
+	if _, err := parseRGAProtocol("unknown"); err == nil {
+		t.Fatal("parseRGAProtocol accepted an unknown value")
+	}
+}
+
+func TestProbeProtocolAndBoundServerFailurePaths(t *testing.T) {
+	unknown := rgaProtocol("unknown")
+	if _, err := newProbe("receiver", "secret", unknown); err == nil {
+		t.Fatal("newProbe accepted an unknown RGA protocol")
+	}
+	if _, err := marshalRGADelta(text.Delta{}, unknown, rgaTransportLimits()); err == nil {
+		t.Fatal("marshalRGADelta accepted an unknown protocol")
+	}
+	if _, err := unmarshalRGADelta(nil, unknown, rgaTransportLimits()); err == nil {
+		t.Fatal("unmarshalRGADelta accepted an unknown protocol")
+	}
+	if err := send("http://example.invalid", "sender", "secret", unknown, 1, "", 0, "", 1, time.Second); err == nil {
+		t.Fatal("send accepted an unknown RGA protocol")
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	if err := serve(listener.Addr().String(), "receiver", "secret", rgaProtocolV1, time.Second, false); err == nil {
+		t.Fatal("serve unexpectedly acquired an occupied loopback port")
+	}
+	if err := run([]string{
+		"-mode", "send", "-target", "http://127.0.0.1:1", "-token", "secret", "-replica", "sender", "-rga-protocol", "unknown",
+	}); err == nil {
+		t.Fatal("run accepted an unknown RGA protocol")
+	}
+	if err := run([]string{
+		"-mode", "send", "-target", "http://127.0.0.1:1", "-token", "secret", "-replica", "sender", "-rga-runes", "-1",
+	}); err == nil {
+		t.Fatal("run accepted a negative RGA rune count")
 	}
 }
 
 func TestProbeHTTPErrorPathsAndRequestBounds(t *testing.T) {
-	receiver, err := newProbe("receiver", "secret")
+	receiver, err := newProbe("receiver", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,11 +368,11 @@ func TestProbeHTTPErrorPathsAndRequestBounds(t *testing.T) {
 		}
 	}
 
-	if _, err := readRequest(httptest.NewRequest(http.MethodPost, "/counter", nil)); err == nil {
+	if _, err := readRequest(httptest.NewRequest(http.MethodPost, "/counter", nil), maxSmallRequestBytes); err == nil {
 		t.Fatal("readRequest() accepted empty body")
 	}
-	tooLarge := httptest.NewRequest(http.MethodPost, "/counter", bytes.NewReader(make([]byte, maxBodyBytes+1)))
-	if _, err := readRequest(tooLarge); err == nil {
+	tooLarge := httptest.NewRequest(http.MethodPost, "/counter", bytes.NewReader(make([]byte, maxSmallRequestBytes+1)))
+	if _, err := readRequest(tooLarge, maxSmallRequestBytes); err == nil {
 		t.Fatal("readRequest() accepted oversized body")
 	}
 	if _, err := fetchState(server.Client(), server.URL, "wrong"); err == nil {
@@ -265,16 +392,16 @@ func TestProbeHTTPErrorPathsAndRequestBounds(t *testing.T) {
 }
 
 func TestSendSupportsSingleMutationTypesAndInvalidInputs(t *testing.T) {
-	receiver, err := newProbe("receiver", "secret")
+	receiver, err := newProbe("receiver", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(receiver)
 	defer server.Close()
-	if err := send(server.URL, "counter-sender", "secret", 4, "", 1, time.Second); err != nil {
+	if err := send(server.URL, "counter-sender", "secret", rgaProtocolV1, 4, "", 0, "", 1, time.Second); err != nil {
 		t.Fatalf("counter-only send error = %v", err)
 	}
-	if err := send(server.URL, "set-sender", "secret", 0, "set-only", 1, time.Second); err != nil {
+	if err := send(server.URL, "set-sender", "secret", rgaProtocolV1, 0, "set-only", 0, "", 1, time.Second); err != nil {
 		t.Fatalf("set-only send error = %v", err)
 	}
 	if got, err := receiver.counter.Value(); err != nil || got != 4 {
@@ -283,10 +410,10 @@ func TestSendSupportsSingleMutationTypesAndInvalidInputs(t *testing.T) {
 	if !receiver.set.Contains("set-only") {
 		t.Fatal("set-only mutation was not delivered")
 	}
-	if err := send("not-a-url", "sender", "secret", 1, "item", 1, time.Second); err == nil {
+	if err := send("not-a-url", "sender", "secret", rgaProtocolV1, 1, "item", 0, "", 1, time.Second); err == nil {
 		t.Fatal("send() accepted invalid target")
 	}
-	if err := send(server.URL+",http://127.0.0.1:1", "sender", "secret", 1, "partial", 1, time.Second); err == nil {
+	if err := send(server.URL+",http://127.0.0.1:1", "sender", "secret", rgaProtocolV1, 1, "partial", 0, "", 1, time.Second); err == nil {
 		t.Fatal("send() accepted unreachable second target")
 	}
 	if err := run([]string{"-mode", "send", "-target", server.URL, "-replica", "sender"}); err == nil {
@@ -315,7 +442,7 @@ func TestProbePropagatesTransportAndBodyFailures(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/counter", nil)
 	request.Body = controlledBody{readErr: errors.New("body failure")}
-	if _, err := readRequest(request); err == nil {
+	if _, err := readRequest(request, maxSmallRequestBytes); err == nil {
 		t.Fatal("readRequest() ignored body read failure")
 	}
 }
@@ -324,7 +451,7 @@ func TestProbePropagatesBodyCloseFailures(t *testing.T) {
 	closeFailure := errors.New("close failure")
 	request := httptest.NewRequest(http.MethodPost, "/counter", nil)
 	request.Body = controlledBody{reader: bytes.NewReader([]byte("frame")), closeErr: closeFailure}
-	if _, err := readRequest(request); !errors.Is(err, closeFailure) {
+	if _, err := readRequest(request, maxSmallRequestBytes); !errors.Is(err, closeFailure) {
 		t.Fatalf("readRequest() error = %v, want close failure", err)
 	}
 
@@ -347,14 +474,14 @@ func TestProbePropagatesBodyCloseFailures(t *testing.T) {
 }
 
 func TestProbeConcurrentDuplicateAndUnauthorizedTraffic(t *testing.T) {
-	receiver, err := newProbe("receiver", "secret")
+	receiver, err := newProbe("receiver", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(receiver)
 	defer server.Close()
 
-	source, err := newProbe("sender", "secret")
+	source, err := newProbe("sender", "secret", rgaProtocolV1)
 	if err != nil {
 		t.Fatal(err)
 	}

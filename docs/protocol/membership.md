@@ -22,7 +22,9 @@ safe.
   state, create a set with that HLC state, then install the post-compaction
   state so the next locally emitted tag remains unique.
 - `Receipt` is signed by a member and binds group, epoch, view hash, member
-  incarnation, sequence, checkpoint ID, and exact sorted tombstone tags.
+  incarnation, sequence, a non-zero checkpoint ID, and exact sorted tombstone
+  tags. Its checkpoint ID must identify state the signer durably saved before
+  issuing the receipt.
   `GCBridge` rejects stale/replayed receipts before passing tags to the
   Coordinator.
 
@@ -37,8 +39,9 @@ design and is intentionally out of scope.
    replication Manifest. Store it durably with `NewManager`.
 2. Each member sends signed gossip heartbeats to peers selected by `Peers`.
    Export `Suspects` to monitoring; do not call `ReplaceMembership` from it.
-3. A member persists its CRDT checkpoint, creates a signed exact-tag Receipt,
-   and sends it through the chosen authenticated transport.
+3. A member persists its CRDT checkpoint, places its non-zero checkpoint ID in
+   a signed exact-tag Receipt, and sends it through the chosen authenticated
+   transport.
 4. Receivers decode with `UnmarshalReceipt`, then call `GCBridge.Apply`.
    Persist the compacted OR-Set snapshot and HLC state before calling
    `PruneAcknowledgements`.

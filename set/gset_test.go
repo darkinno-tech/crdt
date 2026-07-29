@@ -130,6 +130,13 @@ func TestGSetRejectsNonCanonicalAndInvalidInputs(t *testing.T) {
 	if _, err := NewGSet[string]("local", nil); !errors.Is(err, ErrInvalidCodec) {
 		t.Fatalf("invalid codec = %v", err)
 	}
+	var nilCodec *stringCodec
+	if _, err := NewGSet("local", nilCodec); !errors.Is(err, ErrInvalidCodec) {
+		t.Fatalf("typed nil codec = %v", err)
+	}
+	if _, err := UnmarshalGSetDelta([]byte("bad"), nilCodec); !errors.Is(err, ErrInvalidCodec) {
+		t.Fatalf("typed nil delta codec = %v", err)
+	}
 	if err := value.ApplyDelta(GSetDelta[string]{}); !errors.Is(err, ErrInvalidGSet) {
 		t.Fatalf("invalid delta = %v", err)
 	}

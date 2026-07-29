@@ -51,6 +51,17 @@ type TombstoneTarget interface {
 	CompactTombstones([]crdt.Tag) (int, error)
 }
 
+// eligibleTombstoneTarget is an optional capability for targets whose
+// structural rules can make only a subset of an exact-acknowledged batch
+// removable. It must never remove a tag that is not safe for that target.
+//
+// RGA uses this to make leaf-to-root progress when one batch contains both a
+// deleted structural ancestor and its deleted descendants. Targets that do
+// not implement it retain the all-or-nothing CompactTombstones behavior.
+type eligibleTombstoneTarget interface {
+	CompactEligibleTombstones([]crdt.Tag) (int, error)
+}
+
 // Coordinator collects exact tombstone acknowledgements for one replicated
 // target. Its state is deliberately fail-closed: a restart or membership
 // replacement clears acknowledgements and can delay collection, but cannot
@@ -60,13 +71,14 @@ type TombstoneTarget interface {
 // replication protocol. A removed member that later reconnects must bootstrap
 // from a snapshot created after the compaction it missed.
 type Coordinator[T comparable] struct {
-	membershipMu          sync.RWMutex
-	acknowledgementMu     sync.Mutex
-	groupID               string
-	epoch                 uint64
-	members               map[string]struct{}
-	acknowledgements      map[string]map[crdt.Tag]struct{}
-	acknowledgementCounts map[crdt.Tag]uint
+	membershipMu           sync.RWMutex
+	acknowledgementMu      sync.Mutex
+	groupID                string
+	epoch                  uint64
+	members                map[string]struct{}
+	acknowledgements       map[string]map[crdt.Tag]struct{}
+	acknowledgementCounts  map[crdt.Tag]uint
+	acknowledgementEntries int
 }
 
 // NewCoordinator creates a coordinator for groupID with the initial active
@@ -111,16 +123,12 @@ func (c *Coordinator[T]) AcknowledgementStats() AcknowledgementStats {
 	defer c.membershipMu.RUnlock()
 	c.acknowledgementMu.Lock()
 	defer c.acknowledgementMu.Unlock()
-	entries := 0
-	for _, acknowledged := range c.acknowledgements {
-		entries += len(acknowledged)
-	}
 	return AcknowledgementStats{
 		GroupID: c.groupID,
 		Epoch:   c.epoch,
 		Members: len(c.members),
 		Tags:    len(c.acknowledgementCounts),
-		Entries: entries,
+		Entries: c.acknowledgementEntries,
 	}
 }
 
@@ -146,6 +154,7 @@ func (c *Coordinator[T]) ReplaceMembership(members []string) (Membership, error)
 	c.members = memberSet
 	c.acknowledgements = make(map[string]map[crdt.Tag]struct{}, len(memberSet))
 	c.acknowledgementCounts = make(map[crdt.Tag]uint)
+	c.acknowledgementEntries = 0
 	return Membership{GroupID: c.groupID, Epoch: c.epoch, Members: sortedMembers(memberSet)}, nil
 }
 
@@ -192,6 +201,13 @@ func (c *Coordinator[T]) PruneAcknowledgements(groupID string, epoch uint64, tag
 	if epoch != c.epoch {
 		return 0, ErrStaleMembership
 	}
+	if c.prunesAllAcknowledgementTagsLocked(tags) {
+		removed := c.acknowledgementEntries
+		c.acknowledgements = make(map[string]map[crdt.Tag]struct{}, len(c.members))
+		c.acknowledgementCounts = make(map[crdt.Tag]uint)
+		c.acknowledgementEntries = 0
+		return removed, nil
+	}
 	removed := 0
 	for _, tag := range tags {
 		for _, acknowledged := range c.acknowledgements {
@@ -203,7 +219,27 @@ func (c *Coordinator[T]) PruneAcknowledgements(groupID string, epoch uint64, tag
 		}
 		delete(c.acknowledgementCounts, tag)
 	}
+	c.acknowledgementEntries -= removed
 	return removed, nil
+}
+
+// prunesAllAcknowledgementTagsLocked reports whether tags cover exactly the
+// current acknowledgement table. The caller must hold membershipMu and
+// acknowledgementMu. After this O(tags) coverage check, a full
+// post-checkpoint prune can discard the whole table without deleting every
+// member/tag pair individually.
+func (c *Coordinator[T]) prunesAllAcknowledgementTagsLocked(tags []crdt.Tag) bool {
+	if len(tags) < len(c.acknowledgementCounts) {
+		return false
+	}
+	seen := make(map[crdt.Tag]struct{}, len(tags))
+	for _, tag := range tags {
+		if _, exists := c.acknowledgementCounts[tag]; !exists {
+			return false
+		}
+		seen[tag] = struct{}{}
+	}
+	return len(seen) == len(c.acknowledgementCounts)
 }
 
 // acknowledgeLocked requires membershipMu and acknowledgementMu to be held.
@@ -226,6 +262,7 @@ func (c *Coordinator[T]) acknowledgeLocked(groupID, member string, epoch uint64,
 		}
 		c.acknowledgements[member][tag] = struct{}{}
 		c.acknowledgementCounts[tag]++
+		c.acknowledgementEntries++
 	}
 	return nil
 }
@@ -271,6 +308,9 @@ func (c *Coordinator[T]) AcknowledgeAndCompactTarget(groupID, member string, epo
 	}
 	stable := c.stableTombstonesLocked(candidates)
 	c.acknowledgementMu.Unlock()
+	if target, ok := target.(eligibleTombstoneTarget); ok {
+		return target.CompactEligibleTombstones(stable)
+	}
 	return target.CompactTombstones(stable)
 }
 

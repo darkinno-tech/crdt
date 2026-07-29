@@ -6,14 +6,23 @@ package text
 // supplies O(log n) visible-offset lookup. Marker next/prev links make full
 // text scans linear without materializing a projection.
 type sequenceIndex struct {
-	root    *sequenceMarker
-	entries map[Position]*sequenceMarker
-	exits   map[Position]*sequenceMarker
+	root  *sequenceMarker
+	pairs map[Position]*sequencePair
+}
+
+// sequencePair keeps the paired enter/exit markers for one RGA position in
+// one allocation and stores the Position only once. Both markers are still
+// required to preserve a subtree boundary when a later sibling arrives, but
+// they never need independent ownership.
+type sequencePair struct {
+	position    Position
+	singleChild *sequencePair
+	entry       sequenceMarker
+	exit        sequenceMarker
 }
 
 type sequenceMarker struct {
-	position Position
-	exit     bool
+	pair     *sequencePair
 	visible  bool
 	priority uint64
 
@@ -23,21 +32,23 @@ type sequenceMarker struct {
 }
 
 func newSequenceIndex() *sequenceIndex {
-	entry := newSequenceMarker(Position{}, false, false)
-	exit := newSequenceMarker(Position{}, true, false)
+	pair := newSequencePair(Position{}, false)
+	entry, exit := &pair.entry, &pair.exit
 	entry.next, exit.prev = exit, entry
 	index := &sequenceIndex{
-		entries: map[Position]*sequenceMarker{Position{}: entry},
-		exits:   make(map[Position]*sequenceMarker),
+		pairs: map[Position]*sequencePair{Position{}: pair},
 	}
 	index.root = mergeMarkers(entry, exit)
 	return index
 }
 
-func newSequenceMarker(position Position, exit, visible bool) *sequenceMarker {
-	marker := &sequenceMarker{position: position, exit: exit, visible: visible, priority: markerPriority(position, exit)}
-	refreshMarker(marker)
-	return marker
+func newSequencePair(position Position, visible bool) *sequencePair {
+	pair := &sequencePair{position: position}
+	pair.entry = sequenceMarker{pair: pair, visible: visible, priority: markerPriority(position, false)}
+	pair.exit = sequenceMarker{pair: pair, priority: markerPriority(position, true)}
+	refreshMarker(&pair.entry)
+	refreshMarker(&pair.exit)
+	return pair
 }
 
 func markerPriority(position Position, exit bool) uint64 {
@@ -150,9 +161,33 @@ func markerRank(marker *sequenceMarker) int {
 	return rank
 }
 
-func (index *sequenceIndex) insertAfter(anchor *sequenceMarker, position Position, visible bool) {
-	entry := newSequenceMarker(position, false, visible)
-	exit := newSequenceMarker(position, true, false)
+func (index *sequenceIndex) entry(position Position) *sequenceMarker {
+	pair := index.pair(position)
+	if pair == nil {
+		return nil
+	}
+	return &pair.entry
+}
+
+func (index *sequenceIndex) exit(position Position) *sequenceMarker {
+	pair := index.pair(position)
+	if pair == nil {
+		return nil
+	}
+	return &pair.exit
+}
+
+func (index *sequenceIndex) pair(position Position) *sequencePair {
+	return index.pairs[position]
+}
+
+func (index *sequenceIndex) has(position Position) bool {
+	_, ok := index.pairs[position]
+	return ok
+}
+
+func (index *sequenceIndex) insertPairAfter(anchor *sequenceMarker, pair *sequencePair) {
+	entry, exit := &pair.entry, &pair.exit
 	next := anchor.next
 	anchor.next, entry.prev = entry, anchor
 	entry.next, exit.prev = exit, entry
@@ -162,12 +197,11 @@ func (index *sequenceIndex) insertAfter(anchor *sequenceMarker, position Positio
 	}
 	left, right := splitMarkers(index.root, markerRank(anchor)+1)
 	index.root = mergeMarkers(mergeMarkers(mergeMarkers(left, entry), exit), right)
-	index.entries[position] = entry
-	index.exits[position] = exit
+	index.pairs[pair.position] = pair
 }
 
 func (index *sequenceIndex) setVisible(position Position, visible bool) {
-	entry := index.entries[position]
+	entry := index.entry(position)
 	if entry == nil || entry.visible == visible {
 		return
 	}
@@ -180,7 +214,7 @@ func (index *sequenceIndex) setVisible(position Position, visible bool) {
 // removeLeaf removes an entry/exit pair after its caller has established that
 // no child markers can lie between them.
 func (index *sequenceIndex) removeLeaf(position Position) bool {
-	entry, exit := index.entries[position], index.exits[position]
+	entry, exit := index.entry(position), index.exit(position)
 	if entry == nil || exit == nil || entry.next != exit {
 		return false
 	}
@@ -195,8 +229,7 @@ func (index *sequenceIndex) removeLeaf(position Position) bool {
 	left, rest := splitMarkers(index.root, markerRank(entry))
 	_, right := splitMarkers(rest, 2)
 	index.root = mergeMarkers(left, right)
-	delete(index.entries, position)
-	delete(index.exits, position)
+	delete(index.pairs, position)
 	return true
 }
 
@@ -214,7 +247,7 @@ func (index *sequenceIndex) visibleAt(offset int) (Position, bool) {
 		offset -= leftVisible
 		if current.visible {
 			if offset == 0 {
-				return current.position, true
+				return current.pair.position, true
 			}
 			offset--
 		}
@@ -225,9 +258,9 @@ func (index *sequenceIndex) visibleAt(offset int) (Position, bool) {
 
 func (index *sequenceIndex) visiblePositions() []Position {
 	positions := make([]Position, 0, visibleCount(index.root))
-	for current := index.entries[Position{}].next; current != nil; current = current.next {
+	for current := index.entry(Position{}).next; current != nil; current = current.next {
 		if current.visible {
-			positions = append(positions, current.position)
+			positions = append(positions, current.pair.position)
 		}
 	}
 	return positions

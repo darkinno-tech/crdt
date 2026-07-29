@@ -76,13 +76,16 @@ ssh <user>@<host-a> '
 
 ## 4. 启动两个接收端
 
-默认监听地址为 `127.0.0.1:49511`。只有在临时测试且防火墙受限的情况下，才绑定 `0.0.0.0:49511`。
+默认监听地址为 `127.0.0.1:49511`，且命令会拒绝非回环地址，除非显式指定
+`-allow-non-loopback`。优先使用私网或认证隧道；只有在临时测试且防火墙受限时，才绑定
+`0.0.0.0:49511`。
 
 ```sh
 cd /opt/crdt-e2e
 nohup ./crdt-sync-probe \
   -mode serve \
   -listen 0.0.0.0:49511 \
+  -allow-non-loopback \
   -replica host-a \
   -token-file ./probe.token \
   > server.log 2>&1 &
@@ -109,11 +112,41 @@ echo $!
 
 从主机 B 和本机重复执行，使用不同的 ID 与元素。两个目标返回的 JSON 必须包含相同的 counter 分量映射和相同的有序元素集合。
 
+### 可选的实验性 RGA 路径
+
+探针**不会**协商 `replica.Manifest` 或 `ProtocolPolicy`。RGA 只能作为显式、受控的测试：
+每个接收端和发送端都必须使用相同的 `-rga-protocol`（`v1` 或 `run-v2`）。未指定该参数时
+`/rga` 保持关闭。两种 wire shape 不得混用；协议不匹配的接收端会在修改 RGA 前拒绝帧。
+
+```sh
+# 第 4 步中的两个主机接收端都需增加相同的 flag。
+./crdt-sync-probe -mode serve -listen 0.0.0.0:49511 -allow-non-loopback \
+  -replica host-a -rga-protocol run-v2 -token-file ./probe.token
+
+# 在受控发送端验证重复投递与最终收敛。
+./crdt-sync-probe -mode send \
+  -target http://<host-a>:49511,http://<host-b>:49511 \
+  -replica rga-sender-a -token-file ./probe.token \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3 -timeout 30s
+```
+
+每个已接受变更返回带 `X-CRDT-Apply-Micros` 的空 `204 No Content`；发送端只在随后获取一次
+`/state`。两个目标报告的 `text.protocol`、`text.runes`、`text.sha256` 必须一致，且
+`text.pending` 为零。每个 RGA delta 限制为 16 MiB 和 200,000 个生成 rune。这些诊断不能证明
+持久 HLC 恢复、墓碑 GC 安全性或生产延迟 SLO。`run-v2` 可能减少单个同副本线性编辑的字节数，
+但规范化解码会带来独立的 CPU 与分配成本；应通过下列命令在目标负载上比较：
+
+```sh
+go test -run='^$' -bench='BenchmarkRGADeltaWireProtocols$' -benchmem ./text
+```
+
 在每个接收端验证负向路径：
 
 - 不带令牌请求 `GET /state`：应返回 HTTP `401`。
 - 带合法令牌但向 `POST /counter` 发送非帧数据：应返回 `400`。
 - 带合法令牌发送超过 1 MiB 的请求体：应返回 `400`。
+- 向显式配置为 `v1` 的接收端发送 `run-v2` RGA 帧：应返回 `400`，且文本状态不变。
 - 每次拒绝请求后，确认合法状态未改变。
 
 跨机演练前可使用本地容量门禁 `make test-extreme`：它会在普通和竞态模式下验证 3 个副本共 6,144 个 OR-Set 元素、状态合并、快照恢复、恢复后的重复 delta、Merkle 一致性，以及 256 分量 G-Counter 批处理。
@@ -150,4 +183,5 @@ ss -ltn 'sport = :49511'
 | 传输幂等性 | 重复 delta 后只保留一个 counter 分量和一个集合成员关系 |
 | 多目标一致性 | 两接收端对同一广播 delta 返回相等状态 |
 | 输入保护 | 未授权 = 401；损坏和超限请求体 = 400 |
+| RGA 协议一致性 | 两报告协议、摘要、rune 数一致且无 pending；协议不匹配 = 400 |
 | 暴露清理 | 已记录 PID 停止，探针监听端口不存在 |

@@ -4,3 +4,8 @@
 
 # OS metadata
 .DS_Store
+
+# Generated browser-client artifacts and local validation output.
+/.tmp/
+/clients/typescript/dist/
+/clients/typescript/node_modules/

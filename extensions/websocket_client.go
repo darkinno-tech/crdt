@@ -17,11 +17,18 @@ import (
 // or an equivalently durable boundary. HTTPClient is used for HTTP/SSE and, if
 // non-nil, as the underlying client for WebSocket dialing.
 type ClientConfig struct {
-	Header           http.Header
-	HTTPClient       *http.Client
-	Policy           crdt.ProtocolPolicy
-	MaxMessageBytes  int
-	MaxActorBytes    int
+	Header          http.Header
+	HTTPClient      *http.Client
+	Policy          crdt.ProtocolPolicy
+	MaxMessageBytes int
+	MaxActorBytes   int
+	// EnableBatches offers BatchSubprotocol in addition to Subprotocol. It
+	// remains false by default so an existing client keeps its v1 contract.
+	EnableBatches bool
+	// MaxBatchChanges is a local publication and receive bound when
+	// EnableBatches is true. It must not exceed the relay's configured bound;
+	// both sides default to 16. It is ignored for a v1-only connection.
+	MaxBatchChanges  int
 	HandshakeTimeout time.Duration
 	WriteTimeout     time.Duration
 	OnChange         func(replica.Change) error
@@ -36,7 +43,9 @@ type WebSocketClient struct {
 
 	maxMessageBytes int
 	maxActorBytes   int
+	maxBatchChanges int
 	writeTimeout    time.Duration
+	batchEnabled    bool
 	connection      *websocket.Conn
 	context         context.Context
 	cancel          context.CancelFunc
@@ -60,21 +69,36 @@ func DialWebSocket(ctx context.Context, endpoint string, manifest replica.Manife
 	if err != nil {
 		return nil, err
 	}
+	maxBatchChanges := 0
+	if config.EnableBatches {
+		maxBatchChanges, err = normalizeBatchChanges(config.MaxBatchChanges)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if _, err := replica.NewSessionWithPolicy(manifest, config.Policy); err != nil {
 		return nil, fmt.Errorf("validate manifest: %w", err)
 	}
 	handshakeContext, cancelHandshake := context.WithTimeout(ctx, limits.handshakeTimeout)
 	defer cancelHandshake()
+	subprotocols := []string{Subprotocol}
+	if config.EnableBatches {
+		// Keep v1 as a fallback for a relay that has not enabled the optional
+		// batch feature. PublishBatch then fails explicitly instead of silently
+		// changing delivery semantics.
+		subprotocols = []string{BatchSubprotocol, Subprotocol}
+	}
 	connection, _, err := websocket.Dial(handshakeContext, endpoint, &websocket.DialOptions{
 		HTTPClient:      config.HTTPClient,
 		HTTPHeader:      cloneHeader(config.Header),
-		Subprotocols:    []string{Subprotocol},
+		Subprotocols:    subprotocols,
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if connection.Subprotocol() != Subprotocol {
+	batchEnabled := connection.Subprotocol() == BatchSubprotocol
+	if (connection.Subprotocol() != Subprotocol && !batchEnabled) || (batchEnabled && !config.EnableBatches) {
 		_ = connection.CloseNow()
 		return nil, errInvalidWireMessage
 	}
@@ -113,7 +137,9 @@ func DialWebSocket(ctx context.Context, endpoint string, manifest replica.Manife
 		onChange:        config.OnChange,
 		maxMessageBytes: limits.maxMessageBytes,
 		maxActorBytes:   limits.maxActorBytes,
+		maxBatchChanges: maxBatchChanges,
 		writeTimeout:    limits.writeTimeout,
+		batchEnabled:    batchEnabled,
 		connection:      connection,
 		context:         connectionContext,
 		cancel:          cancelConnection,
@@ -145,6 +171,56 @@ func (client *WebSocketClient) Publish(ctx context.Context, change replica.Chang
 	}
 	if len(verified.Dot.Actor) > client.maxActorBytes || len(encoded) > client.maxMessageBytes {
 		return errInvalidWireMessage
+	}
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+	writeContext, cancel := context.WithTimeout(ctx, client.writeTimeout)
+	err = client.connection.Write(writeContext, websocket.MessageBinary, encoded)
+	cancel()
+	if err != nil {
+		client.stop(err)
+	}
+	return err
+}
+
+// PublishBatch sends independently identified changes in one explicitly
+// negotiated WebSocket message. It is a transport coalescing operation, not an
+// atomic application transaction. The relay can accept an earlier item and
+// reject a later one, so callers must retain every original change in their
+// durable outbox and retry them independently after any ambiguous connection
+// result.
+func (client *WebSocketClient) PublishBatch(ctx context.Context, changes []replica.Change) error {
+	if client == nil {
+		return ErrClosed
+	}
+	select {
+	case <-client.context.Done():
+		return ErrClosed
+	default:
+	}
+	if !client.batchEnabled {
+		return ErrBatchUnsupported
+	}
+	if len(changes) == 0 || len(changes) > client.maxBatchChanges {
+		return ErrBatchLimit
+	}
+	verified := make([]replica.Change, 0, len(changes))
+	for _, change := range changes {
+		item, err := replica.NewChangeWithPolicy(client.manifest, change.Dot, change.Delta(), client.policy)
+		if err != nil {
+			return fmt.Errorf("validate batch change: %w", err)
+		}
+		if len(item.Dot.Actor) > client.maxActorBytes {
+			return errInvalidWireMessage
+		}
+		verified = append(verified, item)
+	}
+	encoded, err := marshalChangeBatch(verified)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > client.maxMessageBytes {
+		return ErrBatchLimit
 	}
 	client.writeMu.Lock()
 	defer client.writeMu.Unlock()
@@ -203,21 +279,41 @@ func (client *WebSocketClient) readLoop() {
 			client.stop(errInvalidWireMessage)
 			return
 		}
+		if client.batchEnabled && isChangeBatch(data) {
+			changes, err := unmarshalChangeBatch(data, client.maxMessageBytes, client.maxActorBytes, client.maxBatchChanges)
+			if err != nil {
+				client.stop(err)
+				return
+			}
+			for _, item := range changes {
+				if err := client.applyChange(item.dot, item.delta); err != nil {
+					client.stop(err)
+					return
+				}
+			}
+			continue
+		}
 		dot, delta, err := unmarshalChange(data, client.maxMessageBytes, client.maxActorBytes)
 		if err != nil {
 			client.stop(err)
 			return
 		}
-		change, err := replica.NewChangeWithPolicy(client.manifest, dot, delta, client.policy)
-		if err != nil {
-			client.stop(fmt.Errorf("validate received change: %w", err))
-			return
-		}
-		if err := client.onChange(change); err != nil {
-			client.stop(fmt.Errorf("apply received change: %w", err))
+		if err := client.applyChange(dot, delta); err != nil {
+			client.stop(err)
 			return
 		}
 	}
+}
+
+func (client *WebSocketClient) applyChange(dot replica.Dot, delta []byte) error {
+	change, err := replica.NewChangeWithPolicy(client.manifest, dot, delta, client.policy)
+	if err != nil {
+		return fmt.Errorf("validate received change: %w", err)
+	}
+	if err := client.onChange(change); err != nil {
+		return fmt.Errorf("apply received change: %w", err)
+	}
+	return nil
 }
 
 func (client *WebSocketClient) stop(err error) {

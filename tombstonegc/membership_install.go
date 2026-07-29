@@ -72,6 +72,7 @@ func (c *Coordinator[T]) InstallMembership(membership Membership) error {
 	c.members = members
 	c.acknowledgements = make(map[string]map[crdt.Tag]struct{}, len(members))
 	c.acknowledgementCounts = make(map[crdt.Tag]uint)
+	c.acknowledgementEntries = 0
 	return nil
 }
 

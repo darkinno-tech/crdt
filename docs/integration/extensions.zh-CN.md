@@ -48,6 +48,7 @@ relay=5
 | Feature | 端点 | 默认值 |
 | --- | --- | --- |
 | `FeatureWebSocket` | `GET <mount>/ws`，子协议 `crdt-sync-v1` | 关闭 |
+| `FeatureWebSocketBatch` | 经协商的 `crdt-sync-v2` WebSocket 批量 envelope | 关闭 |
 | `FeatureHTTP` | `POST` 投递变更，`GET` 订阅 Server-Sent Events | 关闭 |
 
 当挂载点为 `/crdt/` 时，HTTP 路由如下：
@@ -62,6 +63,23 @@ relay=5
 接受 live 数据前校验精确 Manifest。
 客户端成功返回也是 live 订阅的线性化点：relay 会先注册 peer、再发送确认，因此调用方可
 在握手后立即发布，不会存在额外的事件丢失窗口。
+
+## 可选 WebSocket 批量传输
+
+`FeatureWebSocketBatch` 默认关闭，且只能与 `FeatureWebSocket` 一起开启。当 relay 与客户端
+都显式开启时，WebSocket 握手可协商 `crdt-sync-v2`；否则客户端回退到 `crdt-sync-v1`，调用
+`PublishBatch` 会返回 `ErrBatchUnsupported`。
+
+批量只是 transport 合并，不是原子 CRDT 或存储事务。每个条目都保留自己的 dot 和规范化
+v1 envelope。relay 会在第一次 Inbox mutation 前校验并授权全部条目，再按顺序接收。若
+应用 callback 或 pending-state 上限拒绝了后续条目，relay 会先转发此前已经接受的条目，
+再关闭发布连接。调用方必须在 durable outbox 中保留每个原始条目，并在结果不明确时逐项重试。
+
+批消息同时受 `MaxMessageBytes` 和 `MaxBatchChanges` 限制。默认最多 16 项，且不能超过
+`MaxQueuedMessages`，因此 v1 WebSocket 或 SSE peer 要么完整入队全部条目消息，要么被断开，
+不会在应用层留下部分队列插入。客户端与 relay 都会执行各自配置的条目上限；应让两者保持兼容
+（默认值一致）。支持批量的 WebSocket peer 收到一个 batch envelope；HTTP 与 SSE 仍使用
+已文档化的单变更 v1 envelope。
 
 ## 该参考实现保证什么
 
@@ -133,7 +151,7 @@ go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=10s ./extensions
 
 # 当前机器上的 loopback 传输成本；不能将其当作 SLA。
 go test -run='^$' \
-  -bench='Benchmark(GroupReceive|WebSocketPublish|HTTPPublish)Loopback$' \
+  -bench='Benchmark(GroupReceive|WebSocket(Batch)?Publish|HTTPPublish)Loopback$' \
   -benchmem ./extensions
 ```
 

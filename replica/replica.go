@@ -247,16 +247,19 @@ type ApplyDelta func([]byte) error
 // out-of-order change retained for its missing per-actor prefix; Applied lists
 // every dot installed by this call, including any now-unblocked buffered
 // changes. Duplicate reports that this call did not retain or install its
-// change because the dot was already known.
+// change because the same dot was already known.
 type Delivery struct {
 	Buffered  bool
 	Duplicate bool
 	Applied   []Dot
 }
 
-// Accepted reports whether this call retained a new pending change or
-// installed at least one dot. Live relays should forward only accepted changes
-// so duplicate retries do not amplify network traffic.
+// Accepted reports whether this call added a change to the receiver's pending
+// queue or installed at least one dot. Relays should forward only accepted
+// changes: once a dot is already installed, an Inbox no longer retains its
+// payload bytes and therefore cannot prove a later same-dot payload is
+// identical. Durable relays must additionally bind actor/counter to payload
+// identity in their application-owned operation store.
 func (d Delivery) Accepted() bool {
 	return !d.Duplicate && (d.Buffered || len(d.Applied) > 0)
 }

@@ -35,6 +35,8 @@ go vet ./...
 | 数据竞争 | `make race` |
 | 解码器模糊测试（每个目标 10 秒） | `make fuzz` |
 | 每包覆盖率门槛（90%） | `make coverage` |
+| TypeScript frame 解码器 | `make typescript-test` |
+| 实际 Go Wasm + Node 三副本协作场景 | `make wasm-test` |
 | 静态检查 | `make staticcheck`、`make lint` |
 | 完整本地门禁 | `make verify` |
 | CI 容器复现 | `make docker-test` |
