@@ -113,7 +113,7 @@ rm -rf "$scenario_dir"
    持久化、认证或业务授权。
 5. 定期交换完整状态或 Merkle 摘要以发现缺失历史，再合并状态修复。单靠重试队列
    无法修复进入队列前已经丢失的 delta。
-6. 交换实验性 LWW-Map、RGA 或 OR-Tree 帧前，必须对由
+6. 交换实验性 LWW-Set、LWW-Map、RGA 或 OR-Tree 帧前，必须对由
    `crdt.ProtocolPolicy{AllowExperimental: true}.FrameTypes()` 生成的连接/建链
    能力通告完成认证。只有双方都通告同一组 state/delta 类型时才可发送该类型；
    未知、仅预留或未共同启用的类型都应作为协议错误处理。
@@ -146,19 +146,19 @@ G-Set 与 MV-Register 是零值 `crdt.ProtocolPolicy` 默认包含的稳定 fram
 同一 ID 的副本必须通过 `register.NewMVRegisterFromSnapshot` 恢复；仅有状态字节会丢失
 因果上下文。G-Set 和 MV-Register 帧不需要实验性 opt-in。
 
-## 5. 实验性 LWW-Map、RGA 与 OR-Tree 集成
+## 5. 实验性 LWW-Set、LWW-Map、RGA 与 OR-Tree 集成
 
-LWW-Map（`lww.Map`）、RGA（`text`）和 OR-Tree（`tree`）是带帧、带 HLC 的实验性
+LWW-Set（`lww.Set`）、LWW-Map（`lww.Map`）、RGA（`text`）和 OR-Tree（`tree`）是带帧、带 HLC 的实验性
 协议，只有通过上述能力检查后才能使用；该策略仅属于一个复制组，并不是动态插件机制。帧类型被接受
-后仍应调用具体解码器，例如 RGA delta 使用 `text.UnmarshalRGADeltaWithLimits`，
+后仍应调用具体解码器，例如 LWW-Set delta 使用 `lww.UnmarshalSetDeltaWithLimits`，RGA delta 使用 `text.UnmarshalRGADeltaWithLimits`，
 OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧的校验和有效
 就按某种类型分派它。
 
-必须在同一 outbox/接收记录事务中，原子持久化本地 LWW-Map、RGA 或 OR-Tree 状态帧及其 HLC
+必须在同一 outbox/接收记录事务中，原子持久化本地 LWW-Set、LWW-Map、RGA 或 OR-Tree 状态帧及其 HLC
 状态。复用同一 replica ID 时，只能通过 `SnapshotCurrentState()` 和各包的
 `NewFromSnapshot` 恢复；仅有状态字节不能证明下一枚本地标签唯一。RGA 和 OR-Tree
 为处理乱序投递而保留删除墓碑。RGA 的 `CompactTombstones` 只能移除已删除的叶节点；应用
-必须先建立经过认证的精确确认纪元、持久化压缩后快照并淘汰旧 delta。LWW-Map 与 OR-Tree
+必须先建立经过认证的精确确认纪元、持久化压缩后快照并淘汰旧 delta。LWW-Set、LWW-Map 与 OR-Tree
 尚无精确确认式回收，因此实验性接入仍须为墓碑设定预算并监控、继续保留它们，不能调用通用 GC。
 
 ## 6. 恢复、反熵与墓碑
@@ -188,7 +188,7 @@ make test-integration
 | 分区修复 | 副本经快照引导或状态/Merkle 交换修复后收敛。 |
 | 输入安全 | 解码前已认证；有边界的解码器拒绝损坏、超限、类型或 codec 不匹配帧。 |
 | 业务语义 | 产品方已接受 add-wins、只增长 G-Set、计数器及 MV-Register 并发值语义。 |
-| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 LWW-Map/RGA/OR-Tree；其 HLC 状态已持久化且墓碑被保留。 |
+| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 LWW-Set/LWW-Map/RGA/OR-Tree；其 HLC 状态已持久化且墓碑被保留。 |
 | 运维归属 | outbox 重试、监控、备份、成员退役和墓碑策略均有明确负责人。 |
 
 `go test` 通过只证明当前修订中的库和示例；它不证明浏览器、移动端、生产网络、
