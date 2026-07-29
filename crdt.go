@@ -32,6 +32,11 @@ const (
 	// contracts for explicitly negotiated legacy groups.
 	TypeIDRGARunState uint64 = 19
 	TypeIDRGARunDelta uint64 = 20
+	// List RGA frames carry one canonical caller-coded value per position.
+	// They are intentionally distinct from text RGA frames: a text position is
+	// one Unicode scalar while a list position is one opaque application value.
+	TypeIDListRGAState uint64 = 21
+	TypeIDListRGADelta uint64 = 22
 )
 
 // FrameType describes one fully implemented framed CRDT protocol. The type
@@ -54,6 +59,7 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
 	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
 	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
+	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, UsesHLC: true},
 }
 
 // DefaultRGAFrameType returns the compact run-v2 protocol for new RGA
@@ -68,14 +74,16 @@ func DefaultRGAFrameType() FrameType {
 // ProtocolPolicy's zero value, so an application must opt in per replication
 // group before advertising or accepting them from a peer.
 var experimentalFrameTypes = map[uint64]struct{}{
-	TypeIDLWWSetState: {},
-	TypeIDLWWSetDelta: {},
-	TypeIDLWWMapState: {},
-	TypeIDLWWMapDelta: {},
-	TypeIDRGAState:    {},
-	TypeIDRGADelta:    {},
-	TypeIDORTreeState: {},
-	TypeIDORTreeDelta: {},
+	TypeIDLWWSetState:  {},
+	TypeIDLWWSetDelta:  {},
+	TypeIDLWWMapState:  {},
+	TypeIDLWWMapDelta:  {},
+	TypeIDRGAState:     {},
+	TypeIDRGADelta:     {},
+	TypeIDORTreeState:  {},
+	TypeIDORTreeDelta:  {},
+	TypeIDListRGAState: {},
+	TypeIDListRGADelta: {},
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group
@@ -88,7 +96,7 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
 	// AllowExperimental includes framed LWW-Set, LWW-Map, legacy scalar RGA v1,
-	// and OR-Tree protocols. Keep it false until the replication group has
+	// generic list RGA, and OR-Tree protocols. Keep it false until the replication group has
 	// accepted their experimental API and tombstone-retention lifecycle.
 	AllowExperimental bool
 }

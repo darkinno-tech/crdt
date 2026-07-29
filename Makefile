@@ -46,6 +46,7 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
 	go test -run=^$$ -fuzz=FuzzRGARunUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
+	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./list
 	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./tree
 
 coverage:

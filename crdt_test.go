@@ -92,6 +92,7 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 		{TypeIDMVRegisterState, TypeIDMVRegisterDelta, false},
 		{TypeIDORTreeState, TypeIDORTreeDelta, true},
 		{TypeIDRGARunState, TypeIDRGARunDelta, true},
+		{TypeIDListRGAState, TypeIDListRGADelta, true},
 	} {
 		kind, ok := FrameTypeForState(test.stateID)
 		if !ok || kind.DeltaID != test.deltaID || kind.UsesHLC != test.usesHLC {
@@ -128,16 +129,16 @@ func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
 	policy := ProtocolPolicy{AllowExperimental: true}
 	types := policy.FrameTypes()
-	if len(types) != 10 {
-		t.Fatalf("experimental protocol count = %d, want 10", len(types))
+	if len(types) != 11 {
+		t.Fatalf("experimental protocol count = %d, want 11", len(types))
 	}
-	if !policy.SupportsFrame(TypeIDLWWSetState) || !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDRGARunDelta) || !policy.SupportsFrame(TypeIDORTreeDelta) {
+	if !policy.SupportsFrame(TypeIDLWWSetState) || !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDRGARunDelta) || !policy.SupportsFrame(TypeIDListRGADelta) || !policy.SupportsFrame(TypeIDORTreeDelta) {
 		t.Fatal("experimental policy omitted an implemented experimental protocol")
 	}
 	if policy.SupportsFrame(999) {
 		t.Fatal("policy supported an unknown frame")
 	}
-	if !IsExperimentalFrame(TypeIDLWWSetDelta) || !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || IsExperimentalFrame(TypeIDRGARunState) || !IsExperimentalFrame(TypeIDORTreeDelta) {
+	if !IsExperimentalFrame(TypeIDLWWSetDelta) || !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || IsExperimentalFrame(TypeIDRGARunState) || !IsExperimentalFrame(TypeIDListRGAState) || !IsExperimentalFrame(TypeIDORTreeDelta) {
 		t.Fatal("implemented experimental protocol was not marked experimental")
 	}
 	if IsExperimentalFrame(999) {
