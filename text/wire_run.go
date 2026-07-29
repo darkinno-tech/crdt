@@ -253,6 +253,12 @@ func UnmarshalRGARunDelta(data []byte) (Delta, error) {
 	return unmarshalRGARunDeltaWithLimits(data, frame.DefaultLimits())
 }
 
+// UnmarshalRGARunDeltaWithLimits decodes a bounded run-v2 delta while
+// enforcing caller-selected input limits.
+func UnmarshalRGARunDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, error) {
+	return unmarshalRGARunDeltaWithLimits(data, limits)
+}
+
 func unmarshalRGARunDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, error) {
 	nodes, tombstones, err := unmarshalRGARun(data, crdt.TypeIDRGARunDelta, limits, false)
 	if err != nil {

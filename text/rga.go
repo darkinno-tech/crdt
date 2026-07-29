@@ -299,11 +299,13 @@ func (r *RGA) ClockState() clock.State {
 	return r.clock.Snapshot()
 }
 
+type deltaEncoder func(Delta, frame.DecoderLimits) ([]byte, error)
+
 // Insert inserts valid UTF-8 text before visible rune offset. It creates one
 // node per Unicode scalar, so offset/count are rune based rather than byte
 // based and can never split UTF-8.
 func (r *RGA) Insert(offset int, value string) (Delta, error) {
-	delta, _, err := r.insert(offset, value, nil)
+	delta, _, err := r.insert(offset, value, nil, Delta.MarshalBinaryWithLimits)
 	return delta, err
 }
 
@@ -313,18 +315,26 @@ func (r *RGA) Insert(offset int, value string) (Delta, error) {
 // state that cannot be replicated under its own budget. The HLC may still
 // advance while reserving local tags; those un-emitted tags are safe to skip.
 func (r *RGA) InsertWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, error) {
-	delta, _, err := r.insert(offset, value, &limits)
+	delta, _, err := r.insert(offset, value, &limits, Delta.MarshalBinaryWithLimits)
 	return delta, err
 }
 
 // InsertBinaryWithLimits inserts text and returns the same preflighted
 // canonical delta frame used to establish the local output budget.
 func (r *RGA) InsertBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) ([]byte, error) {
-	_, encoded, err := r.insert(offset, value, &limits)
+	_, encoded, err := r.insert(offset, value, &limits, Delta.MarshalBinaryWithLimits)
 	return encoded, err
 }
 
-func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits) (Delta, []byte, error) {
+// InsertRunBinaryWithLimits inserts text and returns the same preflighted
+// run-v2 delta frame used to establish the local output budget. Callers must
+// have separately negotiated the run-v2 RGA protocol before using this frame.
+func (r *RGA) InsertRunBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.insert(offset, value, &limits, Delta.MarshalRunBinaryWithLimits)
+	return encoded, err
+}
+
+func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
 	if r == nil || r.clock == nil {
 		return Delta{}, nil, ErrNilText
 	}
@@ -347,7 +357,7 @@ func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits) (Del
 		if limits == nil {
 			return empty, nil, nil
 		}
-		encoded, err := empty.MarshalBinaryWithLimits(*limits)
+		encoded, err := encode(empty, *limits)
 		if err != nil {
 			return Delta{}, nil, err
 		}
@@ -369,7 +379,7 @@ func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits) (Del
 	var encoded []byte
 	if limits != nil {
 		var err error
-		encoded, err = delta.MarshalBinaryWithLimits(*limits)
+		encoded, err = encode(delta, *limits)
 		if err != nil {
 			return Delta{}, nil, err
 		}
@@ -384,7 +394,7 @@ func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits) (Del
 // carries only tombstones; replicas that have not received the inserts yet
 // retain those tombstones until the matching nodes arrive.
 func (r *RGA) Delete(offset, count int) (Delta, error) {
-	delta, _, err := r.delete(offset, count, nil)
+	delta, _, err := r.delete(offset, count, nil, Delta.MarshalBinaryWithLimits)
 	return delta, err
 }
 
@@ -392,18 +402,26 @@ func (r *RGA) Delete(offset, count int) (Delta, error) {
 // delta fits limits. A rejected output frame leaves the RGA content and
 // tombstone set unchanged.
 func (r *RGA) DeleteWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, error) {
-	delta, _, err := r.delete(offset, count, &limits)
+	delta, _, err := r.delete(offset, count, &limits, Delta.MarshalBinaryWithLimits)
 	return delta, err
 }
 
 // DeleteBinaryWithLimits deletes visible text and returns the same preflighted
 // canonical tombstone frame used to establish the local output budget.
 func (r *RGA) DeleteBinaryWithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
-	_, encoded, err := r.delete(offset, count, &limits)
+	_, encoded, err := r.delete(offset, count, &limits, Delta.MarshalBinaryWithLimits)
 	return encoded, err
 }
 
-func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits) (Delta, []byte, error) {
+// DeleteRunBinaryWithLimits deletes visible text and returns the same
+// preflighted run-v2 tombstone frame used to establish the local output
+// budget. Callers must have separately negotiated the run-v2 RGA protocol.
+func (r *RGA) DeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.delete(offset, count, &limits, Delta.MarshalRunBinaryWithLimits)
+	return encoded, err
+}
+
+func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
 	if r == nil {
 		return Delta{}, nil, ErrNilText
 	}
@@ -429,7 +447,7 @@ func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits) (Delta, []b
 	var encoded []byte
 	if limits != nil {
 		var err error
-		encoded, err = delta.MarshalBinaryWithLimits(*limits)
+		encoded, err = encode(delta, *limits)
 		if err != nil {
 			return Delta{}, nil, err
 		}

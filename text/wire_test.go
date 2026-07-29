@@ -190,6 +190,41 @@ func TestRGAMutationWithLimitsRejectsBeforeDocumentMutation(t *testing.T) {
 	}
 }
 
+func TestRGARunMutationWithLimitsUsesRunFramesAndRejectsBeforeDocumentMutation(t *testing.T) {
+	value, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tight := frame.DefaultLimits()
+	tight.MaxPayload = 1
+	if _, err := value.InsertRunBinaryWithLimits(0, "a", tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("InsertRunBinaryWithLimits() error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
+		t.Fatalf("rejected run insert mutated document: text=%q state=%#v", got, value.State())
+	}
+
+	encoded, err := value.InsertRunBinaryWithLimits(0, "a", frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := frame.UnmarshalFrame(encoded, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TypeID != crdt.TypeIDRGARunDelta {
+		t.Fatalf("run insert type = %d, want %d", decoded.TypeID, crdt.TypeIDRGARunDelta)
+	}
+	before := value.String()
+	beforeTombstones := value.State().TombstoneCount
+	if _, err := value.DeleteRunBinaryWithLimits(0, 1, tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("DeleteRunBinaryWithLimits() error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != before || value.State().TombstoneCount != beforeTombstones {
+		t.Fatalf("rejected run delete mutated document: text=%q state=%#v", got, value.State())
+	}
+}
+
 func TestRGASnapshotRecoveryWitnessesSuppliedFrontier(t *testing.T) {
 	value, err := New("local")
 	if err != nil {
