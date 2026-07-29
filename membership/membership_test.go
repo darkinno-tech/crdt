@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -24,6 +25,10 @@ type fixture struct {
 	authorityPublic  ed25519.PublicKey
 	members          map[string]ed25519.PrivateKey
 	view             View
+}
+
+func testCheckpointID(memberID string, sequence uint64) [sha256.Size]byte {
+	return sha256.Sum256([]byte("checkpoint/" + memberID + "/" + strconv.FormatUint(sequence, 10)))
 }
 
 func newFixture(t testing.TB, epoch uint64, ids ...string) fixture {
@@ -116,13 +121,14 @@ func TestGCBridgeUsesSignedCurrentViewAndExactTags(t *testing.T) {
 	}
 	for sequence, memberID := range []string{"api", "mobile"} {
 		receipt, err := SignReceipt(Receipt{
-			GroupID:     setup.view.GroupID,
-			Epoch:       setup.view.Epoch,
-			ViewHash:    setup.view.Hash(),
-			MemberID:    memberID,
-			Incarnation: 1,
-			Sequence:    uint64(sequence + 1),
-			Tags:        tags,
+			GroupID:      setup.view.GroupID,
+			Epoch:        setup.view.Epoch,
+			ViewHash:     setup.view.Hash(),
+			MemberID:     memberID,
+			Incarnation:  1,
+			Sequence:     uint64(sequence + 1),
+			CheckpointID: testCheckpointID(memberID, uint64(sequence+1)),
+			Tags:         tags,
 		}, setup.members[memberID])
 		if err != nil {
 			t.Fatal(err)
@@ -142,7 +148,7 @@ func TestGCBridgeUsesSignedCurrentViewAndExactTags(t *testing.T) {
 		t.Fatalf("tombstones after all receipts = %#v", got)
 	}
 	// A replay is rejected before Coordinator observes it.
-	replay, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: 1, ViewHash: setup.view.Hash(), MemberID: "mobile", Incarnation: 1, Sequence: 2, Tags: tags}, setup.members["mobile"])
+	replay, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: 1, ViewHash: setup.view.Hash(), MemberID: "mobile", Incarnation: 1, Sequence: 2, CheckpointID: testCheckpointID("mobile", 2), Tags: tags}, setup.members["mobile"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,13 +216,30 @@ func TestReceiptRejectsTamperingAndWrongEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	tag := crdt.Tag{ReplicaID: "api", WallTime: 1}
-	receipt, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: setup.view.Epoch, ViewHash: setup.view.Hash(), MemberID: "api", Incarnation: 1, Sequence: 1, Tags: []crdt.Tag{tag}}, setup.members["api"])
+	receipt, err := SignReceipt(Receipt{GroupID: setup.view.GroupID, Epoch: setup.view.Epoch, ViewHash: setup.view.Hash(), MemberID: "api", Incarnation: 1, Sequence: 1, CheckpointID: testCheckpointID("api", 1), Tags: []crdt.Tag{tag}}, setup.members["api"])
 	if err != nil {
 		t.Fatal(err)
 	}
 	receipt.Epoch++
 	if _, err := bridge.Apply(receipt, target); !errors.Is(err, ErrInvalidReceipt) {
 		t.Fatalf("tampered receipt = %v", err)
+	}
+}
+
+func TestReceiptRequiresNonZeroCheckpointID(t *testing.T) {
+	t.Parallel()
+	setup := newFixture(t, 1, "api")
+	tag := crdt.Tag{ReplicaID: "api", WallTime: 1}
+	if _, err := SignReceipt(Receipt{
+		GroupID:     setup.view.GroupID,
+		Epoch:       setup.view.Epoch,
+		ViewHash:    setup.view.Hash(),
+		MemberID:    "api",
+		Incarnation: 1,
+		Sequence:    1,
+		Tags:        []crdt.Tag{tag},
+	}, setup.members["api"]); !errors.Is(err, ErrInvalidReceipt) {
+		t.Fatalf("SignReceipt(zero checkpoint ID) = %v, want %v", err, ErrInvalidReceipt)
 	}
 }
 
