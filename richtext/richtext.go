@@ -9,7 +9,6 @@ package richtext
 import (
 	"errors"
 	"sort"
-	"strings"
 	"sync"
 	"unicode/utf8"
 
@@ -200,22 +199,26 @@ func (d *Document) Spans() []Span {
 	if len(positions) == 0 || len(runes) == 0 {
 		return nil
 	}
-	spans := make([]Span, 0, len(runes))
-	currentAttributes := d.attributesForPositionLocked(positions[0])
-	var builder strings.Builder
-	builder.WriteRune(runes[0])
+	spanCapacity := len(runes)
+	if spanCapacity > 64 {
+		spanCapacity = 64
+	}
+	spans := make([]Span, 0, spanCapacity)
+	start := 0
 	for index := 1; index < len(runes); index++ {
-		nextAttributes := d.attributesForPositionLocked(positions[index])
-		if attributesEqual(currentAttributes, nextAttributes) {
-			builder.WriteRune(runes[index])
+		if liveAttributesEqual(d.marks[positions[start]], d.marks[positions[index]]) {
 			continue
 		}
-		spans = append(spans, Span{Text: builder.String(), Attributes: currentAttributes})
-		builder.Reset()
-		builder.WriteRune(runes[index])
-		currentAttributes = nextAttributes
+		spans = append(spans, Span{
+			Text:       string(runes[start:index]),
+			Attributes: d.attributesForPositionLocked(positions[start]),
+		})
+		start = index
 	}
-	return append(spans, Span{Text: builder.String(), Attributes: currentAttributes})
+	return append(spans, Span{
+		Text:       string(runes[start:]),
+		Attributes: d.attributesForPositionLocked(positions[start]),
+	})
 }
 
 // Insert inserts unformatted UTF-8 text at a visible rune offset.
@@ -469,6 +472,18 @@ func (d *Document) preflightOperationsLocked(operations []formatOperation) error
 	if err := validateOperations(operations); err != nil {
 		return err
 	}
+	// One frame is never allowed to multiply its target and attribute counts
+	// into more work than this document can retain. Check this before building
+	// the transient pending map: a frame that repeatedly rewrites existing
+	// registers could otherwise consume unbounded CPU and memory without adding
+	// any retained entries.
+	updates := 0
+	for _, operation := range operations {
+		if len(operation.targets) > (d.options.MaxMarkEntries-updates)/len(operation.changes) {
+			return ErrResourceLimit
+		}
+		updates += len(operation.targets) * len(operation.changes)
+	}
 	pending := make(map[markKey]markValue)
 	for _, operation := range operations {
 		if len(operation.changes) > d.options.MaxAttributesPerOperation {
@@ -684,6 +699,38 @@ func attributesEqual(left, right Attributes) bool {
 	}
 	for key, value := range left {
 		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+// liveAttributesEqual compares presentation values without allocating the
+// caller-owned maps returned by AttributesAt or Spans. HLC tags are excluded:
+// two registers with equal live values render as one span even when they were
+// written by different replicas.
+func liveAttributesEqual(left, right map[string]markValue) bool {
+	leftLive := 0
+	for _, value := range left {
+		if !value.deleted {
+			leftLive++
+		}
+	}
+	rightLive := 0
+	for _, value := range right {
+		if !value.deleted {
+			rightLive++
+		}
+	}
+	if leftLive != rightLive {
+		return false
+	}
+	for key, value := range left {
+		if value.deleted {
+			continue
+		}
+		other, exists := right[key]
+		if !exists || other.deleted || other.value != value.value {
 			return false
 		}
 	}

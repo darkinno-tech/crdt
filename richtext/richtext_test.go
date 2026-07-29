@@ -3,6 +3,7 @@ package richtext
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/DarkInno/crdt"
@@ -36,6 +37,67 @@ func TestFormatProducesPresentationSpans(t *testing.T) {
 	}
 	if _, ok := document.AttributesAt(5); ok {
 		t.Fatal("out-of-range AttributesAt succeeded")
+	}
+}
+
+func TestSpansCoalescesEqualValuesFromDifferentTags(t *testing.T) {
+	document := mustDocument(t, "author")
+	if _, err := document.Insert(0, "ab"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Format(0, 1, []AttributeChange{{Key: "bold", Value: "true"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Format(1, 1, []AttributeChange{{Key: "bold", Value: "true"}}); err != nil {
+		t.Fatal(err)
+	}
+	want := []Span{{Text: "ab", Attributes: Attributes{"bold": "true"}}}
+	if got := document.Spans(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Spans() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSpansLargeUniformRunAndAttributeDifference(t *testing.T) {
+	document := mustDocument(t, "author")
+	value := strings.Repeat("a", 65)
+	if _, err := document.Insert(0, value); err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Spans(); !reflect.DeepEqual(got, []Span{{Text: value}}) {
+		t.Fatalf("Spans() = %#v", got)
+	}
+	if attributesEqual(Attributes{"bold": "true"}, Attributes{"bold": "false"}) {
+		t.Fatal("different attributes compared equal")
+	}
+}
+
+func TestApplyDeltaBoundsTargetAttributeProduct(t *testing.T) {
+	options := DefaultOptions()
+	options.MaxMarkEntries = 2
+	document, err := NewWithOptions("author", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Insert(0, "ab"); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := document.Format(0, 2, []AttributeChange{{Key: "bold", Value: "true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seed.operations) != 1 {
+		t.Fatalf("seed operations = %d", len(seed.operations))
+	}
+	before := document.Spans()
+	attack := Delta{operations: []formatOperation{
+		{tag: crdt.Tag{ReplicaID: "peer", WallTime: 2}, targets: seed.operations[0].targets, changes: []AttributeChange{{Key: "bold", Value: "true"}}},
+		{tag: crdt.Tag{ReplicaID: "peer", WallTime: 3}, targets: seed.operations[0].targets, changes: []AttributeChange{{Key: "bold", Value: "true"}}},
+	}}
+	if err := document.ApplyDelta(attack); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("oversized target/key work = %v", err)
+	}
+	if got := document.Spans(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("rejected delta changed spans: %#v, want %#v", got, before)
 	}
 }
 

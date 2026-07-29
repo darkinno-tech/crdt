@@ -90,7 +90,7 @@ can recover exactly.
 | Dimension | Required behaviour |
 | --- | --- |
 | Correctness | Validate every complete outer and nested frame before mutation; reject non-canonical order, duplicate targets/keys, invalid UTF-8, invalid tags, equal-tag conflicts, and wrong TypeIDs. |
-| Resource safety | Bound text nodes with `text.Options`; separately bound retained mark registers and attributes per operation. Decoder limits cap frames, elements, tags, and strings before allocation. |
+| Resource safety | Bound text nodes with `text.Options`; separately bound retained mark registers and attributes per operation. One delta may perform no more target/key updates than the document's retained-mark budget, so a repeated overwrite cannot multiply decoder work without limit. Decoder limits cap frames, elements, tags, and strings before allocation. |
 | Concurrency | A document-level mutex makes a compound text-plus-format delta atomic to public callers; RGA retains its own synchronization. |
 | Security | Attributes are UTF-8 strings, not HTML, CSS, JSON, URLs, or executable values. Rendering policy, link allowlists, sanitization, authorization, rate limits, and identity remain application-owned. CRC-32C detects corruption, not attackers. |
 | Persistence | Save the rich-text state frame and its shared RGA HLC state atomically. Keep removed attributes and text tombstones until the same authenticated epoch/exact-ack checkpoint rule permits retirement. |
@@ -120,7 +120,7 @@ has these expected costs:
 | Operation | Time | Additional retained memory |
 | --- | --- | --- |
 | Apply one format op | `O(targets * changes)` | one register per new `(position,key)` |
-| Render spans | `O(visible characters + live attributes)` | result only |
+| Render spans | `O(visible characters + live attributes)` | result only; maps are copied once per emitted span, not once per rune |
 | Encode one format delta | `O(targets + changes)` | output only |
 | Encode state | `O(retained registers log retained registers)` | sorted output plan |
 
