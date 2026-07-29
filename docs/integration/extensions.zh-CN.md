@@ -1,6 +1,6 @@
 # 可选 WebSocket 与 HTTP/SSE relay 参考实现
 
-[English](EXTENSIONS.md) | [简体中文](EXTENSIONS.zh-CN.md)
+[English](extensions.md) | [简体中文](extensions.zh-CN.md)
 
 `extensions` 是本 Go 模块提供的、与 Manifest 绑定的 live relay 官方参考实现。它
 必须显式开启：零值 feature 不暴露任何端点、不调用认证，也不启动 listener 或后台任务。
@@ -23,7 +23,7 @@ if err := handler.Mount(mux, "/crdt/"); err != nil {
 
 其中 `group` 是由应用创建的、绑定 Manifest 的 `extensions.Group`，其 `Apply`
 回调属于应用状态边界。包含完整认证/授权回调的可运行代码见
-[examples/extensions-provider](examples/extensions-provider)：
+[examples/extensions-provider](../../examples/extensions-provider)：
 
 ```sh
 go run ./examples/extensions-provider

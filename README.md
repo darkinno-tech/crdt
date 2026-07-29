@@ -47,7 +47,7 @@ feature-parity, or performance claim.
 
 The core library provides CRDT data types and wire primitives. It deliberately
 does not choose a membership protocol, authentication scheme, storage backend,
-or retry policy. The optional [`extensions`](EXTENSIONS.md) package adds
+or retry policy. The optional [`extensions`](docs/integration/extensions.md) package adds
 explicitly enabled WebSocket and HTTP/SSE live-relay reference surfaces, but it
 does not start a listener or provide durability, replay, reconnect, TLS,
 anti-entropy, or identity/session management. Those remain application-owned.
@@ -264,7 +264,7 @@ tag remains present (add-wins semantics).
 
 For a reproducible local HTTP delivery exercise, a production-integration
 checklist, snapshot/restart guidance, and the expected convergence evidence,
-see the [end-to-end integration tutorial](INTEGRATION.md). The
+see the [end-to-end integration tutorial](docs/integration/overview.md). The
 [runnable collaborative-workboard example](examples/collaborative-board)
 models duplicate delivery, a partitioned add/remove conflict, and recovery
 from an OR-Set snapshot:
@@ -299,7 +299,7 @@ download through `Reference.Verify` before accepting it:
 go run ./examples/attachment-collaboration
 ```
 
-The [opt-in transport extension guide](EXTENSIONS.md) and its
+The [opt-in transport extension guide](docs/integration/extensions.md) and its
 [runnable provider example](examples/extensions-provider) show one
 application-owned mux exposing both WebSocket and HTTP/SSE surfaces. The
 example demonstrates a WebSocket-to-HTTP delivery followed by an HTTP-to-
@@ -310,15 +310,15 @@ service:
 go run ./examples/extensions-provider
 ```
 
-See [attachment reference integration](ATTACHMENT_INTEGRATION.md) for the
+See [attachment reference integration](docs/integration/attachment.md) for the
 manifest fields, limits, storage boundary, deletion retention, and verification
 requirements.
 
-For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
+For the Chinese versions, see [集成教程](docs/integration/overview.zh-CN.md) and
 [协作任务示例](examples/collaborative-board) and
 [仓库复制示例](examples/warehouse-replication) and
 [实验协作示例](examples/experimental-collaboration) and
-[可选传输扩展](EXTENSIONS.zh-CN.md).
+[可选传输扩展](docs/integration/extensions.zh-CN.md).
 
 ## Correct use in a distributed system
 
@@ -525,12 +525,12 @@ components in each positive and negative map. `MarshalBinary` includes its
 reported encoded-throughput sample in parentheses; allocation counts were
 identical in all three runs.
 
-| Host | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
+| Host (anonymized) | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
 | --- | ---: | --- | --- | --- | --- |
-| `210.16.171.72` | 1 | 24.9 µs/op; 13,136 B; 6 allocs | 149.1 ns/op; 0 B; 0 allocs | 7.51 µs/op; 232 B; 10 allocs | 69.4 µs/op (55.3 MB/s); 25,680 B; 10 allocs |
-| `210.16.171.72` | 4 | 18.6 µs/op; 13,136 B; 6 allocs | 151.8 ns/op; 0 B; 0 allocs | 7.29 µs/op; 232 B; 10 allocs | 53.6 µs/op (71.7 MB/s); 25,680 B; 10 allocs |
-| `192.140.163.250` | 1 | 25.6 µs/op; 13,136 B; 6 allocs | 151.8 ns/op; 0 B; 0 allocs | 7.49 µs/op; 232 B; 10 allocs | 70.4 µs/op (54.6 MB/s); 25,680 B; 10 allocs |
-| `192.140.163.250` | 4 | 18.5 µs/op; 13,136 B; 6 allocs | 153.5 ns/op; 0 B; 0 allocs | 7.31 µs/op; 232 B; 10 allocs | 53.3 µs/op (72.1 MB/s); 25,680 B; 10 allocs |
+| Host A | 1 | 24.9 µs/op; 13,136 B; 6 allocs | 149.1 ns/op; 0 B; 0 allocs | 7.51 µs/op; 232 B; 10 allocs | 69.4 µs/op (55.3 MB/s); 25,680 B; 10 allocs |
+| Host A | 4 | 18.6 µs/op; 13,136 B; 6 allocs | 151.8 ns/op; 0 B; 0 allocs | 7.29 µs/op; 232 B; 10 allocs | 53.6 µs/op (71.7 MB/s); 25,680 B; 10 allocs |
+| Host B | 1 | 25.6 µs/op; 13,136 B; 6 allocs | 151.8 ns/op; 0 B; 0 allocs | 7.49 µs/op; 232 B; 10 allocs | 70.4 µs/op (54.6 MB/s); 25,680 B; 10 allocs |
+| Host B | 4 | 18.5 µs/op; 13,136 B; 6 allocs | 153.5 ns/op; 0 B; 0 allocs | 7.31 µs/op; 232 B; 10 allocs | 53.3 µs/op (72.1 MB/s); 25,680 B; 10 allocs |
 
 The `GOMAXPROCS=4` rows remain serial benchmark measurements, not aggregate
 four-core throughput. These controlled host samples are public regression

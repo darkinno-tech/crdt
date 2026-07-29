@@ -2,6 +2,8 @@
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
+FUZZ_TIME ?= 10s
+FUZZ_PARALLEL ?= 1
 
 fmt-check:
 	test -z "$$(gofmt -l .)"
@@ -26,20 +28,20 @@ vet:
 	go vet ./...
 
 fuzz:
-	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=10s ./attachment
-	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=10s ./attachment
-	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./encoding
-	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=10s ./counter
-	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=10s ./counter
-	go test -run=^$$ -fuzz=FuzzMapUnmarshal -fuzztime=10s ./lww
-	go test -run=^$$ -fuzz=FuzzGSetUnmarshalBinary -fuzztime=10s ./set
-	go test -run=^$$ -fuzz=FuzzORSetUnmarshalBinary -fuzztime=10s ./set
-	go test -run=^$$ -fuzz=FuzzMVRegisterUnmarshal -fuzztime=10s ./register
-	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
-	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=10s ./replica
-	go test -run=^$$ -fuzz=FuzzWireDecoders -fuzztime=10s ./extensions
-	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=10s ./text
-	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=10s ./tree
+	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
+	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./encoding
+	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./counter
+	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./counter
+	go test -run=^$$ -fuzz=FuzzMapUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./lww
+	go test -run=^$$ -fuzz=FuzzGSetUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./set
+	go test -run=^$$ -fuzz=FuzzORSetUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./set
+	go test -run=^$$ -fuzz=FuzzMVRegisterUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./register
+	go test -run=^$$ -fuzz=Fuzz -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./delta
+	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./replica
+	go test -run=^$$ -fuzz=FuzzWireDecoders -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./extensions
+	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
+	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./tree
 
 coverage:
 	COVERAGE_THRESHOLD=90 ./scripts/check-coverage.sh

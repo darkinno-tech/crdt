@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">crdt public architecture: C4 system context</title>
+  <desc id="desc">A C4 level 1 system context diagram for the crdt Go library. Go applications embed the library and own transport, storage, authentication, and membership authority. Peer applications exchange framed state and delta data through an application-selected transport.</desc>
+  <defs>
+    <style>
+      .title { font: 700 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #102a43; }
+      .subtitle { font: 400 17px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #627d98; }
+      .eyebrow { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #486581; letter-spacing: 1.1px; }
+      .box-title { font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #102a43; }
+      .box-copy { font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #334e68; }
+      .box-small { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #486581; }
+      .label { font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #486581; }
+      .note { font: 400 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #7c2d12; }
+      .note-title { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #9a3412; }
+      .key { font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #486581; }
+      .arrow { stroke: #486581; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .arrow-bi { stroke: #486581; stroke-width: 2.4; fill: none; marker-start: url(#arrow-reverse); marker-end: url(#arrow); }
+      .arrow-warn { stroke: #c2410c; stroke-width: 2.2; fill: none; stroke-dasharray: 7 6; marker-end: url(#arrow-warn); }
+    </style>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#102a43" flood-opacity=".13"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0 L0 6 L9 3 z" fill="#486581"/></marker>
+    <marker id="arrow-reverse" markerWidth="10" markerHeight="10" refX="1" refY="3" orient="auto"><path d="M9 0 L9 6 L0 3 z" fill="#486581"/></marker>
+    <marker id="arrow-warn" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0 L0 6 L9 3 z" fill="#c2410c"/></marker>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#f8fafc"/>
+  <text x="80" y="66" class="title">crdt — System Context</text>
+  <text x="80" y="96" class="subtitle">C4 Level 1 · Public architecture · A dependency-free Go library for composable state-based CRDTs</text>
+
+  <!-- C4 key -->
+  <g transform="translate(1194 45)">
+    <rect x="0" y="0" width="326" height="74" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="18" y="24" class="eyebrow">DIAGRAM KEY</text>
+    <rect x="18" y="39" width="15" height="15" rx="3" fill="#e0f2fe" stroke="#0284c7"/>
+    <text x="41" y="52" class="key">System in scope</text>
+    <rect x="171" y="39" width="15" height="15" rx="3" fill="#ffffff" stroke="#94a3b8"/>
+    <text x="194" y="52" class="key">External system</text>
+  </g>
+
+  <!-- Developer -->
+  <g filter="url(#shadow)">
+    <rect x="650" y="145" width="300" height="100" rx="14" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  </g>
+  <text x="678" y="181" class="box-title">Go application developer</text>
+  <text x="678" y="208" class="box-small">Integrates the module and defines</text>
+  <text x="678" y="228" class="box-small">replica IDs, codecs, and policies.</text>
+
+  <!-- Application runtime -->
+  <g filter="url(#shadow)">
+    <rect x="92" y="355" width="378" height="232" rx="16" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  </g>
+  <text x="122" y="394" class="eyebrow">EXTERNAL SOFTWARE SYSTEM</text>
+  <text x="122" y="428" class="box-title">Go application / replica runtime</text>
+  <text x="122" y="460" class="box-copy">Owns the replication workflow.</text>
+  <text x="122" y="492" class="box-small">• Invokes local CRDT APIs</text>
+  <text x="122" y="516" class="box-small">• Selects transport, retries, and storage</text>
+  <text x="122" y="540" class="box-small">• Authenticates and authorizes messages</text>
+  <text x="122" y="564" class="box-small">• Supplies authoritative membership for GC</text>
+
+  <!-- System in scope -->
+  <g filter="url(#shadow)">
+    <rect x="548" y="310" width="504" height="334" rx="18" fill="#e0f2fe" stroke="#0284c7" stroke-width="2.3"/>
+  </g>
+  <text x="582" y="353" class="eyebrow">SYSTEM IN SCOPE · GO MODULE</text>
+  <text x="582" y="392" class="box-title">crdt library</text>
+  <text x="582" y="424" class="box-copy">Provides convergent state and deterministic wire primitives.</text>
+  <path d="M582 448 H1018" stroke="#7dd3fc" stroke-width="1.5"/>
+  <text x="582" y="481" class="box-small">State CRDTs</text>
+  <text x="722" y="481" class="box-small">G-Counter · add-wins OR-Set · HLC tags</text>
+  <text x="582" y="518" class="box-small">Replication data</text>
+  <text x="722" y="518" class="box-small">Canonical, checksummed state and Delta frames</text>
+  <text x="582" y="555" class="box-small">Recovery / anti-entropy</text>
+  <text x="786" y="555" class="box-small">Snapshots · recovery plans · Merkle digests</text>
+  <text x="582" y="592" class="box-small">Safe OR-Set cleanup</text>
+  <text x="764" y="592" class="box-small">Exact tombstone ACK coordination</text>
+  <text x="582" y="622" class="label">Runs in-process; it does not open a listener or persist data.</text>
+
+  <!-- Peers -->
+  <g filter="url(#shadow)">
+    <rect x="1130" y="355" width="378" height="232" rx="16" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  </g>
+  <text x="1160" y="394" class="eyebrow">EXTERNAL SOFTWARE SYSTEM</text>
+  <text x="1160" y="428" class="box-title">Peer applications / replicas</text>
+  <text x="1160" y="460" class="box-copy">Run their own CRDT instances.</text>
+  <text x="1160" y="492" class="box-small">Exchange complete state or Delta frames</text>
+  <text x="1160" y="516" class="box-small">through an application-selected transport.</text>
+  <text x="1160" y="553" class="label">Duplicate and reordered delivery is safe.</text>
+
+  <!-- Storage -->
+  <g filter="url(#shadow)">
+    <rect x="182" y="735" width="380" height="120" rx="15" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  </g>
+  <text x="212" y="771" class="eyebrow">EXTERNAL DATA STORE</text>
+  <text x="212" y="804" class="box-title">Application-managed storage</text>
+  <text x="212" y="830" class="box-small">Atomically persists OR-Set state snapshots and HLC state.</text>
+
+  <!-- Membership -->
+  <g filter="url(#shadow)">
+    <rect x="1038" y="735" width="380" height="120" rx="15" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
+  </g>
+  <text x="1068" y="771" class="eyebrow">EXTERNAL SOFTWARE SYSTEM</text>
+  <text x="1068" y="804" class="box-title">Identity &amp; membership authority</text>
+  <text x="1068" y="830" class="box-small">Provides authenticated active members, group ID, and epoch.</text>
+
+  <!-- Relationships -->
+  <path d="M800 245 V302" class="arrow"/>
+  <text x="817" y="281" class="label">integrates</text>
+  <path d="M470 471 H540" class="arrow"/>
+  <text x="409" y="451" class="label">uses local API</text>
+  <path d="M1060 471 H1122" class="arrow-bi"/>
+  <text x="1068" y="451" class="label">state / Delta frames</text>
+  <path d="M372 587 V727" class="arrow-warn"/>
+  <text x="390" y="671" class="note">application persists</text>
+  <path d="M1228 727 V595" class="arrow-warn"/>
+  <text x="1246" y="671" class="note">authenticated authority</text>
+
+  <!-- Explicit scope note -->
+  <rect x="80" y="895" width="1440" height="65" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="106" y="923" class="note-title">Out of scope</text>
+  <text x="106" y="947" class="note">Network transport, membership discovery, authentication, authorization, encryption, retry policy, and storage implementation remain application responsibilities.</text>
+</svg>

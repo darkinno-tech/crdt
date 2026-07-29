@@ -1,6 +1,6 @@
 # Opt-in WebSocket and HTTP/SSE relay reference
 
-[English](EXTENSIONS.md) | [简体中文](EXTENSIONS.zh-CN.md)
+[English](extensions.md) | [简体中文](extensions.zh-CN.md)
 
 `extensions` is an official, manifest-bound live-relay reference for this Go
 module. It is deliberately opt-in: the zero feature set exposes no endpoint,
@@ -25,7 +25,7 @@ if err := handler.Mount(mux, "/crdt/"); err != nil {
 
 `group` is a manifest-bound `extensions.Group` whose `Apply` callback belongs
 to the host application. The complete, runnable setup—including both required
-authorization callbacks—is in [examples/extensions-provider](examples/extensions-provider):
+authorization callbacks—is in [examples/extensions-provider](../../examples/extensions-provider):
 
 ```sh
 go run ./examples/extensions-provider

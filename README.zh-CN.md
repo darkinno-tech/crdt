@@ -35,7 +35,7 @@
 ## 范围
 
 核心库提供 CRDT 数据类型和线协议基础组件，不负责选择成员协议、认证方案、存储后端或
-重试策略。可选的 [`extensions`](EXTENSIONS.zh-CN.md) 包提供显式启用的 WebSocket 与
+重试策略。可选的 [`extensions`](docs/integration/extensions.zh-CN.md) 包提供显式启用的 WebSocket 与
 HTTP/SSE live relay 参考端点，但它不启动 listener，也不提供持久化、重放、重连、TLS、
 反熵或身份/session 管理；这些仍由应用负责。只有当应用提供权威且经过认证的活跃成员视图后，
 `tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该成员视图。
@@ -232,7 +232,7 @@ func main() {
 ## 端到端集成
 
 可复现的本地 HTTP 投递演练、生产集成检查清单、快照/重启指引，以及应当采集的
-收敛证据，见[端到端集成教程](INTEGRATION.zh-CN.md)。
+收敛证据，见[端到端集成教程](docs/integration/overview.zh-CN.md)。
 [可运行的协作任务看板示例](examples/collaborative-board)演示重复投递、网络分区期间
 的 add/remove 冲突，以及从 OR-Set 快照恢复：
 
@@ -262,7 +262,7 @@ RGA 文本组和附件引用组，使用快照恢复两个接收状态，并在�
 go run ./examples/attachment-collaboration
 ```
 
-[可选传输扩展指南](EXTENSIONS.zh-CN.md)及其[可运行 provider 示例]
+[可选传输扩展指南](docs/integration/extensions.zh-CN.md)及其[可运行 provider 示例]
 (examples/extensions-provider)展示将 WebSocket 与 HTTP/SSE 同时挂载到应用自有 mux 的方式。
 示例先演示 WebSocket 到 HTTP 的投递，再演示 HTTP 到 WebSocket 的投递；它是有边界的
 live relay，不是持久化复制服务：
@@ -271,9 +271,9 @@ live relay，不是持久化复制服务：
 go run ./examples/extensions-provider
 ```
 
-Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](ATTACHMENT_INTEGRATION.zh-CN.md)。
+Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](docs/integration/attachment.zh-CN.md)。
 
-英文版本见 [integration tutorial](INTEGRATION.md)。
+英文版本见 [integration tutorial](docs/integration/overview.md)。
 
 ## 在分布式系统中的正确使用方式
 
@@ -451,12 +451,12 @@ Platinum 8272CL vCPU、3.8 GiB 内存。基准二进制由当前修订以 Go 1.2
 计数图中各有 128 个副本分量。`MarshalBinary` 括号中为其报告的编码吞吐量；三次
 采样的分配数据完全一致。
 
-| 主机 | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
+| 匿名主机 | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
 | --- | ---: | --- | --- | --- | --- |
-| `210.16.171.72` | 1 | 24.9 µs/op；13,136 B；6 allocs | 149.1 ns/op；0 B；0 allocs | 7.51 µs/op；232 B；10 allocs | 69.4 µs/op（55.3 MB/s）；25,680 B；10 allocs |
-| `210.16.171.72` | 4 | 18.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.29 µs/op；232 B；10 allocs | 53.6 µs/op（71.7 MB/s）；25,680 B；10 allocs |
-| `192.140.163.250` | 1 | 25.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.49 µs/op；232 B；10 allocs | 70.4 µs/op（54.6 MB/s）；25,680 B；10 allocs |
-| `192.140.163.250` | 4 | 18.5 µs/op；13,136 B；6 allocs | 153.5 ns/op；0 B；0 allocs | 7.31 µs/op；232 B；10 allocs | 53.3 µs/op（72.1 MB/s）；25,680 B；10 allocs |
+| 主机 A | 1 | 24.9 µs/op；13,136 B；6 allocs | 149.1 ns/op；0 B；0 allocs | 7.51 µs/op；232 B；10 allocs | 69.4 µs/op（55.3 MB/s）；25,680 B；10 allocs |
+| 主机 A | 4 | 18.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.29 µs/op；232 B；10 allocs | 53.6 µs/op（71.7 MB/s）；25,680 B；10 allocs |
+| 主机 B | 1 | 25.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.49 µs/op；232 B；10 allocs | 70.4 µs/op（54.6 MB/s）；25,680 B；10 allocs |
+| 主机 B | 4 | 18.5 µs/op；13,136 B；6 allocs | 153.5 ns/op；0 B；0 allocs | 7.31 µs/op；232 B；10 allocs | 53.3 µs/op（72.1 MB/s）；25,680 B；10 allocs |
 
 `GOMAXPROCS=4` 的各行仍是串行基准测量，不是四核汇总吞吐量。这些受控主机样本
 是当前修订的公开回归证据，不是容量上限或 SLA 承诺；确定生产限制前，请在部署
