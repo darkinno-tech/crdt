@@ -8,19 +8,20 @@ separate layers:
    v1 outer frame. It validates magic, version, shortest varints, lengths and
    CRC-32C under explicit limits. It returns opaque codec bytes and does not
    treat a checksum as authentication.
-2. `cmd/crdt-rga-wasm` compiles the existing Go RGA v1 implementation to
-   Wasm. Local edits produce canonical delta frames; incoming frames go
+2. `cmd/crdt-rga-wasm` compiles the existing Go RGA implementation to Wasm.
+   The default artifact uses compact run-v2 frames, matching new Go RGA
+   groups. Local edits produce canonical delta frames; incoming frames go
    through the same bounded Go decoder and merge semantics as server-side Go.
 
-The RGA protocol is still experimental. Before loading or applying an RGA
-frame, the application must authenticate a matching `replica.Manifest`, group,
-schema, epoch, codec, semantic version, and `ProtocolPolicy` capability. The
-runtime accepts only RGA v1 state/delta type IDs 11/12; it deliberately rejects
-run-v2 IDs 19/20 until a separate client capability is designed and negotiated.
-New Go RGA groups select run-v2 through `crdt.DefaultRGAFrameType()`, so this
-client cannot join them. A manifest represents one concrete protocol: use an
-explicitly negotiated v1 group with `AllowExperimental`, or wait for a
-separately negotiated run-v2 client implementation.
+The RGA protocol still requires explicit compatibility admission. Before
+loading or applying an RGA frame, authenticate a matching `replica.Manifest`,
+group, schema, epoch, codec, semantic version, and `ProtocolPolicy` capability.
+The default artifact accepts and emits only run-v2 state/delta IDs 19/20 with
+semantics version 2, matching `crdt.DefaultRGAFrameType()`. It deliberately
+rejects scalar-v1 IDs 11/12. A manifest represents one concrete protocol, and
+the TypeScript loader checks the expected contract before exposing a runtime.
+For an explicitly negotiated legacy v1 group, build `make wasm-v1` and pass
+`RGA_PROTOCOL_V1`; do not place both formats in one document runtime.
 
 ## Build and verify
 
@@ -28,8 +29,10 @@ From the repository root:
 
 ```sh
 make wasm
+make wasm-v1 # optional legacy scalar-v1 artifact in .tmp/crdt-rga-v1-wasm/
 make typescript-test
 make wasm-test
+make wasm-v1-test # verifies the separately built legacy artifact
 make typescript-benchmark
 make wasm-benchmark
 ```
@@ -55,14 +58,20 @@ Load the generated Go support file before importing the TypeScript wrapper:
 ```html
 <script src="/assets/wasm_exec.js"></script>
 <script type="module">
-  import { decodeFrame, FrameType, initRGAWasm } from "/assets/crdt-client/index.js";
+  import {
+    decodeFrame, FrameType, initRGAWasm, RGA_PROTOCOL_RUN_V2,
+  } from "/assets/crdt-client/index.js";
 
-  const runtime = await initRGAWasm({ wasmURL: "/assets/crdt-rga.wasm" });
+  // Bind this expected protocol to the authenticated manifest for the group.
+  const runtime = await initRGAWasm({
+    wasmURL: "/assets/crdt-rga.wasm",
+    expectedProtocol: RGA_PROTOCOL_RUN_V2,
+  });
   const document = runtime.create("browser-replica-7");
 
   // Apply locally first, then place these same bytes in an authenticated outbox.
   const delta = document.insert(0, "local collaborative edit");
-  if (decodeFrame(delta).typeID !== FrameType.RGADelta) throw new Error("wrong frame");
+  if (decodeFrame(delta).typeID !== FrameType.RGARunDelta) throw new Error("wrong frame");
   await sendAuthenticatedDelta(delta);
 
   // On receipt, authenticate and verify the manifest before calling applyDelta.
@@ -98,16 +107,17 @@ engine.
 ## 中文说明
 
 该目录为浏览器和 JavaScript/WebView 客户端提供本地 RGA 合并能力，而不是把编辑
-退化为服务端仲裁。TypeScript 只负责有界的通用 frame 外层解码；真正的 RGA v1
-编辑、乱序处理、墓碑和 HLC 语义复用同一份 Go 代码编译出的 Wasm，因此不会维护一份
-容易漂移的第二实现。
+退化为服务端仲裁。TypeScript 只负责有界的通用 frame 外层解码；默认 Wasm 产物复用
+同一份 Go 代码的 run-v2 编辑、乱序处理、墓碑和 HLC 语义，因此不会维护一份容易漂移的
+第二实现。
 
-RGA 仍是实验协议：先认证 `replica.Manifest`（group、schema、epoch、codec、语义
-版本和能力），再接收 TypeID 11/12；校验和不等于身份验证。`snapshot()` 的
+RGA 仍需要显式协商：先认证 `replica.Manifest`（group、schema、epoch、codec、语义
+版本和能力），再接收 frame；校验和不等于身份验证。默认 Wasm 产物只接收/发出
+TypeID 19/20、语义版本 2 的 run-v2，和新建 Go RGA 组的
+`crdt.DefaultRGAFrameType()` 一致；TypeScript loader 也会校验期望协议。`snapshot()` 的
 `state`、`clock`、`frontier` 必须原子持久化。默认限制为 1 MiB frame、10 万
 node/tag、1 万个待父节点和 512 KiB 待处理元数据；单次本地插入额外限制为 64 KiB 且
-16,384 rune，超出时应按顺序拆分编辑事务。没有 Wasm 运行时的原生移动端仍需
-Go Mobile 绑定或经过独立跨语言验证的语义实现，不能把 frame 解码器误当成本地合并器。
-新建 Go RGA 组会经由 `crdt.DefaultRGAFrameType()` 选择 run-v2，因此本客户端不能加入。
-一个 Manifest 只代表一种具体协议：请显式协商带 `AllowExperimental` 的 v1 组，或等待单独
-协商的 run-v2 客户端实现。
+16,384 rune，超出时应按顺序拆分编辑事务。旧 v1 组只能显式执行 `make wasm-v1` 并传入
+`RGA_PROTOCOL_V1`；不要在同一 document runtime 混用两种格式。没有 Wasm 运行时的原生
+移动端仍需 Go Mobile 绑定或经过独立跨语言验证的语义实现，不能把 frame 解码器误当成本地
+合并器。
