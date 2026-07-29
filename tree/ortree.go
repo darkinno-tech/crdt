@@ -18,6 +18,8 @@ var (
 	ErrInvalidDelta     = errors.New("tree: invalid delta")
 	ErrIncompleteState  = errors.New("tree: incomplete OR-Tree state")
 	ErrNodeConflict     = errors.New("tree: conflicting node identity")
+	ErrResourceLimit    = errors.New("tree: OR-Tree resource limit exceeded")
+	ErrUnsafeCompaction = errors.New("tree: unsafe OR-Tree tombstone compaction")
 )
 
 // NodeID is an immutable node-instance identity. The zero ID is the synthetic root.
@@ -38,12 +40,32 @@ type Delta struct {
 	tombstones map[NodeID]struct{}
 }
 
+// Options bounds retained OR-Tree state. Applications handling untrusted
+// peers should set limits for the replication group rather than rely on
+// process-wide memory availability.
+type Options struct {
+	MaxNodes      int
+	MaxTombstones int
+	MaxValueBytes int
+}
+
+// DefaultOptions returns conservative retention limits that align with one
+// default frame's element and value limits.
+func DefaultOptions() Options {
+	return Options{MaxNodes: 1 << 20, MaxTombstones: 1 << 20, MaxValueBytes: 1 << 20}
+}
+
+func (o Options) valid() bool {
+	return o.MaxNodes > 0 && o.MaxTombstones > 0 && o.MaxValueBytes > 0
+}
+
 // ORTree supports add and observed-remove. Moving a node is deliberately not
 // an in-place operation: remove it and add a new instance under the new parent.
 type ORTree struct {
 	mu         sync.RWMutex
 	replicaID  string
 	clock      *clock.HLC
+	options    Options
 	nodes      map[NodeID]storedNode
 	tombstones map[NodeID]struct{}
 	version    uint64
@@ -57,16 +79,32 @@ type ORTree struct {
 var _ crdt.CRDT[*ORTree] = (*ORTree)(nil)
 var _ crdt.DeltaCapable[*ORTree, Delta] = (*ORTree)(nil)
 
-func New(replicaID string) (*ORTree, error) { return NewFromClock(clock.State{ReplicaID: replicaID}) }
+func New(replicaID string) (*ORTree, error) { return NewWithOptions(replicaID, DefaultOptions()) }
+
+// NewWithOptions constructs an OR-Tree with explicit retained-state limits.
+func NewWithOptions(replicaID string, options Options) (*ORTree, error) {
+	return NewFromClockWithOptions(clock.State{ReplicaID: replicaID}, options)
+}
+
 func NewFromClock(state clock.State) (*ORTree, error) {
+	return NewFromClockWithOptions(state, DefaultOptions())
+}
+
+// NewFromClockWithOptions restores an OR-Tree clock with explicit
+// retained-state limits. Persist the clock atomically with a complete state
+// before reusing its replica ID.
+func NewFromClockWithOptions(state clock.State, options Options) (*ORTree, error) {
 	if !(crdt.Tag{ReplicaID: state.ReplicaID}).Valid() {
 		return nil, ErrInvalidReplicaID
+	}
+	if !options.valid() {
+		return nil, ErrResourceLimit
 	}
 	hlc, err := clock.NewHLCFromState(state)
 	if err != nil {
 		return nil, err
 	}
-	return &ORTree{replicaID: state.ReplicaID, clock: hlc, nodes: make(map[NodeID]storedNode), tombstones: make(map[NodeID]struct{})}, nil
+	return &ORTree{replicaID: state.ReplicaID, clock: hlc, options: options, nodes: make(map[NodeID]storedNode), tombstones: make(map[NodeID]struct{})}, nil
 }
 func (t *ORTree) ClockState() clock.State {
 	if t == nil || t.clock == nil {
@@ -79,6 +117,9 @@ func (t *ORTree) Add(parent NodeID, value []byte) (NodeID, Delta, error) {
 	if t == nil || t.clock == nil {
 		return NodeID{}, Delta{}, ErrNilTree
 	}
+	if len(value) > t.options.MaxValueBytes {
+		return NodeID{}, Delta{}, ErrResourceLimit
+	}
 	id, err := t.clock.Now()
 	if err != nil {
 		return NodeID{}, Delta{}, err
@@ -86,6 +127,9 @@ func (t *ORTree) Add(parent NodeID, value []byte) (NodeID, Delta, error) {
 	node := storedNode{parent: parent, value: append([]byte(nil), value...)}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(t.nodes) >= t.options.MaxNodes {
+		return NodeID{}, Delta{}, ErrResourceLimit
+	}
 	if parent.Valid() && !liveReachable(parent, t.nodes, t.tombstones) {
 		return NodeID{}, Delta{}, ErrUnknownParent
 	}
@@ -118,6 +162,11 @@ func (t *ORTree) ApplyDelta(delta Delta) error {
 	if err := validate(delta); err != nil {
 		return err
 	}
+	for _, incoming := range delta.nodes {
+		if len(incoming.value) > t.options.MaxValueBytes {
+			return ErrResourceLimit
+		}
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !acyclic(delta.nodes, t.nodes) {
@@ -127,6 +176,10 @@ func (t *ORTree) ApplyDelta(delta Delta) error {
 		if current, exists := t.nodes[id]; exists && (current.parent != incoming.parent || string(current.value) != string(incoming.value)) {
 			return ErrNodeConflict
 		}
+	}
+	if len(t.nodes)+newTreeNodes(delta.nodes, t.nodes) > t.options.MaxNodes ||
+		len(t.tombstones)+newTreeTombstones(delta.tombstones, t.tombstones) > t.options.MaxTombstones {
+		return ErrResourceLimit
 	}
 	if tag, ok := greatest(delta); ok {
 		if err := t.clock.Witness(tag); err != nil {
@@ -215,6 +268,68 @@ func (t *ORTree) State() crdt.StateSnapshot {
 	return state
 }
 
+// TombstoneTags returns every retained deletion tag in canonical order. It is
+// an exact-acknowledgement input, not proof that a tombstone is safe to
+// compact.
+func (t *ORTree) TombstoneTags() []NodeID {
+	if t == nil {
+		return nil
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return sortedTreeTombstoneIDs(t.tombstones)
+}
+
+// CompactTombstones removes exactly the requested tombstoned leaf nodes.
+// Call it only after the current membership epoch has durably recorded exact
+// acknowledgements, a post-compaction checkpoint, and retirement of old
+// deltas. Any known child makes a deleted node a structural anchor, so the
+// operation is all-or-nothing for that request.
+func (t *ORTree) CompactTombstones(tags []NodeID) (int, error) {
+	if t == nil {
+		return 0, ErrNilTree
+	}
+	for _, tag := range tags {
+		if !tag.Valid() {
+			return 0, ErrUnsafeCompaction
+		}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	children := make(map[NodeID]struct{}, len(t.nodes))
+	for _, node := range t.nodes {
+		if node.parent.Valid() {
+			children[node.parent] = struct{}{}
+		}
+	}
+	compact := make([]NodeID, 0, len(tags))
+	seen := make(map[NodeID]struct{}, len(tags))
+	for _, tag := range tags {
+		if _, duplicate := seen[tag]; duplicate {
+			continue
+		}
+		seen[tag] = struct{}{}
+		if _, tombstoned := t.tombstones[tag]; !tombstoned {
+			continue
+		}
+		if _, exists := t.nodes[tag]; !exists {
+			return 0, ErrUnsafeCompaction
+		}
+		if _, hasChild := children[tag]; hasChild {
+			return 0, ErrUnsafeCompaction
+		}
+		compact = append(compact, tag)
+	}
+	for _, tag := range compact {
+		delete(t.nodes, tag)
+		delete(t.tombstones, tag)
+	}
+	if len(compact) > 0 {
+		t.version++
+	}
+	return len(compact), nil
+}
+
 func validate(delta Delta) error {
 	for id, node := range delta.nodes {
 		if !id.Valid() || id == node.parent || (node.parent != (NodeID{}) && !node.parent.Valid()) {
@@ -295,7 +410,7 @@ func greatest(delta Delta) (NodeID, bool) {
 	return greatest, ok
 }
 func visible(nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}) []Node {
-	children := make(map[NodeID][]NodeID)
+	children := make(map[NodeID][]NodeID, len(nodes))
 	for id, node := range nodes {
 		children[node.parent] = append(children[node.parent], id)
 	}
@@ -304,7 +419,7 @@ func visible(nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}) []Node
 	}
 	stack := append([]NodeID(nil), children[NodeID{}]...)
 	reverse(stack)
-	result := []Node{}
+	result := make([]Node, 0, len(nodes))
 	for len(stack) > 0 {
 		index := len(stack) - 1
 		id := stack[index]
@@ -362,4 +477,24 @@ func cloneTombstones(source map[NodeID]struct{}) map[NodeID]struct{} {
 		out[id] = struct{}{}
 	}
 	return out
+}
+
+func newTreeNodes(incoming, existing map[NodeID]storedNode) int {
+	count := 0
+	for id := range incoming {
+		if _, exists := existing[id]; !exists {
+			count++
+		}
+	}
+	return count
+}
+
+func newTreeTombstones(incoming, existing map[NodeID]struct{}) int {
+	count := 0
+	for id := range incoming {
+		if _, exists := existing[id]; !exists {
+			count++
+		}
+	}
+	return count
 }

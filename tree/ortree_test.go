@@ -55,6 +55,69 @@ func TestORTreeConvergesWithRemoveAndOutOfOrderDelivery(t *testing.T) {
 	}
 }
 
+// TestORTreeTombstoneLifecycleSurvivesOutOfOrderRecovery ensures a parent
+// tombstone remains an observed-remove barrier across the full lifecycle:
+// delayed child/parent frames, a persisted checkpoint, and duplicate replay.
+// Before a rebase, retaining this tombstone is required to prevent an old
+// anchor from making its hidden subtree visible again.
+func TestORTreeTombstoneLifecycleSurvivesOutOfOrderRecovery(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, parentDelta, err := source.Add(NodeID{}, []byte("parent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, childDelta, err := source.Add(parent, []byte("child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeDelta, err := source.Remove(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delta := range []Delta{removeDelta, childDelta, parentDelta, childDelta, parentDelta, removeDelta} {
+		if err := target.ApplyDelta(delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if nodes := target.Nodes(); len(nodes) != 0 {
+		t.Fatalf("delayed frames resurrected hidden subtree: %#v", nodes)
+	}
+	if state := target.State(); state.ElementCount != 0 || state.TombstoneCount != 1 {
+		t.Fatalf("tombstone state = %#v", state)
+	}
+
+	saved, err := target.SnapshotCurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := NewFromSnapshot(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, delta := range []Delta{parentDelta, childDelta, removeDelta} {
+		if err := recovered.ApplyDelta(delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if nodes := recovered.Nodes(); len(nodes) != 0 {
+		t.Fatalf("replayed frames resurrected checkpointed subtree: %#v", nodes)
+	}
+	if state := recovered.State(); state.ElementCount != 0 || state.TombstoneCount != 1 {
+		t.Fatalf("recovered tombstone state = %#v", state)
+	}
+	if _, _, err := recovered.Add(child, []byte("grandchild")); !errors.Is(err, ErrUnknownParent) {
+		t.Fatalf("Add below tombstoned ancestor = %v, want %v", err, ErrUnknownParent)
+	}
+}
+
 func TestORTreeRejectsUnknownParentsAndCycles(t *testing.T) {
 	value, err := New("local")
 	if err != nil {
@@ -214,6 +277,135 @@ func TestORTreeRejectsAddBelowHiddenAncestor(t *testing.T) {
 	}
 	if _, _, err := value.Add(child, []byte("hidden")); !errors.Is(err, ErrUnknownParent) {
 		t.Fatalf("Add below hidden ancestor = %v, want %v", err, ErrUnknownParent)
+	}
+}
+
+func TestORTreeOptionsRejectResourceLimitsAtomically(t *testing.T) {
+	limits := Options{MaxNodes: 1, MaxTombstones: 1, MaxValueBytes: 2}
+	if _, err := NewWithOptions("invalid", Options{}); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("NewWithOptions(invalid) = %v", err)
+	}
+
+	value, err := NewWithOptions("limited", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _, err := value.Add(NodeID{}, []byte("ok"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := value.Add(root, nil); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("Add over node limit = %v", err)
+	}
+	if _, _, err := value.Add(NodeID{}, []byte("long")); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("Add over value limit = %v", err)
+	}
+	if nodes := value.Nodes(); len(nodes) != 1 || nodes[0].ID != root {
+		t.Fatalf("rejected Add changed state: %#v", nodes)
+	}
+	if _, err := value.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	extraTombstone := NodeID{ReplicaID: "remote", WallTime: 1}
+	if err := value.ApplyDelta(Delta{nodes: map[NodeID]storedNode{}, tombstones: map[NodeID]struct{}{extraTombstone: {}}}); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("ApplyDelta over tombstone limit = %v", err)
+	}
+	if tags := value.TombstoneTags(); len(tags) != 1 || tags[0] != root {
+		t.Fatalf("rejected tombstone delta changed state: %#v", tags)
+	}
+
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceRoot, sourceRootDelta, err := source.Add(NodeID{}, []byte("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sourceChildDelta, err := source.Add(sourceRoot, []byte("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined, err := sourceRootDelta.Merge(sourceChildDelta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := NewWithOptions("target", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(combined); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("ApplyDelta over node limit = %v", err)
+	}
+	if nodes := target.Nodes(); len(nodes) != 0 {
+		t.Fatalf("rejected node delta changed state: %#v", nodes)
+	}
+	oversized := Delta{nodes: map[NodeID]storedNode{{ReplicaID: "remote", WallTime: 2}: {value: []byte("long")}}, tombstones: map[NodeID]struct{}{}}
+	if err := target.ApplyDelta(oversized); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("ApplyDelta over value limit = %v", err)
+	}
+
+	state, err := source.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.UnmarshalBinary(state); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("UnmarshalBinary over node limit = %v", err)
+	}
+	if nodes := target.Nodes(); len(nodes) != 0 {
+		t.Fatalf("rejected state changed receiver: %#v", nodes)
+	}
+	saved, err := source.SnapshotCurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFromSnapshotWithOptions(saved, limits); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("NewFromSnapshotWithOptions over node limit = %v", err)
+	}
+}
+
+func TestORTreeCompactTombstonesOnlyRemovesExactLeaves(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _, err := value.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, _, err := value.Add(root, []byte("child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := value.CompactTombstones([]NodeID{root}); !errors.Is(err, ErrUnsafeCompaction) || removed != 0 {
+		t.Fatalf("CompactTombstones(parent) = %d, %v", removed, err)
+	}
+	if _, err := value.Remove(child); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := value.CompactTombstones([]NodeID{root, child}); !errors.Is(err, ErrUnsafeCompaction) || removed != 0 {
+		t.Fatalf("CompactTombstones(parent and child) = %d, %v", removed, err)
+	}
+	if state := value.State(); state.TombstoneCount != 2 {
+		t.Fatalf("failed compact changed tombstones: %#v", state)
+	}
+	if removed, err := value.CompactTombstones([]NodeID{child, child}); err != nil || removed != 1 {
+		t.Fatalf("CompactTombstones(child) = %d, %v", removed, err)
+	}
+	if removed, err := value.CompactTombstones([]NodeID{root}); err != nil || removed != 1 {
+		t.Fatalf("CompactTombstones(root) = %d, %v", removed, err)
+	}
+	if state := value.State(); state.ElementCount != 0 || state.TombstoneCount != 0 {
+		t.Fatalf("compacted state = %#v", state)
+	}
+	if removed, err := value.CompactTombstones([]NodeID{{ReplicaID: "unknown", WallTime: 1}}); err != nil || removed != 0 {
+		t.Fatalf("CompactTombstones(unknown) = %d, %v", removed, err)
+	}
+	if removed, err := value.CompactTombstones([]NodeID{{}}); !errors.Is(err, ErrUnsafeCompaction) || removed != 0 {
+		t.Fatalf("CompactTombstones(invalid) = %d, %v", removed, err)
 	}
 }
 

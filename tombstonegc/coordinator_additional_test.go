@@ -1,6 +1,10 @@
 package tombstonegc
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/DarkInno/crdt/tree"
+)
 
 func TestCoordinatorPreventsResurrectionWhenRemoteHasOldAdd(t *testing.T) {
 	t.Parallel()
@@ -58,5 +62,50 @@ func TestCoordinatorPreventsResurrectionWhenRemoteHasOldAdd(t *testing.T) {
 	}
 	if removed, err := coordinator.AcknowledgeAndCompact(groupID, "remote", epoch, remote.TombstoneTags(), source); err != nil || removed != 1 {
 		t.Fatalf("exact acknowledgement compacted = %d, %v; want 1, nil", removed, err)
+	}
+}
+
+func TestCoordinatorCompactsORTreeLeafOnlyAfterExactAcknowledgements(t *testing.T) {
+	source, err := tree.New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, add, err := source.Add(tree.NodeID{}, []byte("leaf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remove, err := source.Remove(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := tree.New("remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The remove is deliberately delivered first to model an unreliable link.
+	if err := remote.ApplyDelta(remove); err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.ApplyDelta(add); err != nil {
+		t.Fatal(err)
+	}
+
+	const groupID = "document/tree/v1"
+	coordinator, err := NewCoordinator[struct{}](groupID, []string{"source", "remote"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := coordinator.Membership().Epoch
+	if removed, err := coordinator.AcknowledgeAndCompactTarget(groupID, "source", epoch, source.TombstoneTags(), source); err != nil || removed != 0 {
+		t.Fatalf("source acknowledgement compacted = %d, %v; want 0, nil", removed, err)
+	}
+	if removed, err := coordinator.AcknowledgeAndCompactTarget(groupID, "remote", epoch, remote.TombstoneTags(), source); err != nil || removed != 1 {
+		t.Fatalf("remote acknowledgement compacted = %d, %v; want 1, nil", removed, err)
+	}
+	if state := source.State(); state.ElementCount != 0 || state.TombstoneCount != 0 {
+		t.Fatalf("compacted tree state = %#v", state)
+	}
+	if removed, err := coordinator.AcknowledgeAndCompactTarget(groupID, "remote", epoch, nil, nil); err != ErrNilTarget || removed != 0 {
+		t.Fatalf("nil target acknowledgement = %d, %v; want 0, %v", removed, err, ErrNilTarget)
 	}
 }
