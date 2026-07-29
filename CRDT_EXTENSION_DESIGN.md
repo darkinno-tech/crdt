@@ -33,6 +33,7 @@ those types are a release gate before they become stable.
 | LWW-Map | largest HLC tag per string key | set/delete | O(changed keys) | deleted entries and tags |
 | RGA text v1 | union nodes plus tombstones; sibling IDs sort by descending tag | insert/delete by rune offset | O(log n) offset lookup; O(n) render | deleted structural anchors |
 | OR-Tree | union immutable parent links plus tombstones | add/remove node instance | O(changed nodes); O(nodes) projection | deleted structural anchors |
+| Attachment reference | largest HLC tag per application key | put/delete immutable object reference | O(changed keys) | deleted entries and tags; no media bytes |
 
 LWW deliberately has no hidden "add wins" tie. `crdt.Tag.Compare` orders wall
 time, logical counter, then replica ID. Every replica ID is globally unique and
@@ -86,6 +87,13 @@ network-replicable library primitive:
   tombstones at the transport/application boundary. Checksums detect corruption
   only; authentication, authorization, encryption, rate limits, and quotas
   remain the embedding application's responsibility.
+- Images, audio, video, and files are replicated as `attachment.Reference`
+  metadata only: opaque object ID, canonical MIME type, declared size, and
+  SHA-256 digest. The application owns object authorization, malware/content
+  scanning, delivery quotas, and digest verification before decode/render.
+  `attachment.Register` uses the experimental LWW-Map TypeIDs 9/10 under a
+  distinct manifest schema and semantics version; raw or signed media URLs
+  never belong in CRDT values.
 
 ## Verification matrix
 
