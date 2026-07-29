@@ -8,6 +8,13 @@ despite duplicate delivery, reordering, and temporary partitions.
 
 > Status: stable releases are published from `main`; APIs follow semantic versioning.
 
+## Architecture at a glance
+
+![Conceptual architecture comparison of crdt and Yjs](assets/crdt_vs_yjs_architecture.svg)
+
+This is a conceptual comparison of integration boundaries, not a wire-compatibility,
+feature-parity, or performance claim.
+
 ## Features
 
 - State-based **G-Counter** with joinable, type-isolated deltas.
@@ -230,8 +237,27 @@ from an OR-Set snapshot:
 go run ./examples/collaborative-board
 ```
 
+The [warehouse replication example](examples/warehouse-replication) shows
+framed G-Set and MV-Register deltas, duplicate delivery, concurrent register
+values, and safe MV-Register recovery before reusing a replica ID:
+
+```sh
+go run ./examples/warehouse-replication
+```
+
+The [experimental collaboration example](examples/experimental-collaboration)
+uses low, explicit receive and RGA retention limits for LWW-Map, RGA, and
+OR-Tree. Run it only after the replication group has completed the
+authenticated experimental-protocol handshake described above:
+
+```sh
+go run ./examples/experimental-collaboration
+```
+
 For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
-[协作任务示例](examples/collaborative-board).
+[协作任务示例](examples/collaborative-board) and
+[仓库复制示例](examples/warehouse-replication) and
+[实验协作示例](examples/experimental-collaboration).
 
 ## Correct use in a distributed system
 

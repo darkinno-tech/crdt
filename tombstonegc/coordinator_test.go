@@ -181,11 +181,127 @@ func TestCoordinatorAcknowledgesSetAndNilCoordinatorFailsClosed(t *testing.T) {
 	if got := nilCoordinator.Membership(); got.Epoch != 0 || len(got.Members) != 0 {
 		t.Fatalf("nil Membership() = %#v", got)
 	}
+	if got := nilCoordinator.AcknowledgementStats(); got != (AcknowledgementStats{}) {
+		t.Fatalf("nil AcknowledgementStats() = %#v", got)
+	}
 	if _, err := nilCoordinator.ReplaceMembership([]string{"source"}); !errors.Is(err, ErrInvalidMembership) {
 		t.Fatalf("nil ReplaceMembership() error = %v, want %v", err, ErrInvalidMembership)
 	}
 	if err := nilCoordinator.Acknowledge(groupID, "source", 1, nil); !errors.Is(err, ErrInvalidMembership) {
 		t.Fatalf("nil Acknowledge() error = %v, want %v", err, ErrInvalidMembership)
+	}
+	if _, err := nilCoordinator.PruneAcknowledgements(groupID, 1, nil); !errors.Is(err, ErrInvalidMembership) {
+		t.Fatalf("nil PruneAcknowledgements() error = %v, want %v", err, ErrInvalidMembership)
+	}
+}
+
+func TestCoordinatorCountsOnlyNewAcknowledgementsAndResetsForNewEpoch(t *testing.T) {
+	t.Parallel()
+	const groupID = "orders/v1"
+	tag := crdt.Tag{ReplicaID: "source", WallTime: 1}
+	coordinator, err := NewCoordinator[string](groupID, []string{"source", "remote"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	membership := coordinator.Membership()
+	if err := coordinator.Acknowledge(groupID, "source", membership.Epoch, []crdt.Tag{tag, tag}); err != nil {
+		t.Fatal(err)
+	}
+
+	coordinator.membershipMu.RLock()
+	coordinator.acknowledgementMu.Lock()
+	if got := coordinator.acknowledgementCounts[tag]; got != 1 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("source acknowledgement count = %d, want 1", got)
+	}
+	if stable := coordinator.stableTombstonesLocked([]crdt.Tag{tag}); len(stable) != 0 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("stable tombstones after one member = %#v, want none", stable)
+	}
+	coordinator.acknowledgementMu.Unlock()
+	coordinator.membershipMu.RUnlock()
+
+	if err := coordinator.Acknowledge(groupID, "remote", membership.Epoch, []crdt.Tag{tag, tag}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.membershipMu.RLock()
+	coordinator.acknowledgementMu.Lock()
+	if got := coordinator.acknowledgementCounts[tag]; got != 2 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("all-member acknowledgement count = %d, want 2", got)
+	}
+	if stable := coordinator.stableTombstonesLocked([]crdt.Tag{tag}); len(stable) != 1 || stable[0] != tag {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("stable tombstones = %#v, want %#v", stable, []crdt.Tag{tag})
+	}
+	coordinator.acknowledgementMu.Unlock()
+	coordinator.membershipMu.RUnlock()
+
+	if _, err := coordinator.ReplaceMembership([]string{"source", "replacement"}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.membershipMu.RLock()
+	coordinator.acknowledgementMu.Lock()
+	if got := len(coordinator.acknowledgementCounts); got != 0 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("acknowledgement counts after membership replacement = %d, want 0", got)
+	}
+	coordinator.acknowledgementMu.Unlock()
+	coordinator.membershipMu.RUnlock()
+}
+
+func TestCoordinatorPrunesAcknowledgementsFailClosed(t *testing.T) {
+	t.Parallel()
+	codec := stringCodec{}
+	target := mustSet(t, "source", codec)
+	if _, err := target.Add("item"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := target.Remove("item"); err != nil {
+		t.Fatal(err)
+	}
+	tags := target.TombstoneTags()
+	const groupID = "orders/v1"
+	coordinator, err := NewCoordinator[string](groupID, []string{"source", "remote"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	membership := coordinator.Membership()
+	for _, member := range membership.Members {
+		if err := coordinator.Acknowledge(groupID, member, membership.Epoch, tags); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stats := coordinator.AcknowledgementStats(); stats.Tags != 1 || stats.Entries != 2 || stats.Members != 2 {
+		t.Fatalf("acknowledgement stats before prune = %#v", stats)
+	}
+	if removed, err := coordinator.PruneAcknowledgements(groupID, membership.Epoch, tags); err != nil || removed != 2 {
+		t.Fatalf("PruneAcknowledgements() = %d, %v; want 2, nil", removed, err)
+	}
+	if stats := coordinator.AcknowledgementStats(); stats.Tags != 0 || stats.Entries != 0 {
+		t.Fatalf("acknowledgement stats after prune = %#v", stats)
+	}
+
+	if removed, err := coordinator.AcknowledgeAndCompact(groupID, "source", membership.Epoch, tags, target); err != nil || removed != 0 {
+		t.Fatalf("first post-prune acknowledgement = %d, %v; want 0, nil", removed, err)
+	}
+	if removed, err := coordinator.AcknowledgeAndCompact(groupID, "remote", membership.Epoch, tags, target); err != nil || removed != 1 {
+		t.Fatalf("second post-prune acknowledgement = %d, %v; want 1, nil", removed, err)
+	}
+
+	if _, err := coordinator.PruneAcknowledgements("other-group", membership.Epoch, tags); !errors.Is(err, ErrGroupMismatch) {
+		t.Fatalf("wrong-group prune error = %v, want %v", err, ErrGroupMismatch)
+	}
+	if _, err := coordinator.PruneAcknowledgements(groupID, membership.Epoch+1, tags); !errors.Is(err, ErrStaleMembership) {
+		t.Fatalf("stale prune error = %v, want %v", err, ErrStaleMembership)
+	}
+	if _, err := coordinator.PruneAcknowledgements(groupID, membership.Epoch, []crdt.Tag{{}}); !errors.Is(err, ErrInvalidTag) {
+		t.Fatalf("invalid-tag prune error = %v, want %v", err, ErrInvalidTag)
 	}
 }
 

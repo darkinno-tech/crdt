@@ -17,8 +17,12 @@ var ErrInvalidState = errors.New("merkle: invalid canonical state frame")
 // state bytes. Tree is safe for concurrent use, but is not a transport
 // protocol or an authority on state validity.
 type Tree struct {
-	mu      sync.RWMutex
-	entries map[string][sha256.Size]byte
+	mu            sync.RWMutex
+	entries       map[string][sha256.Size]byte
+	generation    uint64
+	cachedRoot    [sha256.Size]byte
+	cachedRootFor uint64
+	hasCachedRoot bool
 }
 
 func NewTree() *Tree { return &Tree{entries: make(map[string][sha256.Size]byte)} }
@@ -27,9 +31,14 @@ func (t *Tree) Insert(key string, value []byte) {
 	if t == nil {
 		return
 	}
+	digest := sha256.Sum256(value)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.entries[key] = sha256.Sum256(value)
+	if current, exists := t.entries[key]; exists && current == digest {
+		return
+	}
+	t.entries[key] = digest
+	t.invalidateRootLocked()
 }
 
 // Delete removes key from t. It is safe to call for a missing key.
@@ -39,7 +48,11 @@ func (t *Tree) Delete(key string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if _, exists := t.entries[key]; !exists {
+		return
+	}
 	delete(t.entries, key)
+	t.invalidateRootLocked()
 }
 
 // InsertState validates state as a complete CRDT frame envelope before
@@ -54,15 +67,44 @@ func (t *Tree) InsertState(key string, state []byte) error {
 }
 
 // Root returns a deterministic binary Merkle root over sorted key/value
-// digests. Leaf and inner-node domain separators prevent structural
-// ambiguity; an odd node is paired with a zero digest at that level.
+// digests. It caches the result for the current immutable tree generation, so
+// repeated anti-entropy checks do not re-copy, sort, and hash unchanged state.
+// Leaf and inner-node domain separators prevent structural ambiguity; an odd
+// node is paired with a zero digest at that level.
 func (t *Tree) Root() [sha256.Size]byte {
 	if t == nil {
 		return emptyRoot()
 	}
 	t.mu.RLock()
+	if t.hasCachedRoot && t.cachedRootFor == t.generation {
+		root := t.cachedRoot
+		t.mu.RUnlock()
+		return root
+	}
 	entries := cloneEntries(t.entries)
+	generation := t.generation
 	t.mu.RUnlock()
+	root := rootForEntries(entries)
+
+	// Do not install a root calculated from an older snapshot after a writer
+	// has advanced the generation. Returning it is still correct for the
+	// captured snapshot, and the next call will calculate the current root.
+	t.mu.Lock()
+	if t.generation == generation {
+		t.cachedRoot = root
+		t.cachedRootFor = generation
+		t.hasCachedRoot = true
+	}
+	t.mu.Unlock()
+	return root
+}
+
+func (t *Tree) invalidateRootLocked() {
+	t.generation++
+	t.hasCachedRoot = false
+}
+
+func rootForEntries(entries map[string][sha256.Size]byte) [sha256.Size]byte {
 	keys := make([]string, 0, len(entries))
 	for key := range entries {
 		keys = append(keys, key)
@@ -108,6 +150,9 @@ func Diff(left, right *Tree) (leftOnly, rightOnly, different []string) {
 	}
 	if right == nil {
 		right = NewTree()
+	}
+	if left.Root() == right.Root() {
+		return nil, nil, nil
 	}
 	left.mu.RLock()
 	leftEntries := cloneEntries(left.entries)

@@ -29,11 +29,8 @@ func NewBatch(items [][]byte, maxBytes int) (Batch, error) {
 	batch := Batch{items: make([][]byte, 0, len(items))}
 	total := 0
 	for _, item := range items {
-		if len(item) == 0 || len(item) > maxBytes-total {
-			return Batch{}, ErrLimit
-		}
-		if !isDeltaFrame(item) {
-			return Batch{}, ErrInvalid
+		if err := validateBatchItem(item, maxBytes-total); err != nil {
+			return Batch{}, err
 		}
 		batch.items = append(batch.items, append([]byte(nil), item...))
 		total += len(item)
@@ -44,14 +41,20 @@ func NewBatch(items [][]byte, maxBytes int) (Batch, error) {
 // MarshalBinary returns the canonical batch envelope. Individual items remain
 // independent CRDT frames, so callers can diagnose or replay them separately.
 func (b Batch) MarshalBinary(maxBytes int) ([]byte, error) {
-	validated, err := NewBatch(b.items, maxBytes)
-	if err != nil {
-		return nil, err
+	if maxBytes <= 0 {
+		return nil, ErrLimit
 	}
-	encoded := make([]byte, 0, 4+len(validated.items)*frameByteOverhead(validated.items))
+	total := 0
+	for _, item := range b.items {
+		if err := validateBatchItem(item, maxBytes-total); err != nil {
+			return nil, err
+		}
+		total += len(item)
+	}
+	encoded := make([]byte, 0, 4+len(b.items)*frameByteOverhead(b.items))
 	encoded = append(encoded, batchMagic...)
-	encoded = frame.AppendUvarint(encoded, uint64(len(validated.items)))
-	for _, item := range validated.items {
+	encoded = frame.AppendUvarint(encoded, uint64(len(b.items)))
+	for _, item := range b.items {
 		encoded = frame.AppendUvarint(encoded, uint64(len(item)))
 		encoded = append(encoded, item...)
 	}
@@ -245,6 +248,16 @@ func frameByteOverhead(items [][]byte) int {
 		total += len(item) + 10
 	}
 	return total
+}
+
+func validateBatchItem(item []byte, remaining int) error {
+	if len(item) == 0 || len(item) > remaining {
+		return ErrLimit
+	}
+	if !isDeltaFrame(item) {
+		return ErrInvalid
+	}
+	return nil
 }
 
 func isDeltaFrame(item []byte) bool {

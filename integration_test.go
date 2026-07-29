@@ -1,6 +1,7 @@
 package crdt_test
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/DarkInno/crdt/merkle"
 	"github.com/DarkInno/crdt/set"
 	"github.com/DarkInno/crdt/snapshot"
+	"github.com/DarkInno/crdt/tombstonegc"
 )
 
 type integrationStringCodec struct{}
@@ -132,6 +134,130 @@ func TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy(t *testing.T) {
 	}
 	if !recovered.Contains("after-restart") || !recovered.Contains("middle-only") || !recovered.Contains("needs-sync") || !recovered.Contains("right-only") {
 		t.Fatalf("recovered set did not converge: %#v", recovered.Elements())
+	}
+}
+
+// TestThreeReplicaOrderCancellationTombstoneLifecycle models a durable outbox
+// workflow: all replicas receive order creates, one mobile replica misses
+// cancellation deltas while receiving a later update, retries eventually
+// deliver the cancellations, then every replica compacts and persists a
+// post-compaction snapshot before acknowledgement records are pruned.
+func TestThreeReplicaOrderCancellationTombstoneLifecycle(t *testing.T) {
+	const (
+		groupID       = "orders/production-like/v1"
+		orderCount    = 96
+		cancelEvery   = 3
+		cancelledWant = orderCount / cancelEvery
+	)
+	codec := integrationStringCodec{}
+	api := mustSet(t, "api", codec)
+	mobile := mustSet(t, "mobile", codec)
+	warehouse := mustSet(t, "warehouse", codec)
+
+	for order := 0; order < orderCount; order++ {
+		id := fmt.Sprintf("order-%03d", order)
+		created := mustAdd(t, api, id)
+		for _, replica := range []*set.ORSet[string]{mobile, warehouse} {
+			if err := replica.ApplyDelta(created); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	cancellations := make([]set.ORSetDelta[string], 0, cancelledWant)
+	for order := 0; order < orderCount; order += cancelEvery {
+		cancellations = append(cancellations, mustRemove(t, api, fmt.Sprintf("order-%03d", order)))
+	}
+	// The warehouse receives every cancellation. The mobile replica misses all
+	// of them but still receives a later order, so its Frontier cannot be used
+	// as evidence that it observed the missing tombstones.
+	for index := len(cancellations) - 1; index >= 0; index-- {
+		if err := warehouse.ApplyDelta(cancellations[index]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	later := mustAdd(t, api, "order-late")
+	if err := mobile.ApplyDelta(later); err != nil {
+		t.Fatal(err)
+	}
+	if err := mobile.ApplyDelta(later); err != nil {
+		t.Fatal(err)
+	}
+	if !mobile.Contains("order-000") {
+		t.Fatal("mobile unexpectedly observed a cancellation before its outbox retry")
+	}
+
+	coordinator, err := tombstonegc.NewCoordinator[string](groupID, []string{"api", "mobile", "warehouse"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	membership := coordinator.Membership()
+	acknowledged := api.TombstoneTags()
+	if len(acknowledged) != cancelledWant {
+		t.Fatalf("api tombstones = %d, want %d", len(acknowledged), cancelledWant)
+	}
+	if removed, err := coordinator.AcknowledgeAndCompact(groupID, "api", membership.Epoch, acknowledged, api); err != nil || removed != 0 {
+		t.Fatalf("api acknowledgement = %d, %v; want 0, nil", removed, err)
+	}
+	if removed, err := coordinator.AcknowledgeAndCompact(groupID, "warehouse", membership.Epoch, warehouse.TombstoneTags(), api); err != nil || removed != 0 {
+		t.Fatalf("warehouse acknowledgement = %d, %v; want 0, nil", removed, err)
+	}
+	if got := api.State().TombstoneCount; got != cancelledWant {
+		t.Fatalf("premature compaction tombstones = %d, want %d", got, cancelledWant)
+	}
+
+	for index := len(cancellations) - 1; index >= 0; index-- {
+		if err := mobile.ApplyDelta(cancellations[index]); err != nil {
+			t.Fatal(err)
+		}
+		if index%5 == 0 {
+			if err := mobile.ApplyDelta(cancellations[index]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if removed, err := coordinator.AcknowledgeAndCompact(groupID, "mobile", membership.Epoch, mobile.TombstoneTags(), api); err != nil || removed != cancelledWant {
+		t.Fatalf("mobile acknowledgement = %d, %v; want %d, nil", removed, err, cancelledWant)
+	}
+	for _, target := range []*set.ORSet[string]{mobile, warehouse} {
+		if removed, err := coordinator.AcknowledgeAndCompact(groupID, "api", membership.Epoch, api.TombstoneTags(), target); err != nil || removed != cancelledWant {
+			t.Fatalf("shared coordinator compaction = %d, %v; want %d, nil", removed, err, cancelledWant)
+		}
+	}
+	for _, replica := range []*set.ORSet[string]{api, mobile, warehouse} {
+		if got := replica.State().TombstoneCount; got != 0 {
+			t.Fatalf("replica retained %d tombstones after all acknowledgements", got)
+		}
+		if replica.Contains("order-000") {
+			t.Fatalf("cancelled order resurrected: %#v", replica.Elements())
+		}
+	}
+
+	// Model the durable persistence boundary before acknowledgement records are
+	// freed. A same-ID recovery must retain its HLC state and can continue to
+	// accept new orders without reusing an old mutation tag.
+	saved, err := api.SnapshotCurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := set.NewORSetFromSnapshot(saved, codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := coordinator.PruneAcknowledgements(groupID, membership.Epoch, acknowledged); err != nil || removed != 3*cancelledWant {
+		t.Fatalf("PruneAcknowledgements() = %d, %v; want %d, nil", removed, err, 3*cancelledWant)
+	}
+	if stats := coordinator.AcknowledgementStats(); stats.Tags != 0 || stats.Entries != 0 {
+		t.Fatalf("acknowledgement stats after snapshot and prune = %#v", stats)
+	}
+	continued := mustAdd(t, recovered, "order-after-recovery")
+	for _, replica := range []*set.ORSet[string]{mobile, warehouse} {
+		if err := replica.ApplyDelta(continued); err != nil {
+			t.Fatal(err)
+		}
+		if !replica.Contains("order-after-recovery") || replica.Contains("order-000") {
+			t.Fatalf("unexpected state after recovery delta: %#v", replica.Elements())
+		}
 	}
 }
 

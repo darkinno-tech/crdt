@@ -8,6 +8,12 @@
 
 > 状态：稳定版本由 `main` 分支发布；API 遵循语义化版本规范。
 
+## 架构概览
+
+![crdt 与 Yjs 的概念性架构对比](assets/crdt_vs_yjs_architecture.svg)
+
+此图仅说明集成边界的概念性差异，不代表 wire 兼容、功能对等或性能结论。
+
 ## 特性
 
 - 基于状态的 **G-Counter**，具有可合并且类型隔离的增量。
@@ -206,6 +212,20 @@ func main() {
 
 ```sh
 go run ./examples/collaborative-board
+```
+
+[仓库复制示例](examples/warehouse-replication)演示 G-Set 和 MV-Register 的帧化增量、
+重复投递、Register 并发值，以及在复用副本 ID 前安全恢复 MV-Register：
+
+```sh
+go run ./examples/warehouse-replication
+```
+
+[实验协作示例](examples/experimental-collaboration)为 LWW-Map、RGA 和 OR-Tree 使用
+明确且较小的接收帧/RGA 留存上限。仅在复制组已完成上文所述的、经过认证的实验协议握手后运行：
+
+```sh
+go run ./examples/experimental-collaboration
 ```
 
 英文版本见 [integration tutorial](INTEGRATION.md)。
