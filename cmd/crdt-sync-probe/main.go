@@ -42,6 +42,11 @@ const (
 	rgaProtocolDisabled rgaProtocol = "disabled"
 	rgaProtocolV1       rgaProtocol = "v1"
 	rgaProtocolRunV2    rgaProtocol = "run-v2"
+
+	// defaultRGAProtocol is the wire format used by new probe sessions. The
+	// scalar v1 format remains available only when both endpoints explicitly
+	// opt in, so a legacy frame cannot be silently accepted by this path.
+	defaultRGAProtocol rgaProtocol = rgaProtocolRunV2
 )
 
 type stringCodec struct{}
@@ -92,7 +97,7 @@ func run(args []string) error {
 	element := flags.String("element", "probe", "OR-Set element to deliver; empty skips set delivery")
 	rgaRunes := flags.Int("rga-runes", 0, "number of one-rune RGA characters to deliver; zero skips RGA delivery")
 	rgaRune := flags.String("rga-rune", "x", "one UTF-8 rune repeated for each RGA character")
-	rgaProtocolName := flags.String("rga-protocol", string(rgaProtocolDisabled), "RGA frame protocol: disabled, v1, or run-v2")
+	rgaProtocolName := flags.String("rga-protocol", string(defaultRGAProtocol), "RGA frame protocol: run-v2 (stable default), v1 (experimental explicit opt-in), or disabled")
 	duplicates := flags.Int("duplicates", 3, "deliver each generated delta this many times")
 	timeout := flags.Duration("timeout", 15*time.Second, "network timeout")
 	if err := flags.Parse(args); err != nil {
@@ -121,7 +126,7 @@ func run(args []string) error {
 			return errors.New("-target and at least one non-empty mutation are required for send")
 		}
 		if *rgaRunes > 0 && protocol == rgaProtocolDisabled {
-			return errors.New("-rga-runes requires explicit -rga-protocol=v1 or -rga-protocol=run-v2")
+			return errors.New("-rga-runes requires run-v2 (the default) or explicit -rga-protocol=v1")
 		}
 		if err := send(*target, *replica, authToken, protocol, *increment, *element, *rgaRunes, *rgaRune, *duplicates, *timeout); err != nil {
 			return fmt.Errorf("send probe: %w", err)

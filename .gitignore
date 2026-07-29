@@ -9,3 +9,6 @@
 /.tmp/
 /clients/typescript/dist/
 /clients/typescript/node_modules/
+
+# Go test -c executables are local validation artifacts.
+/*.test

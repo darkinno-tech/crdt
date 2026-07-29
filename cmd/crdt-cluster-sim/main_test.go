@@ -37,7 +37,7 @@ func TestClusterServerAcknowledgesWithoutStateAndMeasuresApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := delta.MarshalBinaryWithLimits(frameLimits())
+	encoded, err := delta.MarshalRunBinaryWithLimits(frameLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +68,32 @@ func TestClusterServerAcknowledgesWithoutStateAndMeasuresApply(t *testing.T) {
 	}
 	if state.Runes != 1 || state.Pending != 0 {
 		t.Fatalf("state = %+v", state)
+	}
+}
+
+func TestClusterServerRejectsExperimentalScalarRGAFrames(t *testing.T) {
+	server, err := newClusterServer("receiver", "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := text.New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := source.Insert(0, "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := delta.MarshalBinaryWithLimits(frameLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/rga", bytes.NewReader(encoded))
+	request.Header.Set("X-CRDT-Cluster-Token", "secret")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("legacy scalar RGA status = %d, want %d", response.Code, http.StatusBadRequest)
 	}
 }
 
