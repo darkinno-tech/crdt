@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CRDT RGA Wasm browser verification</title>
+  </head>
+  <body>
+    <main>
+      <h1>CRDT RGA Wasm browser verification</h1>
+      <p id="status" role="status">Starting…</p>
+    </main>
+    <script>
+      window.__consoleErrors = [];
+      const originalConsoleError = console.error.bind(console);
+      console.error = (...args) => {
+        window.__consoleErrors.push(args.map(String).join(" "));
+        originalConsoleError(...args);
+      };
+    </script>
+    <script src="/.tmp/crdt-rga-wasm/wasm_exec.js"></script>
+    <script type="module">
+      import { decodeFrame, FrameType, initRGAWasm } from "../dist/index.js";
+
+      const status = document.querySelector("#status");
+      try {
+        const runtime = await initRGAWasm({ wasmURL: "/.tmp/crdt-rga-wasm/crdt-rga.wasm" });
+        const alice = runtime.create("browser-alice");
+        const bob = runtime.create("browser-bob");
+        const delta = alice.insert(0, "browser local merge");
+        const frame = decodeFrame(delta);
+        if (frame.typeID !== FrameType.RGADelta) {
+          throw new Error("unexpected RGA delta type");
+        }
+        bob.applyDelta(delta);
+        const snapshot = bob.snapshot();
+        const restored = runtime.restore(snapshot);
+        const text = restored.text();
+        if (text !== "browser local merge") {
+          throw new Error(`unexpected restored text: ${text}`);
+        }
+        alice.close();
+        bob.close();
+        restored.close();
+        window.__crdtWasmResult = { ok: true, text };
+        status.textContent = `PASS: ${text}`;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        window.__crdtWasmResult = { ok: false, error: message };
+        console.error(message);
+        status.textContent = `FAIL: ${message}`;
+      }
+    </script>
+  </body>
+</html>
