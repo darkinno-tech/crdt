@@ -53,13 +53,14 @@ func BenchmarkORTreeTombstoneTags1024(b *testing.B) {
 	}
 }
 
-func BenchmarkORTreeCompactLeafTombstones1024(b *testing.B) {
+// BenchmarkORTreeCreateAndCompactLeafTombstones1024 measures the full
+// tombstone lifecycle. Keeping creation in the timed region makes long runs
+// representative and avoids hiding an unbounded amount of setup work.
+func BenchmarkORTreeCreateAndCompactLeafTombstones1024(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
-		b.StopTimer()
 		value, tags := benchmarkORTreeTombstones(b, 1024)
-		b.StartTimer()
 		removed, err := value.CompactTombstones(tags)
 		if err != nil || removed != len(tags) {
 			b.Fatalf("CompactTombstones() = %d, %v; want %d, nil", removed, err, len(tags))
