@@ -61,13 +61,12 @@ func TestProviderReplicatesDuplicateAndOutOfOrderChanges(t *testing.T) {
 		return counterValue(t, state) == 9 &&
 			counterValue(t, left.state) == 9 &&
 			counterValue(t, right.state) == 9 &&
-			group.Frontier().Counter("operator-a") == 3
+			group.Frontier().Counter("operator-a") == 3 &&
+			left.inbox.Frontier().Counter("operator-a") == 3 &&
+			right.inbox.Frontier().Counter("operator-a") == 3
 	})
 	if changes, bytes := group.Pending(); changes != 0 || bytes != 0 {
 		t.Fatalf("pending = %d changes, %d bytes", changes, bytes)
-	}
-	if left.inbox.Frontier().Counter("operator-a") != 3 || right.inbox.Frontier().Counter("operator-a") != 3 {
-		t.Fatalf("client frontiers = %v and %v", left.inbox.Frontier().Entries(), right.inbox.Frontier().Entries())
 	}
 }
 
