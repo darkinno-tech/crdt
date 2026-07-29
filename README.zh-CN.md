@@ -83,8 +83,9 @@ schema ID `github.com/DarkInno/crdt/attachment-reference/v1`、空 codec ID 和
 `attachment.SemanticsVersion`，并在所有边界显式启用 `AllowExperimental`。必须将
 `SnapshotCurrentState()` 与 HLC 状态原子持久化，并在满足 LWW 墓碑生命周期前保留删除元数据。
 
-应用负责授权、对象存储生命周期、内容扫描、限流、下载大小限制，以及下载后、解码或渲染前的
-摘要校验。不得把签名 URL、凭据、个人数据或媒体原始内容放入 `Reference.ObjectID`。
+应用负责授权、对象存储生命周期、内容扫描、限流和下载策略。下载完成后、解码或渲染前必须调用
+`Reference.Verify`：它以流式方式校验对象，不缓冲原始媒体，并拒绝截断、超长或摘要不匹配的响应。
+不得把签名 URL、凭据、个人数据或媒体原始内容放入 `Reference.ObjectID`。
 
 ## 要求
 
