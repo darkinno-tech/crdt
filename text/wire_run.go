@@ -21,6 +21,12 @@ type runNode struct {
 	item node
 }
 
+type runNodes []runNode
+
+func (nodes runNodes) Len() int           { return len(nodes) }
+func (nodes runNodes) Less(i, j int) bool { return nodes[i].id.Compare(nodes[j].id) < 0 }
+func (nodes runNodes) Swap(i, j int)      { nodes[i], nodes[j] = nodes[j], nodes[i] }
+
 // rgaRunState is an immutable, point-in-time copy of the fields needed to
 // encode a complete run-v2 state. Slices cost substantially less than cloning
 // the node and tombstone maps, while preserving the short read-lock window
@@ -99,7 +105,7 @@ func marshalRGARunState(state rgaRunState, limits frame.DecoderLimits) ([]byte, 
 	if len(state.nodes) > limits.MaxElements || len(state.nodes) > limits.MaxTags || len(state.tombstones) > limits.MaxTags-len(state.nodes) {
 		return nil, frame.ErrFrameLimit
 	}
-	sort.Slice(state.nodes, func(i, j int) bool { return state.nodes[i].id.Compare(state.nodes[j].id) < 0 })
+	sort.Sort(runNodes(state.nodes))
 	sort.Slice(state.tombstones, func(i, j int) bool { return state.tombstones[i].Compare(state.tombstones[j]) < 0 })
 	linear, err := validateCompleteRunState(state)
 	if err != nil {
