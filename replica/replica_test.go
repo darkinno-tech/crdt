@@ -12,7 +12,7 @@ import (
 	"github.com/DarkInno/crdt/tree"
 )
 
-func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
+func TestManifestRejectsDisabledAndMismatchedProtocols(t *testing.T) {
 	stable, err := NewManifest("cart", "example.com/cart/v1", 1, Protocol{
 		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1,
 	}, crdt.ProtocolPolicy{})
@@ -29,8 +29,8 @@ func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
 	}
 	if _, err := NewManifest("set", "example.com/set/v1", 1, Protocol{
 		StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{AllowExperimental: true}); !errors.Is(err, ErrInvalidManifest) {
-		t.Fatalf("reserved protocol error = %v", err)
+	}, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
+		t.Fatalf("experimental LWW-Set manifest error = %v", err)
 	}
 	remote := stable
 	remote.Protocol.SemanticsVersion = 2

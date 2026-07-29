@@ -73,13 +73,13 @@ func TestSnapshotSupportsPNCounterRecoveryPlan(t *testing.T) {
 	}
 }
 
-func TestSnapshotRejectsReservedStateTypesWithoutConcreteWireSupport(t *testing.T) {
+func TestSnapshotAdmitsImplementedLWWSetStateType(t *testing.T) {
 	state, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWSetState})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := snapshot.New(state, nil); !errors.Is(err, snapshot.ErrInvalid) {
-		t.Fatalf("snapshot.New() error = %v, want %v", err, snapshot.ErrInvalid)
+	if _, err := snapshot.New(state, nil); err != nil {
+		t.Fatalf("snapshot.New() error = %v", err)
 	}
 }
 
