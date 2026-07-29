@@ -58,6 +58,8 @@ make test-integration
 - `main` 是发布镜像：不在本地开发，只通过 CI 已通过的 `beta -> main` PR 更新。单人维护时不要求他人审批，但仍必须通过所有必需检查。`main` 比 `beta` 多一个 merge commit 是正常的发布记录，不要为此 rebase、强推或反向合并。
 - 需要更新一个干净的 `main` worktree 时，运行 `make sync-main`。该命令在工作区有改动、不在 `main`、或本地 `main` 存在未发布提交时拒绝执行，以保证只做快进更新。
 
+唯一例外是首次安装发布列车门禁：若 bootstrap PR 先进入 `main`，可在隔离 worktree 中用一次普通 merge 将该已验证的 `main` 提交同步回 `beta`，然后恢复单向的 `beta -> main` 发布流程；不得 rebase 或强推 `beta`。
+
 最小日常流程：
 
 ```sh
