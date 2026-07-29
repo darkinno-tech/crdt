@@ -161,6 +161,23 @@ OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧�
 必须先建立经过认证的精确确认纪元、持久化压缩后快照并淘汰旧 delta。LWW-Set、LWW-Map 与 OR-Tree
 尚无精确确认式回收，因此实验性接入仍须为墓碑设定预算并监控、继续保留它们，不能调用通用 GC。
 
+### 5.1 附件引用
+
+`attachment.Register` 是 LWW-Map 帧面向图片、音频、视频和任意数据引用的实验性、受 schema
+限制的用法。每个附件复制组都要单独建立 Manifest：状态/增量 ID 为 9/10，schema ID 为
+`github.com/DarkInno/crdt/attachment-reference/v1`，codec ID 为空，语义版本使用
+`attachment.SemanticsVersion`。不得用同一个 Manifest 承载 RGA 文本：一个 Manifest 只能绑定一种
+具体 CRDT 协议。
+
+接收边界应先认证精确 Manifest，再使用传输限制和附件留存限制调用
+`attachment.UnmarshalDeltaWithLimits`，之后才应用 delta。原子持久化
+`SnapshotCurrentState()`，同 ID 副本通过 `attachment.NewFromSnapshotWithOptions` 恢复。
+
+附件引用只有元数据。外围应用负责存储授权、上传/下载、扫描、加密和重试。已授权下载后、解码或
+渲染前必须调用 `Reference.Verify`；它以流式方式校验并拒绝截断、超长或 SHA-256 不匹配对象。
+完整流程和限制清单见[附件引用集成文档](ATTACHMENT_INTEGRATION.zh-CN.md)及其
+[可运行示例](examples/attachment-collaboration)。
+
 ## 6. 恢复、反熵与墓碑
 
 新副本或恢复副本应从完整状态快照启动。OR-Set 绝不能只从 `MarshalBinary()` 字节

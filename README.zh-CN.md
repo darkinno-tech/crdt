@@ -251,6 +251,16 @@ go run ./examples/warehouse-replication
 go run ./examples/experimental-collaboration
 ```
 
+[附件协作示例](examples/attachment-collaboration)为同一文档分别建立 Manifest 绑定的
+RGA 文本组和附件引用组，使用快照恢复两个接收状态，并在接受对象前通过
+`Reference.Verify` 流式校验已授权下载：
+
+```sh
+go run ./examples/attachment-collaboration
+```
+
+Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](ATTACHMENT_INTEGRATION.zh-CN.md)。
+
 英文版本见 [integration tutorial](INTEGRATION.md)。
 
 ## 在分布式系统中的正确使用方式
@@ -301,6 +311,7 @@ go run ./examples/experimental-collaboration
 | `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
 | `set` | G-Set、加法胜出 OR-Set 与元素编解码器契约。 |
 | `lww` | 实验性的、带帧 LWW-Set 与 LWW-Map。 |
+| `attachment` | 实验性的、有边界媒体/数据引用，带流式长度与 SHA-256 校验。 |
 | `text` | 实验性、带帧 RGA 协作文本和 run-v2 编解码器。 |
 | `tree` | 实验性、带帧的观察移除树。 |
 | `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |
