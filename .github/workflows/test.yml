@@ -146,7 +146,12 @@ jobs:
         run: 'echo "Pre-release tag result: ${{ steps.tag.outputs.tag }}"'
 
   release-tag:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # This one bootstrap PR installs the beta-only main gate directly, so it
+    # must not consume a stable release version before the gate is active.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      !contains(github.event.head_commit.message, 'ci: bootstrap beta-only main release train')
     needs: [test, staticcheck, coverage, docker, golangci]
     runs-on: ubuntu-latest
     concurrency:
