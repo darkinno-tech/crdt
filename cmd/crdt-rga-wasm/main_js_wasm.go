@@ -1,9 +1,11 @@
 //go:build js && wasm
 
-// crdt-rga-wasm exposes the bounded RGA v1 browser runtime through one small
-// syscall/js surface. It deliberately does not provide networking, identity,
-// manifest negotiation, persistence, or authorization; applications own
-// those boundaries before passing framed bytes to this module.
+// crdt-rga-wasm exposes the bounded RGA browser runtime through one small
+// syscall/js surface. The default artifact uses compact run-v2 frames; an
+// explicitly built legacy v1 artifact remains available for migration. It
+// deliberately does not provide networking, identity, manifest negotiation,
+// persistence, or authorization; applications own those boundaries before
+// passing framed bytes to this module.
 package main
 
 import (
@@ -25,12 +27,18 @@ const runtimeGlobalName = "__darkinnoCRDTRGA"
 var (
 	errInvalidArgument = errors.New("wasm: invalid JavaScript argument")
 	callbacks          []js.Func
+	wasmWireFormat     = "run-v2"
 )
 
 type method func([]js.Value) (any, error)
 
 func main() {
-	runtime, err := clientwasm.NewRuntime(clientwasm.DefaultRGAOptions())
+	options, err := runtimeOptions()
+	if err != nil {
+		js.Global().Get("console").Call("error", "crdt RGA Wasm initialization failed")
+		return
+	}
+	runtime, err := clientwasm.NewRuntime(options)
 	if err != nil {
 		js.Global().Get("console").Call("error", "crdt RGA Wasm initialization failed")
 		return
@@ -38,10 +46,11 @@ func main() {
 
 	api := newObject()
 	register(api, "protocol", func([]js.Value) (any, error) {
+		protocol := runtime.Protocol()
 		value := newObject()
-		value.Set("stateTypeID", strconv.FormatUint(clientwasm.RGAStateTypeID, 10))
-		value.Set("deltaTypeID", strconv.FormatUint(clientwasm.RGADeltaTypeID, 10))
-		value.Set("semanticsVersion", strconv.FormatUint(clientwasm.RGASemanticsVersion, 10))
+		value.Set("stateTypeID", strconv.FormatUint(protocol.StateTypeID, 10))
+		value.Set("deltaTypeID", strconv.FormatUint(protocol.DeltaTypeID, 10))
+		value.Set("semanticsVersion", strconv.FormatUint(protocol.SemanticsVersion, 10))
 		value.Set("maxFrameBytes", runtime.MaxFrameBytes())
 		value.Set("maxTags", runtime.MaxTags())
 		value.Set("maxStringBytes", runtime.MaxStringBytes())
@@ -176,6 +185,17 @@ func main() {
 	})
 	js.Global().Set(runtimeGlobalName, api)
 	select {}
+}
+
+func runtimeOptions() (clientwasm.RGAOptions, error) {
+	switch wasmWireFormat {
+	case "run-v2":
+		return clientwasm.DefaultRunRGAOptions(), nil
+	case "v1":
+		return clientwasm.DefaultRGAOptions(), nil
+	default:
+		return clientwasm.RGAOptions{}, errors.New("wasm: unsupported build wire format")
+	}
 }
 
 func register(api js.Value, name string, invoke method) {

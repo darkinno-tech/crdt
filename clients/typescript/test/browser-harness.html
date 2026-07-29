@@ -29,7 +29,7 @@
         const bob = runtime.create("browser-bob");
         const delta = alice.insert(0, "browser local merge");
         const frame = decodeFrame(delta);
-        if (frame.typeID !== FrameType.RGADelta) {
+        if (frame.typeID !== FrameType.RGARunDelta) {
           throw new Error("unexpected RGA delta type");
         }
         bob.applyDelta(delta);

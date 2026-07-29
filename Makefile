@@ -1,10 +1,11 @@
-.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm typescript-test wasm-test typescript-benchmark wasm-benchmark
+.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark wasm-benchmark
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
 FUZZ_TIME ?= 10s
 FUZZ_PARALLEL ?= 1
 WASM_DIR ?= .tmp/crdt-rga-wasm
+WASM_RGA_PROTOCOL ?= run-v2
 NPM ?= npm
 
 fmt-check:
@@ -53,8 +54,15 @@ benchmark:
 
 wasm:
 	mkdir -p "$(WASM_DIR)"
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags='-s -w' -o "$(WASM_DIR)/crdt-rga.wasm" ./cmd/crdt-rga-wasm
+	GOOS=js GOARCH=wasm go build -trimpath -ldflags='-s -w -X main.wasmWireFormat=$(WASM_RGA_PROTOCOL)' -o "$(WASM_DIR)/crdt-rga.wasm" ./cmd/crdt-rga-wasm
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" "$(WASM_DIR)/wasm_exec.js"
+
+wasm-v1:
+	$(MAKE) wasm WASM_RGA_PROTOCOL=v1 WASM_DIR=.tmp/crdt-rga-v1-wasm
+
+wasm-v1-test: wasm-v1
+	$(NPM) --prefix clients/typescript ci --ignore-scripts
+	CRDT_WASM_DIR="$(CURDIR)/.tmp/crdt-rga-v1-wasm" CRDT_RGA_PROTOCOL=v1 $(NPM) --prefix clients/typescript run test:compat
 
 typescript-test:
 	$(NPM) --prefix clients/typescript ci --ignore-scripts

@@ -18,15 +18,21 @@ import (
 
 const (
 	// RGAStateTypeID and RGADeltaTypeID are the only framed payloads accepted
-	// by this runtime. RGA remains an explicitly negotiated experimental
-	// protocol; accepting a frame here never authenticates its sender.
+	// by a scalar-v1 runtime. RGA remains an explicitly negotiated protocol;
+	// accepting a frame here never authenticates its sender.
 	RGAStateTypeID uint64 = crdt.TypeIDRGAState
 	RGADeltaTypeID uint64 = crdt.TypeIDRGADelta
 
-	// RGASemanticsVersion identifies the scalar RGA v1 semantics. Run-v2 has
-	// different frame IDs and must be separately negotiated rather than being
-	// silently accepted by a v1 browser document.
+	// RGASemanticsVersion identifies scalar RGA v1 semantics.
 	RGASemanticsVersion uint64 = 1
+
+	// RGARunStateTypeID and RGARunDeltaTypeID identify the compact run-v2
+	// protocol used by new Go RGA replication groups.
+	RGARunStateTypeID uint64 = crdt.TypeIDRGARunState
+	RGARunDeltaTypeID uint64 = crdt.TypeIDRGARunDelta
+
+	// RGARunSemanticsVersion identifies compact RGA run-v2 semantics.
+	RGARunSemanticsVersion uint64 = 2
 )
 
 var (
@@ -34,6 +40,28 @@ var (
 	ErrUnknownDocument = errors.New("wasm: unknown RGA document")
 	ErrHandleExhausted = errors.New("wasm: document handle space exhausted")
 )
+
+// RGAWireFormat selects exactly one separately negotiated RGA frame contract.
+// A runtime never accepts both formats because their compatibility is a
+// manifest-level decision, not a best-effort decoder choice.
+type RGAWireFormat uint8
+
+const (
+	RGAWireFormatV1 RGAWireFormat = iota + 1
+	RGAWireFormatRunV2
+)
+
+// RGAProtocol identifies the framed RGA semantics exported by one runtime.
+type RGAProtocol struct {
+	StateTypeID      uint64
+	DeltaTypeID      uint64
+	SemanticsVersion uint64
+}
+
+func (p RGAProtocol) valid() bool {
+	return p == (RGAProtocol{StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion}) ||
+		p == (RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion})
+}
 
 // RGAOptions bounds both externally received frames and retained document
 // state. These are deliberately smaller than the library defaults because a
@@ -43,10 +71,11 @@ type RGAOptions struct {
 	Decoder           frame.DecoderLimits
 	MaxLocalEditRunes int
 	MaxLocalEditBytes int
+	WireFormat        RGAWireFormat
 }
 
-// DefaultRGAOptions returns the browser/WebView runtime limits. Applications
-// still need transport-level request limits before a Uint8Array is allocated.
+// DefaultRGAOptions returns the legacy scalar-v1 browser/WebView runtime
+// limits. It is retained for an explicitly negotiated migration group.
 func DefaultRGAOptions() RGAOptions {
 	const maxFrameBytes = 1 << 20
 	return RGAOptions{
@@ -71,6 +100,27 @@ func DefaultRGAOptions() RGAOptions {
 		// before the Go RGA constructs per-rune nodes.
 		MaxLocalEditRunes: 16 << 10,
 		MaxLocalEditBytes: 64 << 10,
+		WireFormat:        RGAWireFormatV1,
+	}
+}
+
+// DefaultRunRGAOptions returns the browser/WebView limits for the compact
+// run-v2 protocol used by new Go RGA replication groups. Applications still
+// need transport-level request limits before a Uint8Array is allocated.
+func DefaultRunRGAOptions() RGAOptions {
+	options := DefaultRGAOptions()
+	options.WireFormat = RGAWireFormatRunV2
+	return options
+}
+
+func (o RGAOptions) protocol() RGAProtocol {
+	switch o.WireFormat {
+	case RGAWireFormatV1:
+		return RGAProtocol{StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion}
+	case RGAWireFormatRunV2:
+		return RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion}
+	default:
+		return RGAProtocol{}
 	}
 }
 
@@ -83,7 +133,8 @@ func (o RGAOptions) valid() bool {
 		o.Decoder.MaxPayload <= o.Decoder.MaxFrameBytes &&
 		o.Decoder.MaxCodecID <= o.Decoder.MaxFrameBytes &&
 		o.MaxLocalEditRunes > 0 && o.MaxLocalEditRunes <= o.Text.MaxNodes &&
-		o.MaxLocalEditBytes > 0 && o.MaxLocalEditBytes <= o.Decoder.MaxFrameBytes
+		o.MaxLocalEditBytes > 0 && o.MaxLocalEditBytes <= o.Decoder.MaxFrameBytes &&
+		o.protocol().valid()
 }
 
 // RGASnapshot is the complete browser persistence unit. State, Frontier, and
@@ -111,6 +162,15 @@ func NewRuntime(options RGAOptions) (*Runtime, error) {
 		return nil, ErrInvalidOptions
 	}
 	return &Runtime{options: options, docs: make(map[uint64]*text.RGA)}, nil
+}
+
+// Protocol returns the one RGA frame contract accepted and emitted by this
+// runtime. The application must bind this value to its authenticated manifest.
+func (r *Runtime) Protocol() RGAProtocol {
+	if r == nil {
+		return RGAProtocol{}
+	}
+	return r.options.protocol()
 }
 
 // Create allocates an RGA document owned by replicaID and returns an opaque
@@ -149,7 +209,7 @@ func (r *Runtime) Restore(saved RGASnapshot) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if decoded.TypeID != RGAStateTypeID {
+	if decoded.TypeID != r.Protocol().StateTypeID {
 		return 0, frame.ErrInvalidFrame
 	}
 	validated, err := snapshot.NewWithClockState(saved.State, saved.Frontier, saved.Clock)
@@ -188,8 +248,8 @@ func (r *Runtime) Drop(handle uint64) bool {
 	return true
 }
 
-// Insert performs one local rune-offset insertion and returns its canonical
-// RGA v1 delta frame under the runtime's output limits.
+// Insert performs one local rune-offset insertion and returns a canonical
+// delta frame in the runtime's explicitly selected RGA wire format.
 func (r *Runtime) Insert(handle uint64, offset int, value string) ([]byte, error) {
 	document, err := r.document(handle)
 	if err != nil {
@@ -198,27 +258,50 @@ func (r *Runtime) Insert(handle uint64, offset int, value string) ([]byte, error
 	if len(value) > r.options.MaxLocalEditBytes || utf8.RuneCountInString(value) > r.options.MaxLocalEditRunes {
 		return nil, frame.ErrFrameLimit
 	}
-	return document.InsertBinaryWithLimits(offset, value, r.options.Decoder)
+	switch r.options.WireFormat {
+	case RGAWireFormatV1:
+		return document.InsertBinaryWithLimits(offset, value, r.options.Decoder)
+	case RGAWireFormatRunV2:
+		return document.InsertRunBinaryWithLimits(offset, value, r.options.Decoder)
+	default:
+		return nil, ErrInvalidOptions
+	}
 }
 
-// Delete performs one local rune-offset deletion and returns its canonical
-// RGA v1 tombstone delta frame under the runtime's output limits.
+// Delete performs one local rune-offset deletion and returns a canonical
+// tombstone frame in the runtime's explicitly selected RGA wire format.
 func (r *Runtime) Delete(handle uint64, offset, count int) ([]byte, error) {
 	document, err := r.document(handle)
 	if err != nil {
 		return nil, err
 	}
-	return document.DeleteBinaryWithLimits(offset, count, r.options.Decoder)
+	switch r.options.WireFormat {
+	case RGAWireFormatV1:
+		return document.DeleteBinaryWithLimits(offset, count, r.options.Decoder)
+	case RGAWireFormatRunV2:
+		return document.DeleteRunBinaryWithLimits(offset, count, r.options.Decoder)
+	default:
+		return nil, ErrInvalidOptions
+	}
 }
 
-// ApplyDelta validates and joins one untrusted, canonical RGA v1 delta frame.
-// A malformed, mismatched, or over-limit frame leaves the document unchanged.
+// ApplyDelta validates and joins one untrusted canonical delta frame for the
+// runtime's selected RGA format. A malformed, mismatched, or over-limit frame
+// leaves the document unchanged.
 func (r *Runtime) ApplyDelta(handle uint64, encoded []byte) error {
 	document, err := r.document(handle)
 	if err != nil {
 		return err
 	}
-	delta, err := text.UnmarshalRGADeltaWithLimits(encoded, r.options.Decoder)
+	var delta text.Delta
+	switch r.options.WireFormat {
+	case RGAWireFormatV1:
+		delta, err = text.UnmarshalRGADeltaWithLimits(encoded, r.options.Decoder)
+	case RGAWireFormatRunV2:
+		delta, err = text.UnmarshalRGARunDeltaWithLimits(encoded, r.options.Decoder)
+	default:
+		return ErrInvalidOptions
+	}
 	if err != nil {
 		return err
 	}
@@ -296,7 +379,15 @@ func (r *Runtime) Snapshot(handle uint64) (RGASnapshot, error) {
 	if err != nil {
 		return RGASnapshot{}, err
 	}
-	saved, err := document.SnapshotCurrentStateWithLimits(r.options.Decoder)
+	var saved snapshot.Snapshot
+	switch r.options.WireFormat {
+	case RGAWireFormatV1:
+		saved, err = document.SnapshotCurrentStateWithLimits(r.options.Decoder)
+	case RGAWireFormatRunV2:
+		saved, err = document.SnapshotRunCurrentStateWithLimits(r.options.Decoder)
+	default:
+		return RGASnapshot{}, ErrInvalidOptions
+	}
 	if err != nil {
 		return RGASnapshot{}, err
 	}

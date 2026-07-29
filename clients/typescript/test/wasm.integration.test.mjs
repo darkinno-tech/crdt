@@ -5,18 +5,29 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { decodeFrame, FrameType } from "../dist/frame.js";
-import { CRDTRuntimeError, RGA_WASM_GLOBAL } from "../dist/wasm.js";
+import { decodeFrame } from "../dist/frame.js";
+import {
+  CRDTRuntimeError,
+  RGA_PROTOCOL_RUN_V2,
+  RGA_PROTOCOL_V1,
+  RGA_WASM_GLOBAL,
+} from "../dist/wasm.js";
 
 const wasmDirectory = process.env.CRDT_WASM_DIR;
 if (typeof wasmDirectory !== "string" || wasmDirectory === "") {
   throw new Error("CRDT_WASM_DIR must point to artifacts built by make wasm");
 }
+const artifactProtocol = protocolForArtifact(process.env.CRDT_RGA_PROTOCOL);
+const incompatibleProtocol = artifactProtocol === RGA_PROTOCOL_V1 ? RGA_PROTOCOL_RUN_V2 : RGA_PROTOCOL_V1;
 
 await import(pathToFileURL(join(wasmDirectory, "wasm_exec.js")).href);
 const assets = await startAssetServer(wasmDirectory);
 const wasmModule = await import("../dist/wasm.js");
-const loaderRuntime = await wasmModule.initRGAWasm({ wasmURL: `${assets.url}/crdt-rga.wasm` });
+const loaderRuntime = await wasmModule.initRGAWasm(
+  artifactProtocol === RGA_PROTOCOL_RUN_V2
+    ? { wasmURL: `${assets.url}/crdt-rga.wasm` }
+    : { wasmURL: `${assets.url}/crdt-rga.wasm`, expectedProtocol: artifactProtocol },
+);
 const rawAPI = globalThis[RGA_WASM_GLOBAL];
 after(async () => {
   await new Promise((resolve, reject) => {
@@ -27,9 +38,24 @@ after(async () => {
 test("TypeScript loader starts the real Go Wasm module over application/wasm", () => {
   const document = loaderRuntime.create("loader");
   const frame = document.insert(0, "loader local merge");
-  assert.equal(decodeFrame(frame).typeID, FrameType.RGADelta);
+  assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
   assert.equal(document.text(), "loader local merge");
   assert.equal(document.close(), true);
+});
+
+test("TypeScript loader rejects a Wasm artifact whose expected protocol does not match", async () => {
+  await assert.rejects(
+    () => wasmModule.initRGAWasm({ wasmURL: `${assets.url}/crdt-rga.wasm`, expectedProtocol: incompatibleProtocol }),
+    (error) => error instanceof CRDTRuntimeError && error.code === "protocol_mismatch",
+  );
+  await assert.rejects(
+    () =>
+      wasmModule.initRGAWasm({
+        wasmURL: `${assets.url}/crdt-rga.wasm`,
+        expectedProtocol: { stateTypeID: 99n, deltaTypeID: 100n, semanticsVersion: 1n },
+      }),
+    (error) => error instanceof CRDTRuntimeError && error.code === "protocol_mismatch",
+  );
 });
 
 test("TypeScript wrapper bounds persistence input before entering Go Wasm", () => {
@@ -62,11 +88,11 @@ test("TypeScript wrapper bounds persistence input before entering Go Wasm", () =
   assert.equal(document.close(), true);
 });
 
-test("actual Go Wasm emits RGA v1 frames accepted by the TypeScript decoder", () => {
+test("actual Go Wasm emits the negotiated RGA frames accepted by the TypeScript decoder", () => {
   const protocol = unwrap(rawAPI.protocol());
-  assert.equal(protocol.stateTypeID, FrameType.RGAState.toString());
-  assert.equal(protocol.deltaTypeID, FrameType.RGADelta.toString());
-  assert.equal(protocol.semanticsVersion, "1");
+  assert.equal(protocol.stateTypeID, artifactProtocol.stateTypeID.toString());
+  assert.equal(protocol.deltaTypeID, artifactProtocol.deltaTypeID.toString());
+  assert.equal(protocol.semanticsVersion, artifactProtocol.semanticsVersion.toString());
   assert.equal(protocol.maxFrameBytes, 1 << 20);
   assert.equal(protocol.maxTags, 100_000);
   assert.equal(protocol.maxStringBytes, 64 << 10);
@@ -77,7 +103,7 @@ test("actual Go Wasm emits RGA v1 frames accepted by the TypeScript decoder", ()
   const bob = create("bob");
   const frame = copiedBytes(unwrap(rawAPI.insert(alice, 0, "hello")));
   const decoded = decodeFrame(frame);
-  assert.equal(decoded.typeID, FrameType.RGADelta);
+  assert.equal(decoded.typeID, artifactProtocol.deltaTypeID);
   assert.equal(decoded.codecID.length, 0);
   assert.ok(decoded.payload.length > 0);
 
@@ -189,4 +215,14 @@ function documentHandle(value) {
 
 function nextRandom(value) {
   return (Math.imul(value, 1_664_525) + 1_013_904_223) >>> 0;
+}
+
+function protocolForArtifact(value) {
+  if (value === undefined || value === "run-v2") {
+    return RGA_PROTOCOL_RUN_V2;
+  }
+  if (value === "v1") {
+    return RGA_PROTOCOL_V1;
+  }
+  throw new Error("CRDT_RGA_PROTOCOL must be run-v2 or v1");
 }

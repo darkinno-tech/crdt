@@ -13,15 +13,38 @@ import (
 )
 
 func TestRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
-	runtime, err := NewRuntime(DefaultRGAOptions())
+	testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t, DefaultRGAOptions(), RGAProtocol{
+		StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion,
+	})
+}
+
+func TestRuntimeRunV2ThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
+	testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t, DefaultRunRGAOptions(), RGAProtocol{
+		StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion,
+	})
+}
+
+func testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T, options RGAOptions, wantProtocol RGAProtocol) {
+	t.Helper()
+	runtime, err := NewRuntime(options)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := runtime.Protocol(); got != wantProtocol {
+		t.Fatalf("runtime protocol = %#v, want %#v", got, wantProtocol)
 	}
 	alice := mustCreate(t, runtime, "alice")
 	bob := mustCreate(t, runtime, "bob")
 	carol := mustCreate(t, runtime, "carol")
 
 	base := mustInsert(t, runtime, alice, 0, "Draft")
+	decoded, err := frame.UnmarshalFrame(base, options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TypeID != wantProtocol.DeltaTypeID {
+		t.Fatalf("local delta type = %d, want %d", decoded.TypeID, wantProtocol.DeltaTypeID)
+	}
 	for _, handle := range []uint64{bob, carol} {
 		mustApply(t, runtime, handle, base)
 	}
@@ -49,6 +72,13 @@ func TestRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	decoded, err = frame.UnmarshalFrame(saved.State, options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TypeID != wantProtocol.StateTypeID {
+		t.Fatalf("snapshot state type = %d, want %d", decoded.TypeID, wantProtocol.StateTypeID)
+	}
 	recovered, err := runtime.Restore(saved)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +101,11 @@ func TestRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
 func TestRuntimeRejectsUntrustedFramesWithoutMutation(t *testing.T) {
 	if _, err := NewRuntime(RGAOptions{}); !errors.Is(err, ErrInvalidOptions) {
 		t.Fatalf("zero options error = %v, want %v", err, ErrInvalidOptions)
+	}
+	unsupportedWire := DefaultRGAOptions()
+	unsupportedWire.WireFormat = 0
+	if _, err := NewRuntime(unsupportedWire); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("unsupported wire format error = %v, want %v", err, ErrInvalidOptions)
 	}
 	invalidOptions := DefaultRGAOptions()
 	invalidOptions.Decoder.MaxPayload = invalidOptions.Decoder.MaxFrameBytes + 1
@@ -161,6 +196,19 @@ func TestRuntimeRejectsUntrustedFramesWithoutMutation(t *testing.T) {
 	if got := mustText(t, bounded, boundedHandle); got != "" {
 		t.Fatalf("rejected local delta mutated text to %q", got)
 	}
+	runOutputTight := DefaultRunRGAOptions()
+	runOutputTight.Decoder.MaxPayload = 1
+	runBounded, err := NewRuntime(runOutputTight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runBoundedHandle := mustCreate(t, runBounded, "run-bounded")
+	if _, err := runBounded.Insert(runBoundedHandle, 0, "a"); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("oversized run local delta error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := mustText(t, runBounded, runBoundedHandle); got != "" {
+		t.Fatalf("rejected run local delta mutated text to %q", got)
+	}
 	if _, err := runtime.Insert(handle, 0, strings.Repeat("a", runtime.MaxLocalEditRunes()+1)); !errors.Is(err, frame.ErrFrameLimit) {
 		t.Fatalf("oversized local edit rune count error = %v, want %v", err, frame.ErrFrameLimit)
 	}
@@ -169,6 +217,43 @@ func TestRuntimeRejectsUntrustedFramesWithoutMutation(t *testing.T) {
 	}
 	if got := mustText(t, runtime, handle); got != before {
 		t.Fatalf("rejected local edit changed text to %q, want %q", got, before)
+	}
+}
+
+func TestRuntimeRejectsCrossWireFramesAndSnapshots(t *testing.T) {
+	scalar, err := NewRuntime(DefaultRGAOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := NewRuntime(DefaultRunRGAOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scalarSource := mustCreate(t, scalar, "scalar-source")
+	runSource := mustCreate(t, run, "run-source")
+	scalarTarget := mustCreate(t, scalar, "scalar-target")
+	runTarget := mustCreate(t, run, "run-target")
+	scalarDelta := mustInsert(t, scalar, scalarSource, 0, "scalar")
+	runDelta := mustInsert(t, run, runSource, 0, "run")
+	if err := scalar.ApplyDelta(scalarTarget, runDelta); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("scalar runtime accepted run-v2 delta: %v", err)
+	}
+	if err := run.ApplyDelta(runTarget, scalarDelta); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("run-v2 runtime accepted scalar delta: %v", err)
+	}
+	scalarSnapshot, err := scalar.Snapshot(scalarSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runSnapshot, err := run.Snapshot(runSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scalar.Restore(runSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("scalar runtime restored run-v2 snapshot: %v", err)
+	}
+	if _, err := run.Restore(scalarSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("run-v2 runtime restored scalar snapshot: %v", err)
 	}
 }
 

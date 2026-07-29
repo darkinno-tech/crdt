@@ -5,9 +5,35 @@ export const RGA_WASM_GLOBAL = "__darkinnoCRDTRGA";
 const MAX_UINT64 = (1n << 64n) - 1n;
 const TEXT_ENCODER = new TextEncoder();
 
+/** One exact RGA frame contract selected by an authenticated manifest. */
+export interface RGAProtocolExpectation {
+  readonly stateTypeID: bigint;
+  readonly deltaTypeID: bigint;
+  readonly semanticsVersion: bigint;
+}
+
+/** Explicit compatibility contract for legacy scalar RGA v1 groups. */
+export const RGA_PROTOCOL_V1: Readonly<RGAProtocolExpectation> = Object.freeze({
+  stateTypeID: FrameType.RGAState,
+  deltaTypeID: FrameType.RGADelta,
+  semanticsVersion: 1n,
+});
+
+/** Default compatibility contract for new Go RGA replication groups. */
+export const RGA_PROTOCOL_RUN_V2: Readonly<RGAProtocolExpectation> = Object.freeze({
+  stateTypeID: FrameType.RGARunState,
+  deltaTypeID: FrameType.RGARunDelta,
+  semanticsVersion: 2n,
+});
+
 export interface InitRGAWasmOptions {
   /** URL of the `crdt-rga.wasm` artifact built with `make wasm`. */
   readonly wasmURL: string | URL;
+  /**
+   * Exact protocol contract authenticated for the replication group. Defaults
+   * to run-v2; pass RGA_PROTOCOL_V1 only with a separately built v1 artifact.
+   */
+  readonly expectedProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
   readonly startupTimeoutMs?: number;
 }
@@ -60,7 +86,7 @@ export class RGAWasmDocument {
     private readonly limits: RGAProtocol,
   ) {}
 
-  /** Inserts UTF-8 text before the visible rune offset and returns an RGA v1 delta frame. */
+  /** Inserts UTF-8 text before the visible rune offset and returns a negotiated RGA delta frame. */
   insert(offset: number, value: string): Uint8Array {
     this.assertOpen();
     assertBoundedString(value, this.limits.maxLocalEditBytes, "resource_limit");
@@ -73,7 +99,7 @@ export class RGAWasmDocument {
     return copiedBytes(unwrap(this.api.delete(this.handle, offset, count)));
   }
 
-  /** Validates and joins one untrusted canonical RGA v1 delta frame. */
+  /** Validates and joins one untrusted canonical frame for this runtime's negotiated RGA format. */
   applyDelta(encoded: Uint8Array): void {
     this.assertOpen();
     unwrap<void>(this.api.applyDelta(this.handle, encoded));
@@ -150,9 +176,10 @@ export class RGAWasmRuntime {
  * toolchain that built the `.wasm` file.
  */
 export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmRuntime> {
+  const expectedProtocol = expectedRGAProtocol(options.expectedProtocol);
   const existing = rawAPIFromGlobal();
   if (existing !== undefined) {
-    return new RGAWasmRuntime(existing, readAndValidateProtocol(existing));
+    return new RGAWasmRuntime(existing, readAndValidateProtocol(existing, expectedProtocol));
   }
 
   const GoConstructor = globalThis.Go;
@@ -187,7 +214,7 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
     });
 
   const api = await waitForAPI(options.startupTimeoutMs ?? 5_000, () => runFailure);
-  return new RGAWasmRuntime(api, readAndValidateProtocol(api));
+  return new RGAWasmRuntime(api, readAndValidateProtocol(api, expectedProtocol));
 }
 
 interface GoRuntime {
@@ -289,7 +316,7 @@ function unwrap<T>(result: RawResult): T {
   return result.value as T;
 }
 
-function readAndValidateProtocol(api: RawRGAAPI): RGAProtocol {
+function readAndValidateProtocol(api: RawRGAAPI, expected: Readonly<RGAProtocolExpectation>): RGAProtocol {
   const raw = unwrap(api.protocol());
   if (!isRecord(raw)) {
     throw new CRDTRuntimeError("invalid_runtime_response");
@@ -305,9 +332,9 @@ function readAndValidateProtocol(api: RawRGAAPI): RGAProtocol {
     maxLocalEditRunes: nonNegativeSafeInteger(raw.maxLocalEditRunes),
   };
   if (
-    protocol.stateTypeID !== FrameType.RGAState ||
-    protocol.deltaTypeID !== FrameType.RGADelta ||
-    protocol.semanticsVersion !== 1n ||
+    protocol.stateTypeID !== expected.stateTypeID ||
+    protocol.deltaTypeID !== expected.deltaTypeID ||
+    protocol.semanticsVersion !== expected.semanticsVersion ||
     protocol.maxFrameBytes <= 0 ||
     protocol.maxTags <= 0 ||
     protocol.maxStringBytes <= 0 ||
@@ -318,6 +345,33 @@ function readAndValidateProtocol(api: RawRGAAPI): RGAProtocol {
     throw new CRDTRuntimeError("protocol_mismatch");
   }
   return protocol;
+}
+
+function expectedRGAProtocol(value: unknown): Readonly<RGAProtocolExpectation> {
+  const expected = value ?? RGA_PROTOCOL_RUN_V2;
+  if (isKnownRGAProtocol(expected)) {
+    return expected;
+  }
+  throw new CRDTRuntimeError("protocol_mismatch");
+}
+
+function isKnownRGAProtocol(value: unknown): value is Readonly<RGAProtocolExpectation> {
+  if (
+    !isRecord(value) ||
+    typeof value.stateTypeID !== "bigint" ||
+    typeof value.deltaTypeID !== "bigint" ||
+    typeof value.semanticsVersion !== "bigint"
+  ) {
+    return false;
+  }
+  return (
+    (value.stateTypeID === RGA_PROTOCOL_V1.stateTypeID &&
+      value.deltaTypeID === RGA_PROTOCOL_V1.deltaTypeID &&
+      value.semanticsVersion === RGA_PROTOCOL_V1.semanticsVersion) ||
+    (value.stateTypeID === RGA_PROTOCOL_RUN_V2.stateTypeID &&
+      value.deltaTypeID === RGA_PROTOCOL_RUN_V2.deltaTypeID &&
+      value.semanticsVersion === RGA_PROTOCOL_RUN_V2.semanticsVersion)
+  );
 }
 
 function snapshotFromRaw(raw: unknown, limits: SnapshotLimits): RGASnapshot {
