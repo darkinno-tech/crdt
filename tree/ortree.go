@@ -74,6 +74,12 @@ type ORTree struct {
 	// the rooted projection, so State avoids repeating that work between writes.
 	visibleCount        int
 	visibleCountVersion uint64
+
+	// visibleIDs is the canonical visible projection without caller-owned
+	// values. Nodes rebuilds it only after a write, then copies values for each
+	// caller so reads remain isolated.
+	visibleIDs        []NodeID
+	visibleIDsVersion uint64
 }
 
 var _ crdt.CRDT[*ORTree] = (*ORTree)(nil)
@@ -243,8 +249,21 @@ func (t *ORTree) Nodes() []Node {
 		return nil
 	}
 	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return visible(t.nodes, t.tombstones)
+	if t.visibleIDsVersion == t.version {
+		result := nodesForVisibleIDs(t.visibleIDs, t.nodes)
+		t.mu.RUnlock()
+		return result
+	}
+	t.mu.RUnlock()
+
+	t.mu.Lock()
+	if t.visibleIDsVersion != t.version {
+		t.visibleIDs = visibleNodeIDs(t.nodes, t.tombstones)
+		t.visibleIDsVersion = t.version
+	}
+	result := nodesForVisibleIDs(t.visibleIDs, t.nodes)
+	t.mu.Unlock()
+	return result
 }
 func (t *ORTree) State() crdt.StateSnapshot {
 	if t == nil {
@@ -409,7 +428,7 @@ func greatest(delta Delta) (NodeID, bool) {
 	}
 	return greatest, ok
 }
-func visible(nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}) []Node {
+func visibleNodeIDs(nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}) []NodeID {
 	children := make(map[NodeID][]NodeID, len(nodes))
 	for id, node := range nodes {
 		children[node.parent] = append(children[node.parent], id)
@@ -419,7 +438,7 @@ func visible(nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}) []Node
 	}
 	stack := append([]NodeID(nil), children[NodeID{}]...)
 	reverse(stack)
-	result := make([]Node, 0, len(nodes))
+	result := make([]NodeID, 0, len(nodes))
 	for len(stack) > 0 {
 		index := len(stack) - 1
 		id := stack[index]
@@ -427,12 +446,20 @@ func visible(nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}) []Node
 		if _, removed := tombstones[id]; removed {
 			continue
 		}
-		node := nodes[id]
-		result = append(result, Node{ID: id, Parent: node.parent, Value: append([]byte(nil), node.value...)})
+		result = append(result, id)
 		child := children[id]
 		for index := len(child) - 1; index >= 0; index-- {
 			stack = append(stack, child[index])
 		}
+	}
+	return result
+}
+
+func nodesForVisibleIDs(ids []NodeID, nodes map[NodeID]storedNode) []Node {
+	result := make([]Node, 0, len(ids))
+	for _, id := range ids {
+		node := nodes[id]
+		result = append(result, Node{ID: id, Parent: node.parent, Value: append([]byte(nil), node.value...)})
 	}
 	return result
 }

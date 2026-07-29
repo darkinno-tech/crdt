@@ -166,6 +166,33 @@ func TestORTreeCopiesValuesAndNilPaths(t *testing.T) {
 	}
 }
 
+func TestORTreeNodesInvalidatesCachedProjectionAfterWrites(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _, err := value.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes := value.Nodes(); len(nodes) != 1 || nodes[0].ID != root {
+		t.Fatalf("initial nodes = %#v", nodes)
+	}
+	child, _, err := value.Add(root, []byte("child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodes := value.Nodes(); len(nodes) != 2 || nodes[1].ID != child {
+		t.Fatalf("cached nodes after add = %#v", nodes)
+	}
+	if _, err := value.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if nodes := value.Nodes(); len(nodes) != 0 {
+		t.Fatalf("cached nodes after remove = %#v", nodes)
+	}
+}
+
 func TestORTreeBinaryRoundTrip(t *testing.T) {
 	source, err := New("source")
 	if err != nil {
@@ -406,6 +433,63 @@ func TestORTreeCompactTombstonesOnlyRemovesExactLeaves(t *testing.T) {
 	}
 	if removed, err := value.CompactTombstones([]NodeID{{}}); !errors.Is(err, ErrUnsafeCompaction) || removed != 0 {
 		t.Fatalf("CompactTombstones(invalid) = %d, %v", removed, err)
+	}
+}
+
+func TestORTreeHighCardinalityRecoveryAndBurstLimit(t *testing.T) {
+	const children = 16 * 1024
+	limits := Options{MaxNodes: children + 1, MaxTombstones: children + 1, MaxValueBytes: 64}
+	source, err := NewWithOptions("source", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _, err := source.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < children; index++ {
+		if _, _, err := source.Add(root, []byte("child")); err != nil {
+			t.Fatalf("Add child %d = %v", index, err)
+		}
+	}
+	state, err := source.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := NewWithOptions("recovered", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recovered.UnmarshalBinary(state); err != nil {
+		t.Fatal(err)
+	}
+	if nodes := recovered.Nodes(); len(nodes) != children+1 {
+		t.Fatalf("recovered nodes = %d, want %d", len(nodes), children+1)
+	}
+
+	source.mu.RLock()
+	burst := Delta{nodes: cloneNodes(source.nodes), tombstones: cloneTombstones(source.tombstones)}
+	source.mu.RUnlock()
+	limited, err := NewWithOptions("limited", Options{MaxNodes: 1, MaxTombstones: 1, MaxValueBytes: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, _, err := limited.Add(NodeID{}, []byte("baseline"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := limited.ApplyDelta(burst); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("ApplyDelta(high-cardinality burst) = %v, want %v", err, ErrResourceLimit)
+	}
+	if nodes := limited.Nodes(); len(nodes) != 1 || nodes[0].ID != baseline || string(nodes[0].Value) != "baseline" {
+		t.Fatalf("rejected burst changed receiver: %#v", nodes)
+	}
+	if err := limited.UnmarshalBinary(state); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("UnmarshalBinary(high-cardinality state) = %v, want %v", err, ErrResourceLimit)
+	}
+	if nodes := limited.Nodes(); len(nodes) != 1 || nodes[0].ID != baseline || string(nodes[0].Value) != "baseline" {
+		t.Fatalf("rejected state changed receiver: %#v", nodes)
 	}
 }
 

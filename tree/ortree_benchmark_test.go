@@ -44,6 +44,32 @@ func BenchmarkORTreeNodesWideTree(b *testing.B) {
 	}
 }
 
+// BenchmarkORTreeNodesWideTreeParallel measures concurrent reader pressure on
+// one shared document. RunParallel is required here: changing GOMAXPROCS alone
+// does not create concurrent callers.
+func BenchmarkORTreeNodesWideTreeParallel(b *testing.B) {
+	value, err := New("benchmark")
+	if err != nil {
+		b.Fatal(err)
+	}
+	root, _, err := value.Add(NodeID{}, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := 0; index < 1024; index++ {
+		if _, _, err := value.Add(root, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(worker *testing.PB) {
+		for worker.Next() {
+			_ = value.Nodes()
+		}
+	})
+}
+
 func BenchmarkORTreeTombstoneTags1024(b *testing.B) {
 	value, _ := benchmarkORTreeTombstones(b, 1024)
 	b.ReportAllocs()
