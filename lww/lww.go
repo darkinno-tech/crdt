@@ -17,9 +17,13 @@ import (
 )
 
 var (
+	ErrInvalidCodec     = errors.New("lww: invalid element codec")
 	ErrInvalidReplicaID = errors.New("lww: invalid replica ID")
 	ErrNilSet           = errors.New("lww: nil set")
 	ErrNilMap           = errors.New("lww: nil map")
+	ErrCodecMismatch    = errors.New("lww: codec ID mismatch")
+	ErrInvalidSetDelta  = errors.New("lww: invalid LWW-Set delta")
+	ErrInvalidSetSnap   = errors.New("lww: invalid LWW-Set snapshot")
 	ErrInvalidKey       = errors.New("lww: invalid key")
 	ErrInvalidDelta     = errors.New("lww: invalid map delta")
 	ErrInvalidSnapshot  = errors.New("lww: invalid map snapshot")
@@ -31,6 +35,20 @@ type setEntry[T comparable] struct {
 	present bool
 }
 
+// ElementCodec identifies and encodes one LWW-Set element type. Its ID and
+// encoded bytes must be stable across replicas that exchange frames. Codec
+// implementations must be safe for concurrent calls and return errors rather
+// than panicking for invalid input.
+type ElementCodec[T comparable] interface {
+	ID() string
+	Marshal(T) ([]byte, error)
+	Unmarshal([]byte) (T, error)
+}
+
+// SetDelta is a joinable partial LWW-Set state. Its entries are unexported so
+// callers cannot alter a delta after handing it to replication code.
+type SetDelta[T comparable] struct{ entries map[T]setEntry[T] }
+
 // Set is an LWW element set. Concurrent add/remove operations are resolved by
 // the canonical Tag ordering, rather than by an implicit wall-clock tie rule.
 type Set[T comparable] struct {
@@ -41,6 +59,7 @@ type Set[T comparable] struct {
 }
 
 var _ crdt.CRDT[*Set[string]] = (*Set[string])(nil)
+var _ crdt.DeltaCapable[*Set[string], SetDelta[string]] = (*Set[string])(nil)
 
 func NewSet[T comparable](replicaID string) (*Set[T], error) {
 	return NewSetFromClock[T](clock.State{ReplicaID: replicaID})
@@ -64,23 +83,43 @@ func (s *Set[T]) ClockState() clock.State {
 	return s.clock.Snapshot()
 }
 
-func (s *Set[T]) Add(value T) error    { return s.write(value, true) }
-func (s *Set[T]) Remove(value T) error { return s.write(value, false) }
+// Add inserts value and preserves the original non-delta API.
+func (s *Set[T]) Add(value T) error {
+	_, err := s.AddWithDelta(value)
+	return err
+}
 
-func (s *Set[T]) write(value T, present bool) error {
+// Remove removes value and preserves the original non-delta API.
+func (s *Set[T]) Remove(value T) error {
+	_, err := s.RemoveWithDelta(value)
+	return err
+}
+
+// AddWithDelta inserts value and returns the joinable delta for this write.
+func (s *Set[T]) AddWithDelta(value T) (SetDelta[T], error) {
+	return s.writeDelta(value, true)
+}
+
+// RemoveWithDelta removes value and returns the joinable delta for this write.
+func (s *Set[T]) RemoveWithDelta(value T) (SetDelta[T], error) {
+	return s.writeDelta(value, false)
+}
+
+func (s *Set[T]) writeDelta(value T, present bool) (SetDelta[T], error) {
 	if s == nil || s.clock == nil {
-		return ErrNilSet
+		return SetDelta[T]{}, ErrNilSet
 	}
 	tag, err := s.clock.Now()
 	if err != nil {
-		return err
+		return SetDelta[T]{}, err
 	}
+	incoming := setEntry[T]{tag: tag, present: present}
 	s.mu.Lock()
 	if current, exists := s.entries[value]; !exists || current.tag.Compare(tag) < 0 {
-		s.entries[value] = setEntry[T]{tag: tag, present: present}
+		s.entries[value] = incoming
 	}
 	s.mu.Unlock()
-	return nil
+	return SetDelta[T]{entries: map[T]setEntry[T]{value: incoming}}, nil
 }
 
 func (s *Set[T]) Contains(value T) bool {
@@ -119,6 +158,46 @@ func (s *Set[T]) Merge(other *Set[T]) error {
 	other.mu.RLock()
 	entries := cloneSetEntries(other.entries)
 	other.mu.RUnlock()
+	return s.applyOwnedSetEntries(entries)
+}
+
+// ApplyDelta joins a validated partial LWW-Set state into s.
+func (s *Set[T]) ApplyDelta(delta SetDelta[T]) error {
+	if s == nil || s.clock == nil {
+		return ErrNilSet
+	}
+	if err := validateSetEntries(delta.entries); err != nil {
+		return err
+	}
+	if s.subsumes(delta.entries) {
+		return nil
+	}
+	return s.applyOwnedSetEntries(cloneSetEntries(delta.entries))
+}
+
+// subsumes reports whether every incoming entry is already represented by an
+// equal or newer local entry. A true result keeps duplicate delivery read-only,
+// including the persisted HLC state.
+func (s *Set[T]) subsumes(entries map[T]setEntry[T]) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for value, incoming := range entries {
+		current, exists := s.entries[value]
+		if !exists || current.tag.Compare(incoming.tag) < 0 || setEntriesConflict(current, incoming) {
+			return false
+		}
+	}
+	return true
+}
+
+// applyOwnedSetEntries joins entries that already belong to the caller.
+func (s *Set[T]) applyOwnedSetEntries(entries map[T]setEntry[T]) error {
+	if err := validateSetEntries(entries); err != nil {
+		return err
+	}
+	if s.subsumes(entries) {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for value, incoming := range entries {
@@ -141,6 +220,26 @@ func (s *Set[T]) Merge(other *Set[T]) error {
 	return nil
 }
 
+// Merge joins two partial LWW-Set states without modifying either delta.
+func (d SetDelta[T]) Merge(other SetDelta[T]) (SetDelta[T], error) {
+	if err := validateSetEntries(d.entries); err != nil {
+		return SetDelta[T]{}, err
+	}
+	if err := validateSetEntries(other.entries); err != nil {
+		return SetDelta[T]{}, err
+	}
+	merged := cloneSetEntries(d.entries)
+	for value, incoming := range other.entries {
+		if current, exists := merged[value]; exists && setEntriesConflict(current, incoming) {
+			return SetDelta[T]{}, ErrTagConflict
+		}
+		if current, exists := merged[value]; !exists || current.tag.Compare(incoming.tag) < 0 {
+			merged[value] = incoming
+		}
+	}
+	return SetDelta[T]{entries: merged}, nil
+}
+
 func (s *Set[T]) State() crdt.StateSnapshot {
 	if s == nil {
 		return crdt.StateSnapshot{Type: "lww-set"}
@@ -154,6 +253,17 @@ func (s *Set[T]) State() crdt.StateSnapshot {
 		}
 	}
 	return crdt.StateSnapshot{Type: "lww-set", ReplicaID: s.replicaID, ElementCount: present, TombstoneCount: len(s.entries) - present}
+}
+
+// Frontier returns the greatest set-entry tag per replica. The returned map
+// is owned by the caller and includes removed entries.
+func (s *Set[T]) Frontier() map[string]crdt.Tag {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return setFrontier(s.entries)
 }
 
 type mapEntry struct {
@@ -261,6 +371,48 @@ func (m *Map) Get(key string) ([]byte, bool) {
 	return append([]byte(nil), entry.value...), true
 }
 
+// HasEntry reports whether m retains any metadata for key, including a delete
+// tombstone. It is intended for bounded wrappers that must distinguish a new
+// key from an idempotent replay without exposing the entry's tag or value.
+func (m *Map) HasEntry(key string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	_, ok := m.entries[key]
+	m.mu.RUnlock()
+	return ok
+}
+
+// EntryCount returns the total number of retained map entries, including
+// tombstones. It is useful for callers that impose their own retention budget.
+func (m *Map) EntryCount() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	count := len(m.entries)
+	m.mu.RUnlock()
+	return count
+}
+
+// EntryKeys returns every retained key, including delete tombstones, in
+// lexical order. It is for resource accounting; use Keys when only visible
+// application values are needed.
+func (m *Map) EntryKeys() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	keys := make([]string, 0, len(m.entries))
+	for key := range m.entries {
+		keys = append(keys, key)
+	}
+	m.mu.RUnlock()
+	sort.Strings(keys)
+	return keys
+}
+
 // Keys returns the visible keys in lexical order, which keeps callers from
 // accidentally depending on Go's randomized map iteration order.
 func (m *Map) Keys() []string {
@@ -288,13 +440,34 @@ func (m *Map) ApplyDelta(delta MapDelta) error {
 	if err := validateMapEntries(delta.entries); err != nil {
 		return err
 	}
+	if m.subsumes(delta.entries) {
+		return nil
+	}
 	return m.applyOwnedMapEntries(cloneMapEntries(delta.entries))
+}
+
+// subsumes reports whether every incoming entry is already represented by an
+// equal or newer local entry. A true result keeps duplicate and obsolete delta
+// delivery read-only, including the persisted HLC state.
+func (m *Map) subsumes(entries map[string]mapEntry) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for key, incoming := range entries {
+		current, exists := m.entries[key]
+		if !exists || current.tag.Compare(incoming.tag) < 0 || mapEntriesConflict(current, incoming) {
+			return false
+		}
+	}
+	return true
 }
 
 // applyOwnedMapEntries joins entries that are already owned by the caller.
 // Merge uses it after taking its one source snapshot, avoiding a second full
 // map clone while retaining ApplyDelta's public ownership boundary.
 func (m *Map) applyOwnedMapEntries(entries map[string]mapEntry) error {
+	if m.subsumes(entries) {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, incoming := range entries {
@@ -378,12 +551,90 @@ func (d MapDelta) Merge(other MapDelta) (MapDelta, error) {
 	return MapDelta{entries: merged}, nil
 }
 
+// Keys returns all keys represented by d, including delete tombstones, in
+// lexical order. The returned slice is owned by the caller.
+func (d MapDelta) Keys() []string {
+	keys := make([]string, 0, len(d.entries))
+	for key := range d.entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ValidateValues validates every visible value in d without exposing its
+// private tags or allowing callers to mutate the delta. A nil validator is an
+// error so a wrapper cannot accidentally skip schema validation at a network
+// boundary.
+func (d MapDelta) ValidateValues(validate func(key string, value []byte) error) error {
+	if validate == nil {
+		return ErrInvalidDelta
+	}
+	if err := validateMapEntries(d.entries); err != nil {
+		return err
+	}
+	for key, entry := range d.entries {
+		if entry.present {
+			if err := validate(key, append([]byte(nil), entry.value...)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateValues validates every visible value in m without exposing its
+// private entries. The callback receives a copy and is called without m's
+// lock, so it may safely perform ordinary validation work.
+func (m *Map) ValidateValues(validate func(key string, value []byte) error) error {
+	if m == nil || validate == nil {
+		return ErrNilMap
+	}
+	m.mu.RLock()
+	values := make(map[string][]byte, len(m.entries))
+	for key, entry := range m.entries {
+		if entry.present {
+			values[key] = append([]byte(nil), entry.value...)
+		}
+	}
+	m.mu.RUnlock()
+	for key, value := range values {
+		if err := validate(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func cloneSetEntries[T comparable](source map[T]setEntry[T]) map[T]setEntry[T] {
 	out := make(map[T]setEntry[T], len(source))
 	for value, entry := range source {
 		out[value] = entry
 	}
 	return out
+}
+
+func validateSetEntries[T comparable](entries map[T]setEntry[T]) error {
+	for _, entry := range entries {
+		if !entry.tag.Valid() {
+			return ErrInvalidSetDelta
+		}
+	}
+	return nil
+}
+
+func setEntriesConflict[T comparable](left, right setEntry[T]) bool {
+	return left.tag == right.tag && left.present != right.present
+}
+
+func setFrontier[T comparable](entries map[T]setEntry[T]) map[string]crdt.Tag {
+	frontier := make(map[string]crdt.Tag)
+	for _, entry := range entries {
+		if current, ok := frontier[entry.tag.ReplicaID]; !ok || current.Compare(entry.tag) < 0 {
+			frontier[entry.tag.ReplicaID] = entry.tag
+		}
+	}
+	return frontier
 }
 func cloneMapEntries(source map[string]mapEntry) map[string]mapEntry {
 	out := make(map[string]mapEntry, len(source))

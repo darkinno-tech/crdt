@@ -2,7 +2,9 @@ package lww
 
 import (
 	"bytes"
+	"errors"
 	"math"
+	"reflect"
 	"testing"
 
 	"github.com/DarkInno/crdt"
@@ -122,6 +124,55 @@ func TestMapMergeDoesNotAliasFutureSourceWrites(t *testing.T) {
 	}
 	if got, ok := target.Get("key"); !ok || !bytes.Equal(got, []byte("first")) {
 		t.Fatalf("target Get() = %q, %v", got, ok)
+	}
+}
+
+func TestMapMetadataIntrospectionAndValidation(t *testing.T) {
+	value, err := NewMap("map")
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, err := value.SetWithDelta("b", []byte("value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := value.Delete("a"); err != nil {
+		t.Fatal(err)
+	}
+	if !value.HasEntry("a") || !value.HasEntry("b") || value.HasEntry("missing") || value.EntryCount() != 2 {
+		t.Fatalf("entry metadata = %#v, %d", value.EntryKeys(), value.EntryCount())
+	}
+	if got := value.EntryKeys(); !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Fatalf("EntryKeys() = %#v", got)
+	}
+	if got := change.Keys(); !reflect.DeepEqual(got, []string{"b"}) {
+		t.Fatalf("delta Keys() = %#v", got)
+	}
+	if err := change.ValidateValues(func(key string, bytes []byte) error {
+		if key != "b" || string(bytes) != "value" {
+			t.Fatalf("delta callback = %q, %q", key, bytes)
+		}
+		bytes[0] = 'X'
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := value.Get("b"); !ok || string(got) != "value" {
+		t.Fatalf("callback aliased map value = %q, %v", got, ok)
+	}
+	validatorErr := errors.New("reject")
+	if err := value.ValidateValues(func(string, []byte) error { return validatorErr }); !errors.Is(err, validatorErr) {
+		t.Fatalf("Map.ValidateValues() = %v", err)
+	}
+	if err := change.ValidateValues(nil); !errors.Is(err, ErrInvalidDelta) {
+		t.Fatalf("delta nil validator = %v", err)
+	}
+	var nilMap *Map
+	if nilMap.HasEntry("x") || nilMap.EntryCount() != 0 || nilMap.EntryKeys() != nil {
+		t.Fatal("nil map metadata accessors")
+	}
+	if err := nilMap.ValidateValues(func(string, []byte) error { return nil }); !errors.Is(err, ErrNilMap) {
+		t.Fatalf("nil map validator = %v", err)
 	}
 }
 

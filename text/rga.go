@@ -273,6 +273,14 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 			return ErrTagConflict
 		}
 	}
+	// Re-delivery is common on at-least-once transports. Check under the same
+	// write lock used by compaction so a retired leaf cannot be mistaken for
+	// retained state while another goroutine changes the structural indexes.
+	// Besides avoiding the planning work, this keeps duplicate frames from
+	// needlessly advancing persisted HLC state.
+	if r.subsumesLocked(delta) {
+		return nil
+	}
 	// Integrated nodes have complete, previously validated parent chains. Only
 	// a pending node can still point at an ID introduced by this delta, so
 	// copying or traversing the full live document is unnecessary here.
@@ -646,6 +654,27 @@ func (r *RGA) planDelta(delta Delta) deltaPlan {
 		}
 	}
 	return plan
+}
+
+// subsumesLocked reports whether every part of delta is already retained by
+// this RGA. The caller must hold r.mu for writing: tombstone compaction can
+// otherwise remove a node or tombstone between this check and return.
+func (r *RGA) subsumesLocked(delta Delta) bool {
+	for id, incoming := range delta.nodes {
+		if current, exists := r.nodes[id]; exists && current == incoming {
+			continue
+		}
+		if current, exists := r.pending[id]; exists && current == incoming {
+			continue
+		}
+		return false
+	}
+	for id := range delta.tombstones {
+		if _, exists := r.tombstones[id]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func sortPositions(ids []Position) {

@@ -32,6 +32,8 @@ those types are a release gate before they become stable.
 | LWW-Set | largest HLC tag per element | add/remove | O(changed elements) | removed entries |
 | LWW-Map | largest HLC tag per string key | set/delete | O(changed keys) | deleted entries and tags |
 | RGA text v1 | union nodes plus tombstones; sibling IDs sort by descending tag | insert/delete by rune offset | O(log n) offset lookup; O(n) render | deleted structural anchors |
+| OR-Tree | union immutable parent links plus tombstones | add/remove node instance | O(changed nodes); O(nodes) projection | deleted structural anchors |
+| Attachment reference | largest HLC tag per application key | put/delete immutable object reference | O(changed keys) | deleted entries and tags; no media bytes |
 
 LWW deliberately has no hidden "add wins" tie. `crdt.Tag.Compare` orders wall
 time, logical counter, then replica ID. Every replica ID is globally unique and
@@ -75,10 +77,24 @@ network-replicable library primitive:
 - RGA compaction only removes deleted leaves after external authenticated exact
   acknowledgement, durable post-compaction checkpointing, and retirement of
   old deltas. Descendant anchors remain retained.
+- OR-Tree has the same lifecycle boundary. `tree.Options` bounds node,
+  tombstone, and value retention on both mutation and recovery; its compactor
+  removes only requested tombstoned leaves and refuses any retained structural
+  anchor. `tombstonegc.Coordinator.AcknowledgeAndCompactTarget` can reuse the
+  exact-acknowledgement epoch, but cannot substitute for durable checkpointing
+  and epoch-bound retirement of old frames.
 - Bound document nodes, operation bytes, sibling fan-out, and retained
   tombstones at the transport/application boundary. Checksums detect corruption
   only; authentication, authorization, encryption, rate limits, and quotas
   remain the embedding application's responsibility.
+- Images, audio, video, and files are replicated as `attachment.Reference`
+  metadata only: opaque object ID, canonical MIME type, declared size, and
+  SHA-256 digest. The application owns object authorization, malware/content
+  scanning, and delivery quotas; it calls `Reference.Verify` to stream-check
+  exact size and digest before decode/render.
+  `attachment.Register` uses the experimental LWW-Map TypeIDs 9/10 under a
+  distinct manifest schema and semantics version; raw or signed media URLs
+  never belong in CRDT values.
 
 ## Verification matrix
 
@@ -113,6 +129,11 @@ observed-remove rooted forest with these rules:
 
 This keeps merge a set union plus tombstone subtraction, preserving
 commutativity, associativity, idempotence, and a mechanically testable no-cycle
-invariant. Tree framing, bounded decode, and snapshot/HLC recovery are
-implemented experimentally. Exact tombstone acknowledgement and compaction
-remain required before stable promotion.
+invariant. Tree framing, bounded decode, snapshot/HLC recovery, and leaf-only
+compaction are implemented experimentally. Before calling
+`CompactTombstones`, an application must collect exact authenticated
+acknowledgements from every current member in one epoch, persist a
+post-compaction checkpoint, and reject or retire every old-epoch frame. The
+leaf restriction is deliberately stricter than an acknowledgement proof: a
+known child makes its deleted parent a required structural anchor. These
+requirements remain a stable-promotion gate.

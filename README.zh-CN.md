@@ -19,14 +19,16 @@
 - 基于状态的 **G-Counter**，具有可合并且类型隔离的增量。
 - 使用调用方自定义元素编解码器、带可合并增量的仅增长 **G-Set**。
 - 支持调用方自定义元素编解码器的加法胜出（add-wins）观察移除 **OR-Set**。
+- 处于实验阶段、支持 Delta 复制的 **LWW-Set**，使用调用方定义的元素编解码器和确定性的 HLC 冲突决议。
 - 因果复制的 **MV-Register**：保留并发的不透明字节写入，而非用墙上时钟裁决。
 - 处于实验阶段、支持 Delta 复制的 **LWW-Map**，使用不透明字节值和确定性的 HLC 冲突决议。
+- 实验性的**附件引用**：用于图片、音频、视频和数据，仅复制受限元数据，媒体对象由经过认证的应用存储管理。
 - 混合逻辑时钟（HLC）标签和可持久化的时钟状态，支持副本重启。
 - 规范化、带校验和的二进制帧；解码有边界且编码确定。
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
-- 实验性 LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
+- 实验性 LWW-Set、LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
   RGA v1 现具备有边界的延迟集成与增量可见索引，但其墓碑生命周期仍为实验性。
 
 ## 范围
@@ -36,14 +38,19 @@
 `tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该
 成员视图。校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
 
-## 实验性 LWW-Map、RGA 与 OR-Tree 协议
+## 实验性 LWW-Set、LWW-Map、RGA 与 OR-Tree 协议
+
+LWW-Set（`lww.Set`，TypeID 7/8）通过应用提供的规范化 `lww.ElementCodec`
+编码泛型元素，并保留删除元数据。必须原子持久化
+`SnapshotCurrentState(codec)`（或 `Snapshot(codec, frontier)`）并仅通过
+`NewSetFromSnapshot` 恢复使用同一 ID 的副本；新 wire 格式仍需显式协商。
 
 RGA 文本 v1（`text`，TypeID 11/12）通过有边界的延迟集成队列处理乱序 delta，拒绝
 不完整快照，并以增量索引替代每次编辑后的全量可见投影重建；在完整墓碑生命周期经过
 验证前仍为实验性协议。必须原子持久化其带 HLC 的快照。
 
 `CompactTombstones` 有意保持保守：只有在经过认证的精确确认纪元已持久化回收后快照
-并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Map、
+并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Set、LWW-Map、
 RGA run-v2（TypeID 19/20）和 OR-Tree 仍为实验性能力，必须显式启用：
 
 ```go
@@ -61,8 +68,24 @@ for _, kind := range policy.FrameTypes() {
 线协议语义兼容。
 
 零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该
-策略既不是全局开关，也不是插件注册机制：未知或仅预留的帧类型仍不受支持。LWW-Map、
+策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
 RGA 和 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
+
+## 实验性附件引用
+
+`attachment.Register` 将文档中的图片、音频、视频或其他二进制数据表示为一个有边界的
+LWW-Map 不可变引用。每条引用仅包含不透明对象 ID、规范 MIME 类型、声明字节长度和
+SHA-256 摘要；CRDT delta、快照、日志和诊断信息中均不携带媒体原始字节。用户可协作编辑
+的文本仍应使用 `text.RGA`；普通结构化数据则按冲突语义选择 `lww.Map`、OR-Set 或 OR-Tree。
+
+附件引用复用实验性 LWW-Map 帧 TypeID 9/10。每个复制组必须在 `replica.Manifest` 中绑定
+schema ID `github.com/DarkInno/crdt/attachment-reference/v1`、空 codec ID 和
+`attachment.SemanticsVersion`，并在所有边界显式启用 `AllowExperimental`。必须将
+`SnapshotCurrentState()` 与 HLC 状态原子持久化，并在满足 LWW 墓碑生命周期前保留删除元数据。
+
+应用负责授权、对象存储生命周期、内容扫描、限流和下载策略。下载完成后、解码或渲染前必须调用
+`Reference.Verify`：它以流式方式校验对象，不缓冲原始媒体，并拒绝截断、超长或摘要不匹配的响应。
+不得把签名 URL、凭据、个人数据或媒体原始内容放入 `Reference.ObjectID`。
 
 ## 要求
 
@@ -228,6 +251,16 @@ go run ./examples/warehouse-replication
 go run ./examples/experimental-collaboration
 ```
 
+[附件协作示例](examples/attachment-collaboration)为同一文档分别建立 Manifest 绑定的
+RGA 文本组和附件引用组，使用快照恢复两个接收状态，并在接受对象前通过
+`Reference.Verify` 流式校验已授权下载：
+
+```sh
+go run ./examples/attachment-collaboration
+```
+
+Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](ATTACHMENT_INTEGRATION.zh-CN.md)。
+
 英文版本见 [integration tutorial](INTEGRATION.md)。
 
 ## 在分布式系统中的正确使用方式
@@ -249,7 +282,7 @@ go run ./examples/experimental-collaboration
   后续 `Set` 已观察哪些写入；使用 `register.NewMVRegisterFromSnapshot` 恢复。
 - 将 `ProtocolPolicy.FrameTypes()` 作为本地能力白名单；经过认证的连接/建链必须
   使用 `replica.Manifest` 比较 group、schema、epoch、codec 与语义版本。只有两端都
-  显式选择实验协议时才能发送 LWW-Map、RGA 或 OR-Tree 帧。必须原子持久化带 HLC 的
+  显式选择实验协议时才能发送 LWW-Set、LWW-Map、RGA 或 OR-Tree 帧。必须原子持久化带 HLC 的
   快照；RGA 墓碑回收还需要经过认证的精确确认纪元并淘汰旧 delta。
 - 保持 `ElementCodec.ID`、`Marshal` 与 `Unmarshal` 确定性，并确保它们可安全
   并发调用。编码值必须以规范形式往返。
@@ -277,7 +310,8 @@ go run ./examples/experimental-collaboration
 | `clock` | 混合逻辑时钟和持久化 HLC 状态。 |
 | `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
 | `set` | G-Set、加法胜出 OR-Set 与元素编解码器契约。 |
-| `lww` | 内存 LWW-Set 与实验性的、带帧 LWW-Map。 |
+| `lww` | 实验性的、带帧 LWW-Set 与 LWW-Map。 |
+| `attachment` | 实验性的、有边界媒体/数据引用，带流式长度与 SHA-256 校验。 |
 | `text` | 实验性、带帧 RGA 协作文本和 run-v2 编解码器。 |
 | `tree` | 实验性、带帧的观察移除树。 |
 | `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |

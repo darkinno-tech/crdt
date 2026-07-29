@@ -20,8 +20,12 @@ feature-parity, or performance claim.
 - State-based **G-Counter** with joinable, type-isolated deltas.
 - Grow-only **G-Set** with a caller-defined element codec and joinable deltas.
 - Add-wins observed-remove **OR-Set** with a caller-defined element codec.
+- Experimental delta-replicated **LWW-Set** with a caller-defined element
+  codec and deterministic HLC conflict resolution.
 - Experimental delta-replicated **LWW-Map** with opaque byte values and
   deterministic HLC conflict resolution.
+- Experimental **attachment references** for images, audio, video, and data:
+  bounded metadata only, backed by an authenticated application object store.
 - Causally replicated **MV-Register** that preserves concurrent opaque-byte
   writes instead of resolving them by wall clock.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
@@ -32,7 +36,7 @@ feature-parity, or performance claim.
   anti-entropy workflows.
 - Optional exact-acknowledgement tombstone collection with membership epochs.
 - Safe concurrent access for the provided CRDT implementations.
-- Experimental framed LWW-Map, RGA text, and OR-Tree collections, enabled
+- Experimental framed LWW-Set, LWW-Map, RGA text, and OR-Tree collections, enabled
   only by an explicit per-replication-group protocol policy. RGA v1 now has
   bounded delayed integration and incremental visible indexing, but its
   tombstone lifecycle remains experimental.
@@ -48,7 +52,13 @@ persist that view. A checksum
 detects accidental frame corruption; it is not an authenticity or encryption
 mechanism.
 
-## Experimental LWW-Map, RGA, and OR-Tree protocols
+## Experimental LWW-Set, LWW-Map, RGA, and OR-Tree protocols
+
+LWW-Set (`lww.Set`, TypeIDs 7/8) encodes generic elements through an
+application-supplied canonical `lww.ElementCodec`. It retains remove metadata,
+so persist `SnapshotCurrentState(codec)` (or `Snapshot(codec, frontier)`) and
+restore a same-ID replica only with `NewSetFromSnapshot`. Its new wire format
+is experimental and must be explicitly negotiated.
 
 RGA text v1 (`text`, TypeIDs 11/12) accepts out-of-order deltas through a
 bounded delayed-integration queue, rejects incomplete snapshots, and uses an
@@ -59,7 +69,7 @@ validated. Persist its HLC-backed snapshot atomically.
 `CompactTombstones` is intentionally conservative: it can collect only deleted
 leaves after an authenticated exact-acknowledgement epoch has durably saved a
 post-compaction snapshot and retired old deltas. Nodes with descendants remain
-structural anchors. LWW-Map, RGA run-v2 (TypeIDs 19/20), and OR-Tree remain
+structural anchors. LWW-Set, LWW-Map, RGA run-v2 (TypeIDs 19/20), and OR-Tree remain
 experimental and require explicit opt-in:
 
 ```go
@@ -80,8 +90,30 @@ not establish wire-semantic compatibility.
 The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
 MV-Register, and PN-Counter protocols. The policy is neither a global switch
 nor a plugin registry: unknown and reserved frame types remain unsupported.
-Experimental LWW-Map, RGA, and OR-Tree replicas must persist HLC state with
+Experimental LWW-Set, LWW-Map, RGA, and OR-Tree replicas must persist HLC state with
 snapshots and retain their tombstones.
+
+## Experimental attachment references
+
+`attachment.Register` represents a document's images, audio, video, or other
+binary data as a bounded LWW-Map of immutable references. A reference contains
+an opaque object ID, canonical MIME type, declared byte length, and SHA-256
+digest; it never carries media bytes in a CRDT delta, snapshot, log, or
+diagnostic. Text that users edit remains `text.RGA`; ordinary structured data
+remains `lww.Map`, OR-Set, or OR-Tree according to its conflict semantics.
+
+Attachment references use the experimental LWW-Map frame IDs (9/10). Bind each
+replication group to a `replica.Manifest` with schema ID
+`github.com/DarkInno/crdt/attachment-reference/v1`, an empty codec ID, and
+`attachment.SemanticsVersion`; enable `AllowExperimental` on every boundary.
+Persist `SnapshotCurrentState()` with its HLC state, and retain delete metadata
+until the LWW tombstone lifecycle is complete.
+
+The application owns authorization, object-store lifecycle, content scanning,
+rate limits, and download policy. After a fetch, call `Reference.Verify` before
+decoding or rendering: it streams the object without buffering it and rejects a
+short, oversized, or digest-mismatched response. Do not put signed URLs,
+credentials, personal data, or raw media content in `Reference.ObjectID`.
 
 ## Requirements
 
@@ -254,6 +286,19 @@ authenticated experimental-protocol handshake described above:
 go run ./examples/experimental-collaboration
 ```
 
+The [attachment collaboration example](examples/attachment-collaboration)
+uses separate manifest-bound groups for RGA text and attachment references,
+persists both receiver states through snapshots, and streams an authorized
+download through `Reference.Verify` before accepting it:
+
+```sh
+go run ./examples/attachment-collaboration
+```
+
+See [attachment reference integration](ATTACHMENT_INTEGRATION.md) for the
+manifest fields, limits, storage boundary, deletion retention, and verification
+requirements.
+
 For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 [协作任务示例](examples/collaborative-board) and
 [仓库复制示例](examples/warehouse-replication) and
@@ -269,23 +314,26 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   restore a same-ID OR-Set from bytes alone.
 - For automatic tombstone collection, create a coordinator with a stable
   replication-group ID. Each active member reports its exact
-  `ORSet.TombstoneTags()` under that ID and the current
-  `tombstonegc.Coordinator` membership epoch; pass both values to
-  `AcknowledgeAndCompact` for every received report. Do not derive
+  `ORSet.TombstoneTags()` (or experimental `ORTree.TombstoneTags()`) under that
+  ID and the current `tombstonegc.Coordinator` membership epoch; pass both
+  values to `AcknowledgeAndCompact` (or `AcknowledgeAndCompactTarget` for the
+  tree) for every received report. The tree target additionally refuses to
+  remove a tombstoned node with any known child. Do not derive
   acknowledgements from `Frontier()` when delta delivery can be out of order:
   a maximum tag does not prove that prior tombstones were received. Removing a
   member requires retiring it from replication; a rejoining member must
-  bootstrap from a post-compaction snapshot.
+  bootstrap from a post-compaction snapshot. Persist that checkpoint and bind
+  every new frame to the next membership epoch before accepting compaction.
 - `ORSet.Compact` remains available only for transports that independently
   prove a gap-free causal prefix for every supplied frontier.
 - Persist an MV-Register state snapshot before reusing its replica ID. Its
   version vector, not a wall clock, proves which writes a later `Set` observes;
   recover with `register.NewMVRegisterFromSnapshot`.
 - Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
-  capability advertisement. Send LWW-Map, RGA, or OR-Tree frames only when
+  capability advertisement. Send LWW-Set, LWW-Map, RGA, or OR-Tree frames only when
   both peers opt in. Persist HLC-backed snapshots atomically. RGA tombstone
-  compaction additionally requires an authenticated exact-acknowledgement epoch
-  and retirement of old deltas.
+  compaction additionally requires an authenticated exact-acknowledgement epoch,
+  durable post-compaction checkpoint, and retirement of old deltas.
 - Keep `ElementCodec.ID`, `Marshal`, and `Unmarshal` deterministic and safe for
   concurrent calls. Encoded values must round-trip canonically.
 - Treat received bytes as untrusted. Use `UnmarshalBinaryWithLimits` and
@@ -315,7 +363,8 @@ encoders for that.
 | `clock` | Hybrid logical clock and persisted HLC state. |
 | `counter` | G-Counter, PN-Counter, and their delta codecs. |
 | `set` | G-Set, add-wins OR-Set, and element-codec contract. |
-| `lww` | In-memory LWW-Set and experimental framed LWW-Map. |
+| `lww` | Experimental framed LWW-Set and LWW-Map. |
+| `attachment` | Experimental bounded media/data references with streaming size and SHA-256 verification. |
 | `text` | Experimental framed RGA collaborative text and run-v2 codec. |
 | `tree` | Experimental framed observed-remove tree. |
 | `register` | In-memory LWW/max registers and framed causal MV-Register. |

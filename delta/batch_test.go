@@ -162,13 +162,13 @@ func TestBatchAndCoalescerAcceptPNCounterDeltas(t *testing.T) {
 	}
 }
 
-func TestBatchRejectsReservedDeltaTypesWithoutConcreteWireSupport(t *testing.T) {
+func TestBatchAdmitsImplementedLWWSetDeltaType(t *testing.T) {
 	item, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDLWWSetDelta})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewBatch([][]byte{item}, len(item)); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("NewBatch() error = %v, want %v", err, ErrInvalid)
+	if _, err := NewBatch([][]byte{item}, len(item)); err != nil {
+		t.Fatalf("NewBatch() error = %v", err)
 	}
 }
 

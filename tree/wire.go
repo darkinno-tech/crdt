@@ -227,6 +227,14 @@ func (t *ORTree) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimi
 	if err != nil {
 		return err
 	}
+	if len(delta.nodes) > t.options.MaxNodes || len(delta.tombstones) > t.options.MaxTombstones {
+		return ErrResourceLimit
+	}
+	for _, node := range delta.nodes {
+		if len(node.value) > t.options.MaxValueBytes {
+			return ErrResourceLimit
+		}
+	}
 	for _, node := range delta.nodes {
 		if node.parent.Valid() {
 			if _, ok := delta.nodes[node.parent]; !ok {
@@ -273,6 +281,13 @@ func (t *ORTree) SnapshotCurrentState() (snapshot.Snapshot, error) {
 	return snapshot.NewWithClockState(state, frontier, clockState)
 }
 func NewFromSnapshot(saved snapshot.Snapshot) (*ORTree, error) {
+	return NewFromSnapshotWithOptions(saved, DefaultOptions())
+}
+
+// NewFromSnapshotWithOptions restores an OR-Tree snapshot while retaining the
+// application's local resource limits. A snapshot is not allowed to widen the
+// receiver's memory budget.
+func NewFromSnapshotWithOptions(saved snapshot.Snapshot, options Options) (*ORTree, error) {
 	if saved.TypeID != crdt.TypeIDORTreeState {
 		return nil, ErrInvalidDelta
 	}
@@ -280,7 +295,7 @@ func NewFromSnapshot(saved snapshot.Snapshot) (*ORTree, error) {
 	if !ok {
 		return nil, ErrInvalidDelta
 	}
-	t, err := NewFromClock(state)
+	t, err := NewFromClockWithOptions(state, options)
 	if err != nil {
 		return nil, err
 	}

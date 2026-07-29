@@ -34,6 +34,13 @@ func TestMapDeltaConvergesAcrossDuplicateAndReverseDelivery(t *testing.T) {
 	if err := target.ApplyDelta(remove); err != nil {
 		t.Fatal(err)
 	}
+	clockBeforeDuplicate := target.ClockState()
+	if err := target.ApplyDelta(remove); err != nil {
+		t.Fatal(err)
+	}
+	if target.ClockState() != clockBeforeDuplicate {
+		t.Fatal("duplicate delta advanced the persisted HLC state")
+	}
 	if err := target.ApplyDelta(write); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +145,31 @@ func TestMapWireGoldenStateDeltaAndSnapshot(t *testing.T) {
 	}
 	if _, err := snapshot.NewRecoveryPlan(saved, [][]byte{golden}, len(golden)); err != nil {
 		t.Fatalf("LWW-Map recovery plan = %v", err)
+	}
+}
+
+func TestMapSnapshotRecoveryWitnessesSuppliedFrontier(t *testing.T) {
+	value, err := NewMap("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := value.Set("saved", []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	future := crdt.Tag{ReplicaID: "remote", WallTime: 10_000_000_000_000, Logical: 3}
+	saved, err := value.Snapshot(map[string]crdt.Tag{"remote": future})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := NewMapFromSnapshot(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restored.SetWithDelta("after-recovery", []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.entries["after-recovery"].tag; got.Compare(future) <= 0 {
+		t.Fatalf("post-recovery tag = %#v, want greater than supplied frontier %#v", got, future)
 	}
 }
 

@@ -125,7 +125,7 @@ The probe demonstrates the boundary that a consuming application owns:
 5. Periodically exchange full state or Merkle summaries to discover missing
    history, then merge state to repair it. A retry queue alone cannot repair a
    delta lost before it entered that queue.
-6. Before exchanging experimental LWW-Map, RGA, or OR-Tree frames, authenticate a
+6. Before exchanging experimental LWW-Set, LWW-Map, RGA, or OR-Tree frames, authenticate a
    connection/setup capability advertisement built from
    `crdt.ProtocolPolicy{AllowExperimental: true}.FrameTypes()`. Both peers must
    advertise the same state/delta pair before either sends that type. Unknown,
@@ -163,26 +163,49 @@ outbox/receipt transaction. Restore a same-ID replica with
 `register.NewMVRegisterFromSnapshot`; state bytes alone omit its causal context.
 No experimental opt-in is required for G-Set or MV-Register frames.
 
-## 5. Experimental LWW-Map, RGA, and OR-Tree integration
+## 5. Experimental LWW-Set, LWW-Map, RGA, and OR-Tree integration
 
-LWW-Map (`lww.Map`), RGA (`text`), and OR-Tree (`tree`) are framed, HLC-backed
+LWW-Set (`lww.Set`), LWW-Map (`lww.Map`), RGA (`text`), and OR-Tree (`tree`) are framed, HLC-backed
 experimental protocols. They are suitable only after the capability check above succeeds;
 the policy is local to a replication group and is not a dynamic plugin
 mechanism. Use each concrete decoder after the frame type is accepted—for
-example, `text.UnmarshalRGADeltaWithLimits` for RGA deltas and
+example, `lww.UnmarshalSetDeltaWithLimits` for LWW-Set deltas,
+`text.UnmarshalRGADeltaWithLimits` for RGA deltas and
 `tree.UnmarshalDeltaWithLimits` for OR-Tree deltas. Do not dispatch an
 untrusted frame to a type merely because it has a valid checksum.
 
-Persist a local LWW-Map, RGA, or OR-Tree state frame and its HLC state atomically with the
+Persist a local LWW-Set, LWW-Map, RGA, or OR-Tree state frame and its HLC state atomically with the
 outbox/receipt transaction. Restore a same-ID replica only through
 `SnapshotCurrentState()` and the package's `NewFromSnapshot`; state bytes alone
 cannot prove the next locally emitted tag will be unique. RGA and OR-Tree retain
 delete tombstones for out-of-order delivery. RGA's `CompactTombstones` can
 remove only deleted leaves; the application must first establish an authenticated
 exact-acknowledgement epoch, durably save a post-compaction snapshot, and retire
-old deltas. LWW-Map and OR-Tree still have no exact-acknowledgement compaction,
+old deltas. LWW-Set, LWW-Map, and OR-Tree still have no exact-acknowledgement compaction,
 so integrations must budget, monitor, and retain their tombstones rather than
 calling a generic GC.
+
+### 5.1 Attachment references
+
+`attachment.Register` is an experimental, schema-constrained use of the LWW-Map
+frames for image, audio, video, and arbitrary data references. Create one
+separate manifest per attachment group with state/delta IDs 9/10, schema ID
+`github.com/DarkInno/crdt/attachment-reference/v1`, an empty codec ID, and
+`attachment.SemanticsVersion`. Do not use the same manifest for RGA text: one
+manifest binds exactly one concrete CRDT protocol.
+
+At the receive boundary, authenticate the exact manifest, decode with
+`attachment.UnmarshalDeltaWithLimits` using both transport and attachment
+retention limits, then apply the delta. Persist `SnapshotCurrentState()` and
+restore a same-ID replica with `attachment.NewFromSnapshotWithOptions`.
+
+An attachment reference is metadata only. The surrounding application owns
+storage authorization, uploads/downloads, scanning, encryption, and retries.
+After an authorized download, call `Reference.Verify` before decode or render;
+it streams the object, rejects short/oversized content, and compares SHA-256.
+The [attachment integration guide](ATTACHMENT_INTEGRATION.md) and its
+[runnable example](examples/attachment-collaboration) provide the complete
+flow and limits checklist.
 
 ## 6. Recovery, anti-entropy, and tombstones
 
@@ -216,7 +239,7 @@ make test-integration
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
 | Business semantics | Product owners have accepted add-wins, grow-only G-Set and counter limits, and concurrent MV-Register value semantics. |
-| Experimental protocol agreement | LWW-Map/RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
+| Experimental protocol agreement | LWW-Set/LWW-Map/RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
 Passing `go test` proves the library and examples at this revision. It does not

@@ -192,6 +192,11 @@ func NewMapFromSnapshot(saved snapshot.Snapshot) (*Map, error) {
 	if err := m.UnmarshalBinary(saved.Bytes()); err != nil {
 		return nil, err
 	}
+	if tag, ok := greatestMapFrontierTag(saved.Frontier()); ok {
+		if err := m.clock.Witness(tag); err != nil {
+			return nil, err
+		}
+	}
 	return m, nil
 }
 
@@ -259,4 +264,15 @@ func sortedMapKeys(entries map[string]mapEntry) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func greatestMapFrontierTag(frontier map[string]crdt.Tag) (crdt.Tag, bool) {
+	var greatest crdt.Tag
+	found := false
+	for _, tag := range frontier {
+		if !found || greatest.Compare(tag) < 0 {
+			greatest, found = tag, true
+		}
+	}
+	return greatest, found
 }

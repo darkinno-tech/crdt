@@ -78,6 +78,49 @@ func TestRGABinaryStateDeltaAndSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRGASnapshotRecoveryWitnessesSuppliedFrontier(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Insert(0, "saved"); err != nil {
+		t.Fatal(err)
+	}
+	future := crdt.Tag{ReplicaID: "remote", WallTime: 10_000_000_000_000, Logical: 3}
+	v1, err := value.Snapshot(map[string]crdt.Tag{"remote": future})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runState, err := value.MarshalRunBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := snapshot.NewValidatedWithClockState(
+		runState,
+		map[string]crdt.Tag{"remote": future},
+		value.ClockState(),
+		validateRGARunState,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, saved := range map[string]snapshot.Snapshot{"v1": v1, "run-v2": run} {
+		t.Run(name, func(t *testing.T) {
+			restored, err := NewFromSnapshot(saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			afterRecovery, err := restored.Insert(restored.State().ElementCount, "!")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := parentNodeID(afterRecovery); got.Compare(future) <= 0 {
+				t.Fatalf("post-recovery position = %#v, want greater than supplied frontier %#v", got, future)
+			}
+		})
+	}
+}
+
 func TestRGAWireRejectsWrongTypeLimitsAndMalformedState(t *testing.T) {
 	value, err := New("source")
 	if err != nil {

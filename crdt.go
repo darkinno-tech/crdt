@@ -46,6 +46,7 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta},
 	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, UsesHLC: true},
 	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
+	{StateID: TypeIDLWWSetState, DeltaID: TypeIDLWWSetDelta, UsesHLC: true},
 	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, UsesHLC: true},
 	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
 	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
@@ -59,6 +60,8 @@ var frameTypes = [...]FrameType{
 // ProtocolPolicy's zero value, so an application must opt in per replication
 // group before advertising or accepting them from a peer.
 var experimentalFrameTypes = map[uint64]struct{}{
+	TypeIDLWWSetState: {},
+	TypeIDLWWSetDelta: {},
 	TypeIDLWWMapState: {},
 	TypeIDLWWMapDelta: {},
 	TypeIDRGAState:    {},
@@ -78,7 +81,7 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // TypeID remains necessary but is not sufficient: applications still own
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
-	// AllowExperimental includes framed LWW-Map, RGA run-v2, and OR-Tree protocols.
+	// AllowExperimental includes framed LWW-Set, LWW-Map, RGA, and OR-Tree protocols.
 	// Keep it false until the replication group has accepted their experimental
 	// API and tombstone-retention lifecycle.
 	AllowExperimental bool

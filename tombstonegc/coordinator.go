@@ -1,4 +1,4 @@
-// Package tombstonegc coordinates safe, automatic OR-Set tombstone collection.
+// Package tombstonegc coordinates safe, automatic tombstone collection.
 // It deliberately does not provide membership discovery, authentication, or
 // persistence; applications must supply an authoritative membership view and
 // authenticate acknowledgement messages before passing them to Coordinator.
@@ -21,6 +21,7 @@ var (
 	ErrUnknownMember     = errors.New("tombstonegc: acknowledgement from unknown member")
 	ErrStaleMembership   = errors.New("tombstonegc: acknowledgement membership epoch is stale")
 	ErrInvalidTag        = errors.New("tombstonegc: invalid tombstone tag")
+	ErrNilTarget         = errors.New("tombstonegc: nil tombstone target")
 )
 
 // Membership is an immutable view of the active replicas that must
@@ -42,8 +43,16 @@ type AcknowledgementStats struct {
 	Entries int
 }
 
+// TombstoneTarget is a CRDT whose tombstones can be enumerated and compacted.
+// Coordinator only establishes exact acknowledgement eligibility; targets must
+// enforce their own structural compaction rules.
+type TombstoneTarget interface {
+	TombstoneTags() []crdt.Tag
+	CompactTombstones([]crdt.Tag) (int, error)
+}
+
 // Coordinator collects exact tombstone acknowledgements for one replicated
-// OR-Set. Its state is deliberately fail-closed: a restart or membership
+// target. Its state is deliberately fail-closed: a restart or membership
 // replacement clears acknowledgements and can delay collection, but cannot
 // make a tombstone eligible prematurely.
 //
@@ -61,7 +70,7 @@ type Coordinator[T comparable] struct {
 }
 
 // NewCoordinator creates a coordinator for groupID with the initial active
-// membership. groupID must uniquely name this OR-Set replication group and be
+// membership. groupID must uniquely name this replication group and be
 // included in authenticated acknowledgement messages. At least one unique,
 // non-blank member is required.
 func NewCoordinator[T comparable](groupID string, members []string) (*Coordinator[T], error) {
@@ -227,6 +236,18 @@ func (c *Coordinator[T]) acknowledgeLocked(groupID, member string, epoch uint64,
 func (c *Coordinator[T]) AcknowledgeAndCompact(groupID, member string, epoch uint64, tombstones []crdt.Tag, target *set.ORSet[T]) (int, error) {
 	if target == nil {
 		return 0, set.ErrNilORSet
+	}
+	return c.AcknowledgeAndCompactTarget(groupID, member, epoch, tombstones, target)
+}
+
+// AcknowledgeAndCompactTarget records one exact acknowledgement and immediately
+// removes from target only tombstones acknowledged by every current member.
+// It reuses the same fail-closed membership epoch as OR-Set collection, but it
+// cannot prove that a post-compaction checkpoint was persisted or that old
+// deltas were retired; callers must do both before accepting compaction.
+func (c *Coordinator[T]) AcknowledgeAndCompactTarget(groupID, member string, epoch uint64, tombstones []crdt.Tag, target TombstoneTarget) (int, error) {
+	if target == nil {
+		return 0, ErrNilTarget
 	}
 	if c == nil {
 		return 0, ErrInvalidMembership
