@@ -49,7 +49,9 @@ type WebSocketClient struct {
 
 // DialWebSocket authenticates the WebSocket handshake through config.Header,
 // verifies the exact manifest returned by the relay, then receives live binary
-// changes. Use wss after the host application has configured TLS.
+// changes. A successful return means the relay registered the live subscription
+// before it sent the confirmation. Use wss after the host application has
+// configured TLS.
 func DialWebSocket(ctx context.Context, endpoint string, manifest replica.Manifest, config ClientConfig) (*WebSocketClient, error) {
 	if config.OnChange == nil {
 		return nil, ErrInvalidConfig

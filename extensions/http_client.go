@@ -42,10 +42,12 @@ type HTTPClient struct {
 }
 
 // ConnectHTTP starts an authenticated SSE subscription, verifies the exact
-// manifest supplied by the relay, and then receives live changes. endpoint is
-// the base mount URL, for example "https://sync.example.com/crdt". The
-// configured HTTPClient must not have a global Timeout because SSE is a
-// long-lived response; use request contexts and WriteTimeout instead.
+// manifest supplied by the relay, and then receives live changes. A successful
+// return means the relay registered the subscription before it sent the stream
+// manifest. endpoint is the base mount URL, for example
+// "https://sync.example.com/crdt". The configured HTTPClient must not have a
+// global Timeout because SSE is a long-lived response; use request contexts and
+// WriteTimeout instead.
 func ConnectHTTP(ctx context.Context, endpoint string, manifest replica.Manifest, config ClientConfig) (*HTTPClient, error) {
 	if config.OnChange == nil {
 		return nil, ErrInvalidConfig

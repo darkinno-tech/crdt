@@ -60,6 +60,8 @@ relay=5
 客户端应使用 `ConnectHTTP`，而不是自行拼接 group 路径；它会从提供的
 `replica.Manifest` 推导 base64url 路径。`DialWebSocket` 和 `ConnectHTTP` 都会在
 接受 live 数据前校验精确 Manifest。
+客户端成功返回也是 live 订阅的线性化点：relay 会先注册 peer、再发送确认，因此调用方可
+在握手后立即发布，不会存在额外的事件丢失窗口。
 
 ## 该参考实现保证什么
 

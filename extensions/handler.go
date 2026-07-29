@@ -216,48 +216,52 @@ func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Reque
 	}
 	conn.SetReadLimit(int64(controlLimit(h.maxMessageBytes)))
 	handshakeContext, cancelHandshake := context.WithTimeout(context.Background(), h.handshakeTimeout)
-	group, err := h.serverHandshake(handshakeContext, conn, peer)
-	cancelHandshake()
+	group, response, err := h.readServerHandshake(handshakeContext, conn, peer)
 	if err != nil {
+		cancelHandshake()
 		_ = conn.CloseNow()
 		return
 	}
-	conn.SetReadLimit(int64(h.maxMessageBytes))
 	peerConnection := newWebSocketSubscriber(conn, h.maxQueuedMessages, h.maxQueuedBytes, h.writeTimeout)
 	group.add(peerConnection)
+	if err := conn.Write(handshakeContext, websocket.MessageText, response); err != nil {
+		cancelHandshake()
+		group.remove(peerConnection)
+		peerConnection.close()
+		return
+	}
+	cancelHandshake()
+	conn.SetReadLimit(int64(h.maxMessageBytes))
 	defer group.remove(peerConnection)
 	defer peerConnection.close()
 	go peerConnection.writeLoop()
 	peerConnection.readLoop(peer, group, h.authorize, h.maxMessageBytes, h.maxActorBytes)
 }
 
-func (h *Handler) serverHandshake(ctx context.Context, conn *websocket.Conn, peer Peer) (*Group, error) {
+func (h *Handler) readServerHandshake(ctx context.Context, conn *websocket.Conn, peer Peer) (*Group, []byte, error) {
 	messageType, data, err := conn.Read(ctx)
 	if err != nil || messageType != websocket.MessageText {
-		return nil, errInvalidWireMessage
+		return nil, nil, errInvalidWireMessage
 	}
 	remote, err := unmarshalHello(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	group, exists := h.groups[remote.GroupID]
 	if !exists {
-		return nil, ErrUnauthorized
+		return nil, nil, ErrUnauthorized
 	}
 	if err := group.manifest.Compatible(remote); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := h.authorizeSubscription(peer, group.manifest); err != nil {
-		return nil, ErrUnauthorized
+		return nil, nil, ErrUnauthorized
 	}
 	response, err := marshalHello(group.manifest)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := conn.Write(ctx, websocket.MessageText, response); err != nil {
-		return nil, err
-	}
-	return group, nil
+	return group, response, nil
 }
 
 func (h *Handler) serveHTTPChanges(writer http.ResponseWriter, request *http.Request, group *Group) {

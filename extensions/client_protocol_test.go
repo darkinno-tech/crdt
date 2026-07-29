@@ -106,7 +106,7 @@ func TestWebSocketDialRejectsSubprotocolAndRemoteManifest(t *testing.T) {
 }
 
 func TestWebSocketClientPublishRejectsInvalidLocalChanges(t *testing.T) {
-	server, _, manifest, _ := newCounterHandler(t, FeatureWebSocket, nil)
+	server, group, manifest, _ := newCounterHandler(t, FeatureWebSocket, nil)
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
 	client, err := DialWebSocket(context.Background(), endpoint, manifest, ClientConfig{
 		Header:   bearerHeader("writer"),
@@ -116,6 +116,12 @@ func TestWebSocketClientPublishRejectsInvalidLocalChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
+	group.peersMu.Lock()
+	peers := len(group.peers)
+	group.peersMu.Unlock()
+	if peers != 1 {
+		t.Fatalf("successful WebSocket dial registered %d peers, want 1", peers)
+	}
 	if err := client.Publish(context.Background(), replica.Change{}); err == nil {
 		t.Fatal("zero WebSocket change published")
 	}

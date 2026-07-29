@@ -65,6 +65,9 @@ For a mount of `/crdt/`, the HTTP routes are:
 Use `ConnectHTTP` rather than building group paths in clients. It derives the
 base64url path from the supplied `replica.Manifest`. `DialWebSocket` and
 `ConnectHTTP` validate the exact manifest before accepting live data.
+A successful client return is also the live-subscription linearization point:
+the relay registers the peer before it sends that confirmation, so a caller may
+publish immediately without a post-handshake event window.
 
 ## What the reference guarantees
 
