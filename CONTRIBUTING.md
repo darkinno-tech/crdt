@@ -55,7 +55,7 @@ make test-integration
 ## 分支与发布列车
 
 - `beta` 是唯一的集成分支：先在新的、基于 `origin/beta` 的隔离 worktree 提交并运行本地验证，再推送到 `beta`；等待远端 CI 通过后再发起发布 PR。不能对 `beta` 强推。
-- `main` 是发布镜像：不在本地开发，只通过已审核的 `beta -> main` PR 更新。`main` 比 `beta` 多一个 merge commit 是正常的发布记录，不要为此 rebase、强推或反向合并。
+- `main` 是发布镜像：不在本地开发，只通过 CI 已通过的 `beta -> main` PR 更新。单人维护时不要求他人审批，但仍必须通过所有必需检查。`main` 比 `beta` 多一个 merge commit 是正常的发布记录，不要为此 rebase、强推或反向合并。
 - 需要更新一个干净的 `main` worktree 时，运行 `make sync-main`。该命令在工作区有改动、不在 `main`、或本地 `main` 存在未发布提交时拒绝执行，以保证只做快进更新。
 
 最小日常流程：
