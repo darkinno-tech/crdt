@@ -100,8 +100,33 @@ rm -rf "$scenario_dir"
 ```
 
 The probe requires `X-CRDT-Probe-Token`, binds to loopback by default, and
-limits request bodies to 1 MiB. It has no TLS, durable state, membership,
-replay policy, or authorization model. Do not expose it to the public Internet.
+limits counter/OR-Set request bodies to 1 MiB. It has no TLS, durable state,
+membership, replay policy, or authorization model. Do not expose it to the
+public Internet.
+
+### Optional experimental RGA diagnostic
+
+`/rga` is disabled by default. It is only for a controlled probe of one
+explicit RGA frame shape; it does not negotiate a manifest or a production
+`ProtocolPolicy`. Configure every receiver and sender with the same
+`-rga-protocol=v1` or `-rga-protocol=run-v2`. The route allows at most 16 MiB
+and 200,000 generated runes per delta, sends an empty `204` acknowledgement,
+and reports only final convergence data in `/state`.
+
+```sh
+# Add the same protocol flag to both receiver processes above, then:
+go run ./cmd/crdt-sync-probe -mode send \
+  -target http://127.0.0.1:49511,http://127.0.0.1:49512 \
+  -replica text-gate -token-file "$scenario_dir/probe.token" \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
+```
+
+The two final `text` objects must agree on `protocol`, `runes`, `sha256`, and
+zero `pending`. A v1 receiver rejects a run-v2 frame (and vice versa) before
+mutating text. This proves only the exercised in-memory duplicate/reorder path;
+it does not prove HLC persistence, recovery, membership, or tombstone-GC
+safety.
 
 ## 3. Production integration contract
 
@@ -170,7 +195,8 @@ experimental protocols. They are suitable only after the capability check above 
 the policy is local to a replication group and is not a dynamic plugin
 mechanism. Use each concrete decoder after the frame type is accepted—for
 example, `lww.UnmarshalSetDeltaWithLimits` for LWW-Set deltas,
-`text.UnmarshalRGADeltaWithLimits` for RGA deltas and
+`text.UnmarshalRGADeltaWithLimits` for explicitly agreed v1 RGA deltas,
+`text.UnmarshalRGARunDeltaWithLimits` for explicitly agreed run-v2 RGA deltas, and
 `tree.UnmarshalDeltaWithLimits` for OR-Tree deltas. Do not dispatch an
 untrusted frame to a type merely because it has a valid checksum.
 
@@ -210,27 +236,29 @@ flow and limits checklist.
 ### 5.2 Browser and JavaScript/WebView RGA clients
 
 `clients/typescript` keeps the cross-language boundary narrow: its TypeScript
-module validates the bounded common frame envelope, while the RGA v1 Wasm
-module calls the existing Go decoder and merge engine. Build it with `make wasm`
-and verify Go-to-client frames and a duplicated/reordered three-replica session
-with `make wasm-test`.
+module validates the bounded common frame envelope, while the Go/Wasm RGA
+runtime calls the canonical decoder and merge engine. `make wasm` builds the
+default run-v2 artifact (state/delta TypeIDs 19/20, semantics version 2), which
+matches `crdt.DefaultRGAFrameType()`. `make wasm-test` verifies Go-to-client
+frames and a duplicated/reordered three-replica session; `make wasm-v1-test`
+separately verifies the legacy scalar-v1 artifact (TypeIDs 11/12).
 
-The client accepts RGA v1 state/delta IDs 11/12 only. First authenticate the
-same manifest/capability agreement as a Go peer, then validate the application
-transport body limit before calling `document.applyDelta`. CRC-32C is only an
-accidental-corruption check. Persist the returned `{ state, clock, frontier }`
-as one atomic local record; restoring only the state permits a reused replica
-ID to emit an unsafe HLC tag. Split an editor transaction larger than 64 KiB or
-16,384 runes before local insertion. Use a Worker for long documents. A native
-mobile app without a compatible Wasm runtime still needs a separately validated
-binding or semantic implementation.
+First authenticate one exact manifest/capability agreement, including the
+state/delta IDs and semantics version, then validate the application transport
+body limit before calling `document.applyDelta`. CRC-32C detects accidental
+corruption only. Persist the returned `{ state, clock, frontier }` as one
+atomic local record; restoring only state permits a reused replica ID to emit
+an unsafe HLC tag. Split an editor transaction larger than 64 KiB or 16,384
+runes before local insertion, and use a Worker for long documents.
 
-This client protocol is not the default for a new Go RGA group:
-`crdt.DefaultRGAFrameType()` selects run-v2 IDs 19/20, whereas the client
-deliberately rejects them. A manifest carries one concrete protocol, so do not
-connect this v1 client to a run-v2 group. Use an explicitly negotiated legacy
-v1 group with `ProtocolPolicy{AllowExperimental: true}`, or wait for a
-separately negotiated run-v2 client implementation.
+Each manifest binds exactly one RGA wire format. Do not connect a legacy v1
+artifact to a run-v2 group, or vice versa. A native client without a compatible
+Wasm runtime must implement and verify the normative [RGA run-v2 wire
+protocol](../protocol/rga-run-v2.md), including its canonical-vector suite,
+before it is admitted to a run-v2 replication group.
+
+For an application-owned WebSocket integration reference, see the [WebSocket
+provider guide](websocket-provider.md) and its [runnable example](../../examples/websocket-provider).
 
 ## 6. Recovery, anti-entropy, and tombstones
 
@@ -264,7 +292,7 @@ make test-integration
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
 | Business semantics | Product owners have accepted add-wins, grow-only G-Set and counter limits, and concurrent MV-Register value semantics. |
-| Experimental protocol agreement | LWW-Set/LWW-Map/RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
+| Experimental protocol agreement | LWW-Set/LWW-Map/legacy RGA v1/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
 Passing `go test` proves the library and examples at this revision. It does not

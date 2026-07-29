@@ -229,8 +229,11 @@ func TestInboxBuffersOutOfOrderFramesWithoutFalsifyingFrontier(t *testing.T) {
 	first := mustChange(t, manifest, Dot{Actor: "writer", Counter: 1}, 1)
 	second := mustChange(t, manifest, Dot{Actor: "writer", Counter: 2}, 2)
 	delivery, err := inbox.Receive(second)
-	if err != nil || !delivery.Buffered || len(delivery.Applied) != 0 {
+	if err != nil || !delivery.Buffered || delivery.Duplicate || !delivery.Accepted() || len(delivery.Applied) != 0 {
 		t.Fatalf("out-of-order delivery = %#v, %v", delivery, err)
+	}
+	if duplicate, err := inbox.Receive(second); err != nil || !duplicate.Buffered || !duplicate.Duplicate || duplicate.Accepted() {
+		t.Fatalf("duplicate buffered delivery = %#v, %v", duplicate, err)
 	}
 	if inbox.Frontier().Counter("writer") != 0 {
 		t.Fatal("buffered future change advanced the frontier")
@@ -239,7 +242,7 @@ func TestInboxBuffersOutOfOrderFramesWithoutFalsifyingFrontier(t *testing.T) {
 		t.Fatalf("pending changes = %d, want 1", changes)
 	}
 	delivery, err = inbox.Receive(first)
-	if err != nil || delivery.Buffered || len(delivery.Applied) != 2 || delivery.Applied[0].Counter != 1 || delivery.Applied[1].Counter != 2 {
+	if err != nil || delivery.Buffered || delivery.Duplicate || !delivery.Accepted() || len(delivery.Applied) != 2 || delivery.Applied[0].Counter != 1 || delivery.Applied[1].Counter != 2 {
 		t.Fatalf("unblocked delivery = %#v, %v", delivery, err)
 	}
 	if string(applied) != string([]byte{1, 2}) || inbox.Frontier().Counter("writer") != 2 {
@@ -248,7 +251,7 @@ func TestInboxBuffersOutOfOrderFramesWithoutFalsifyingFrontier(t *testing.T) {
 	if changes, bytes := inbox.Pending(); changes != 0 || bytes != 0 {
 		t.Fatalf("pending after drain = %d changes, %d bytes", changes, bytes)
 	}
-	if delivery, err := inbox.Receive(first); err != nil || delivery.Buffered || len(delivery.Applied) != 0 || len(applied) != 2 {
+	if delivery, err := inbox.Receive(first); err != nil || delivery.Buffered || !delivery.Duplicate || delivery.Accepted() || len(delivery.Applied) != 0 || len(applied) != 2 {
 		t.Fatalf("duplicate delivery = %#v, %v, applied %v", delivery, err, applied)
 	}
 }

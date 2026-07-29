@@ -237,8 +237,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	conn.SetReadLimit(int64(controlLimit(h.maxMessageBytes)))
 	handshakeContext, cancelHandshake := context.WithTimeout(context.Background(), h.handshakeTimeout)
-	group, err := h.serverHandshake(handshakeContext, conn)
-	cancelHandshake()
+	defer cancelHandshake()
+	group, response, err := h.serverHandshake(handshakeContext, conn)
 	if err != nil {
 		_ = conn.CloseNow()
 		return
@@ -252,37 +252,40 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		outbound:     make(chan []byte, h.maxQueuedMessages),
 		writeTimeout: h.writeTimeout,
 	}
+	// Register before confirming the handshake. Dial returns once it receives
+	// response, so acknowledging first would allow an immediately published
+	// change to miss this peer.
 	group.add(peerConnection)
 	defer group.remove(peerConnection)
 	defer peerConnection.close()
+	if err := conn.Write(handshakeContext, websocket.MessageText, response); err != nil {
+		return
+	}
 	go peerConnection.writeLoop()
 	peerConnection.readLoop(peer, group, h.authorize, h.maxMessageBytes, h.maxActorBytes)
 }
 
-func (h *Handler) serverHandshake(ctx context.Context, conn *websocket.Conn) (*Group, error) {
+func (h *Handler) serverHandshake(ctx context.Context, conn *websocket.Conn) (*Group, []byte, error) {
 	messageType, data, err := conn.Read(ctx)
 	if err != nil || messageType != websocket.MessageText {
-		return nil, errInvalidWireMessage
+		return nil, nil, errInvalidWireMessage
 	}
 	remote, err := unmarshalHello(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	group, exists := h.groups[remote.GroupID]
 	if !exists {
-		return nil, ErrUnauthorized
+		return nil, nil, ErrUnauthorized
 	}
 	if err := group.manifest.Compatible(remote); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	response, err := marshalHello(group.manifest)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := conn.Write(ctx, websocket.MessageText, response); err != nil {
-		return nil, err
-	}
-	return group, nil
+	return group, response, nil
 }
 
 func (g *Group) add(connection *connection) {

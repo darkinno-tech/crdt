@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`crdt` 是一个小巧、无第三方依赖、可组合的 Go 状态型 CRDT 库。
+`crdt` 是一个小巧、可组合的 Go 状态型 CRDT 库。
 它提供确定性的二进制状态帧与增量帧，使副本能在重复投递、乱序和暂时
 网络分区的情况下收敛。
 
@@ -28,17 +28,26 @@
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
-- 实验性 LWW-Set、LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
-  RGA v1 现具备有边界的延迟集成与增量可见索引，但其墓碑生命周期仍为实验性。
+- 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
+- 单写者 durable WebSocket relay 参考实现：带 bbolt 操作日志、精确 Dot 绑定、有界重放与重连。
+- 实验性、带帧的 LWW-Set、LWW-Map、旧标量 RGA v1 与 OR-Tree 集合；仅能通过每个复制组的
+  显式协议策略启用。新的 Go RGA 复制组使用紧凑的 run-v2 帧；RGA 墓碑生命周期仍要求谨慎
+  留存和精确确认处理。
 
 ## 范围
 
-本库提供 CRDT 数据类型和线协议基础组件。它不负责选择网络传输、成员协议、
-认证、存储后端或重试策略。只有当应用提供权威且经过认证的活跃成员视图后，
-`tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该
-成员视图。校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
+核心库提供 CRDT 数据类型和线协议基础组件，不负责选择成员协议、认证方案、存储后端或
+重试策略。可选的 [`extensions`](docs/integration/extensions.zh-CN.md) 包提供显式启用的
+WebSocket 与 HTTP/SSE live relay 参考端点；它不启动 listener，也不提供持久化、重放、重连、
+TLS、反熵或身份/session 管理，这些仍由应用负责。可选的
+[WebSocket Provider 参考实现](docs/integration/websocket-provider.zh-CN.md) 是有边界、绑定
+Manifest 的集成适配器；它不提供持久投递、恢复、TLS、成员管理、授权策略或生产运维。只有当
+应用提供权威且经过认证的活跃成员视图后，
+`tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该成员视图。
+校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
+独立的 [`durable`](docs/integration/durable-provider.zh-CN.md) 参考实现为一个进程和一个受保护持久卷提供操作日志、重放与重连；它仍不提供集群存储、应用 CRDT checkpoint 事务、TLS、身份/session 生命周期、成员权威或墓碑 GC。
 
-## 实验性 LWW-Set、LWW-Map、RGA 与 OR-Tree 协议
+## 实验性 LWW-Set、LWW-Map、旧版 RGA v1 与 OR-Tree 协议
 
 LWW-Set（`lww.Set`，TypeID 7/8）通过应用提供的规范化 `lww.ElementCodec`
 编码泛型元素，并保留删除元数据。必须原子持久化
@@ -49,9 +58,15 @@ RGA 文本 v1（`text`，TypeID 11/12）通过有边界的延迟集成队列处�
 不完整快照，并以增量索引替代每次编辑后的全量可见投影重建；在完整墓碑生命周期经过
 验证前仍为实验性协议。必须原子持久化其带 HLC 的快照。
 
+新的 Go RGA 复制组通过 `crdt.DefaultRGAFrameType()` 选择紧凑的 run-v2 帧（TypeID
+19/20）。run-v2 组必须用 `Delta.MarshalRunBinary` 编码 delta、用
+`RGA.MarshalRunBinary` 和 `RGA.SnapshotRunCurrentState` 生成完整状态，并在 Manifest
+中绑定相同 TypeID。run 编码保留标量 RGA position 语义，但一个 Manifest 仍只表示一种
+wire 协议：不能与旧 v1 客户端或帧流混用。
+
 `CompactTombstones` 有意保持保守：只有在经过认证的精确确认纪元已持久化回收后快照
 并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Set、LWW-Map、
-RGA run-v2（TypeID 19/20）和 OR-Tree 仍为实验性能力，必须显式启用：
+旧标量 RGA v1（TypeID 11/12）和 OR-Tree 仍为实验性能力，必须显式启用：
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -62,21 +77,22 @@ for _, kind := range policy.FrameTypes() {
 ```
 
 接收实验帧之前，必须在经过认证的握手中将其绑定到 `replica.Manifest`。Manifest
-包含 group、schema、epoch、codec 与语义版本；在每个 replica 边界
-（`NewChangeWithPolicy`、`NewInboxWithPolicy`、`NewCheckpointWithPolicy`、
-`NewSessionWithPolicy`）均传入同一份显式 Policy。仅凭 Frame Type ID 不能证明
-线协议语义兼容。
+包含 group、schema、epoch、codec 与语义版本。为在构造同一个 group 的本地 replica
+对象时只显式 opt-in 一次，可创建 `replica.NewSessionBuilder(..., policy)`，再调用其
+`NewChange`、`NewInbox`、`NewCheckpoint` 与 `NewSession`。Builder 只是本地封装，
+不是握手：零值 Policy 仍会拒绝实验 Manifest，且仅凭 Frame Type ID 不能证明线协议
+语义兼容。需要单独使用时，原有的 `*WithPolicy` 构造函数仍然可用。
 
-零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该
-策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
-RGA 和 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
+零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter 与默认 RGA run-v2
+协议。该策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
+旧版 RGA v1 与 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
 
 ## 浏览器与 JavaScript 移动端客户端
 
 仓库在 [`clients/typescript`](clients/typescript/README.md) 中提供了有边界的
-TypeScript v1 frame 外层解码器，以及 RGA v1 Wasm 客户端运行时。TypeScript 层检查
-公共二进制信封；Wasm 层直接复用 Go 的 RGA 合并、乱序、墓碑和 HLC 语义，因此浏览器或
-兼容 WebView 可以本地合并，而不是等待服务端仲裁。
+TypeScript frame 外层解码器，以及 Go/Wasm RGA 客户端 runtime。默认 artifact 使用 run-v2
+TypeID 19/20 和语义版本 2，与 `crdt.DefaultRGAFrameType()` 一致。Wasm 层直接复用 Go 的
+RGA 合并、乱序、墓碑和 HLC 语义，因此浏览器或兼容 WebView 可以本地合并，而不是等待服务端仲裁。
 
 构建和验证命令：
 
@@ -86,10 +102,10 @@ make typescript-test
 make wasm-test
 ```
 
-这仅是实验性的 RGA v1 客户端。收到帧之前必须认证 Manifest 并协商
-`AllowExperimental`；CRC-32C 不能认证对端。客户端快照的 state、clock 与 frontier
-必须原子持久化。没有兼容 WebAssembly 运行时的原生移动端，仍需要经过独立验证的绑定或
-语义实现。单次本地编辑超过 64 KiB 或 16,384 rune 时应先按顺序拆分。
+收到帧之前必须认证精确的 Manifest（包括协议 ID 与语义版本）；CRC-32C 不能认证对端。
+客户端快照的 state、clock 与 frontier 必须原子持久化。没有兼容 WebAssembly runtime 的原生
+移动端，加入 run-v2 组前必须遵循 [RGA run-v2 线协议](docs/protocol/rga-run-v2.zh-CN.md)
+及其向量。单次本地编辑超过 64 KiB 或 16,384 rune 时应先按顺序拆分。
 
 ## 实验性附件引用
 
@@ -279,6 +295,17 @@ RGA 文本组和附件引用组，使用快照恢复两个接收状态，并在�
 go run ./examples/attachment-collaboration
 ```
 
+[可选传输扩展指南](docs/integration/extensions.zh-CN.md)及其[可运行 provider 示例]
+(examples/extensions-provider)展示将 WebSocket 与 HTTP/SSE 同时挂载到应用自有 mux 的方式。
+示例先演示 WebSocket 到 HTTP 的投递，再演示 HTTP 到 WebSocket 的投递；它是有边界的
+live relay，不是持久化复制服务：
+
+```sh
+go run ./examples/extensions-provider
+```
+
+持久操作重放与断线重连请使用独立的[durable WebSocket relay 参考实现](docs/integration/durable-provider.zh-CN.md)。它针对单写者 bbolt 部署形态并限制重放窗口，不能替代复制数据库或应用 checkpoint 事务。
+
 Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](docs/integration/attachment.zh-CN.md)。
 
 英文版本见 [integration tutorial](docs/integration/overview.md)。
@@ -370,7 +397,8 @@ go run ./cmd/crdt-analyze -file ./state.frame
 `crdt-sync-probe` 是用于跨主机验证重复增量投递的短生命周期 HTTP 测试工具，
 不是生产复制服务。其默认监听地址仅为回环地址；每个端点都要求非空令牌。优先
 使用 `-token-file`（权限 `0600`）而非 `-token`，且仅在受控测试窗口内绑定
-公网地址。
+公网地址。非回环监听还必须显式指定 `-allow-non-loopback`，且只能用于受防火墙
+限制的短期测试窗口。
 
 ```sh
 # 在每个接收端执行。
@@ -381,6 +409,28 @@ go run ./cmd/crdt-sync-probe -mode send \
   -target http://receiver-a:49511,http://receiver-b:49511 \
   -replica sender -token-file ./probe.token -duplicates 3
 ```
+
+探针也可以验证实验性 RGA delta 投递，但它不执行 Manifest 或能力协商。只有接收端和
+发送端都显式选择**同一个** `-rga-protocol`（`v1` 或 `run-v2`）时才会开放 `/rga`。
+变更请求返回带 `X-CRDT-Apply-Micros` 的空 `204`；应使用最终的认证 `/state` 响应比较
+`text.protocol`、可见 rune 数、SHA-256 和未决依赖。
+
+```sh
+# 两个接收端必须选择同一个实验性 wire shape。
+go run ./cmd/crdt-sync-probe -mode serve -replica receiver \
+  -rga-protocol run-v2 -token-file ./probe.token
+
+go run ./cmd/crdt-sync-probe -mode send \
+  -target http://receiver-a:49511,http://receiver-b:49511 \
+  -replica text-sender -token-file ./probe.token \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
+```
+
+RGA 探针对每个生成 delta 限制为 16 MiB 和 200,000 个 rune；这是诊断上限，不是生产
+容量建议。它没有持久化 HLC 状态、outbox、重放、恢复或墓碑 GC 权威。`run-v2` 能压缩
+同副本的线性 frame，但规范化解码会带来独立的 CPU 与分配成本；选择前必须在目标机器上
+测量两种 wire shape。
 
 使用 `make test-unit` 分别运行各包；使用 `make test-integration` 运行三副本、
 恢复、批处理、编码和反熵流程。

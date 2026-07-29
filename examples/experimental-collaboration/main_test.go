@@ -39,14 +39,7 @@ func TestRunReturnsWriteFailure(t *testing.T) {
 // parent-dependency buffering before every replica converges.
 func TestThreeEditorReplicationSimulation(t *testing.T) {
 	policy := crdt.ProtocolPolicy{AllowExperimental: true}
-	manifest, err := replica.NewManifest("field-note", "example.com/field-note/v1", 1, replica.Protocol{
-		StateID:          crdt.TypeIDRGAState,
-		DeltaID:          crdt.TypeIDRGADelta,
-		SemanticsVersion: 1,
-	}, policy)
-	if err != nil {
-		t.Fatal(err)
-	}
+	builder := newTextBuilder(t, policy)
 
 	alice := newTestRGA(t, "alice")
 	base, err := alice.Insert(0, "Draft")
@@ -79,16 +72,16 @@ func TestThreeEditorReplicationSimulation(t *testing.T) {
 	}
 
 	changes := []replica.Change{
-		mustTextChange(t, manifest, replica.Dot{Actor: "alice", Counter: 1}, base, policy),
-		mustTextChange(t, manifest, replica.Dot{Actor: "bob", Counter: 1}, bobEdit, policy),
-		mustTextChange(t, manifest, replica.Dot{Actor: "carol", Counter: 1}, carolEdit, policy),
-		mustTextChange(t, manifest, replica.Dot{Actor: "alice", Counter: 2}, deleteEdit, policy),
+		mustTextChange(t, builder, replica.Dot{Actor: "alice", Counter: 1}, base),
+		mustTextChange(t, builder, replica.Dot{Actor: "bob", Counter: 1}, bobEdit),
+		mustTextChange(t, builder, replica.Dot{Actor: "carol", Counter: 1}, carolEdit),
+		mustTextChange(t, builder, replica.Dot{Actor: "alice", Counter: 2}, deleteEdit),
 	}
 	want := alice.String()
 	for seed := int64(1); seed <= 24; seed++ {
 		for index, replicaID := range []string{"alice-receiver", "bob-receiver", "carol-receiver"} {
 			receiver := newTestRGA(t, replicaID)
-			inbox := newTextInbox(t, manifest, receiver, policy)
+			inbox := newTextInbox(t, builder, receiver)
 			deliverTextSimulation(t, inbox, changes, seed*100+int64(index))
 			if got := receiver.String(); got != want {
 				t.Fatalf("seed %d %s text = %q, want %q", seed, replicaID, got, want)
@@ -107,6 +100,19 @@ func TestThreeEditorReplicationSimulation(t *testing.T) {
 	}
 }
 
+func newTextBuilder(t testing.TB, policy crdt.ProtocolPolicy) replica.SessionBuilder {
+	t.Helper()
+	builder, err := replica.NewSessionBuilder("field-note", "example.com/field-note/v1", 1, replica.Protocol{
+		StateID:          crdt.TypeIDRGAState,
+		DeltaID:          crdt.TypeIDRGADelta,
+		SemanticsVersion: 1,
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return builder
+}
+
 func newTestRGA(t testing.TB, replicaID string) *text.RGA {
 	t.Helper()
 	value, err := text.NewWithOptions(replicaID, textLimits)
@@ -116,28 +122,28 @@ func newTestRGA(t testing.TB, replicaID string) *text.RGA {
 	return value
 }
 
-func mustTextChange(t testing.TB, manifest replica.Manifest, dot replica.Dot, delta text.Delta, policy crdt.ProtocolPolicy) replica.Change {
+func mustTextChange(t testing.TB, builder replica.SessionBuilder, dot replica.Dot, delta text.Delta) replica.Change {
 	t.Helper()
-	change, err := newTextChange(manifest, dot, delta, policy)
+	change, err := newTextChange(builder, dot, delta)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return change
 }
 
-func newTextInbox(t testing.TB, manifest replica.Manifest, target *text.RGA, policy crdt.ProtocolPolicy) *replica.Inbox {
+func newTextInbox(t testing.TB, builder replica.SessionBuilder, target *text.RGA) *replica.Inbox {
 	t.Helper()
 	frontier, err := replica.NewFrontier(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	inbox, err := replica.NewInboxWithPolicy(manifest, frontier, 8, 8*receiveLimits.MaxFrameBytes, func(encoded []byte) error {
+	inbox, err := builder.NewInbox(frontier, 8, 8*receiveLimits.MaxFrameBytes, func(encoded []byte) error {
 		delta, err := text.UnmarshalRGADeltaWithLimits(encoded, receiveLimits)
 		if err != nil {
 			return err
 		}
 		return target.ApplyDelta(delta)
-	}, policy)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
