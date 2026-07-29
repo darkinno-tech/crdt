@@ -13,8 +13,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
       - name: Check formatting
@@ -31,17 +31,22 @@ jobs:
   staticcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
       - uses: dominikh/staticcheck-action@9716614d4101e79b4340dd97b10e54d68234e431 # v1.4.1
         with:
           version: "2026.1"
           min-go-version: "1.26"
+          install-go: false
+          use-cache: false
 
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
       - name: Enforce per-package coverage
@@ -50,7 +55,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build and run Go 1.26 coverage container
         run: |
           docker build --file Dockerfile.ci --tag crdt-ci:ci .
@@ -59,8 +64,8 @@ jobs:
   golangci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
       - name: Run golangci-lint
@@ -78,7 +83,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Create pre-release tag
@@ -87,6 +92,12 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --force --tags origin
+          git fetch --force origin refs/heads/beta:refs/remotes/origin/beta
+          if [[ "$(git rev-parse origin/beta)" != "${GITHUB_SHA}" ]]; then
+            echo "Skipping stale beta run for ${GITHUB_SHA}; beta now points to $(git rev-parse origin/beta)"
+            echo "tag=skipped-stale" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
 
           stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
           if [[ -z "${stable_tag}" ]]; then
@@ -125,7 +136,7 @@ jobs:
           git push origin "${tag}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report pre-release tag
-        run: echo "Created pre-release tag ${{ steps.tag.outputs.tag }}"
+        run: 'echo "Pre-release tag result: ${{ steps.tag.outputs.tag }}"'
 
   release-tag:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -139,7 +150,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Create release tag
@@ -148,6 +159,12 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --force --tags origin
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
+          if [[ "$(git rev-parse origin/main)" != "${GITHUB_SHA}" ]]; then
+            echo "Skipping stale main run for ${GITHUB_SHA}; main now points to $(git rev-parse origin/main)"
+            echo "tag=skipped-stale" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
 
           stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
           if [[ -z "${stable_tag}" ]]; then
@@ -185,4 +202,4 @@ jobs:
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report release tag
-        run: echo "Created release tag ${{ steps.tag.outputs.tag }}"
+        run: 'echo "Release tag result: ${{ steps.tag.outputs.tag }}"'
