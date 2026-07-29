@@ -10,7 +10,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./attachment ./clock ./counter ./delta ./encoding ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./cmd/crdt-analyze ./cmd/crdt-sync-probe; do go test $$package; done
+	for package in . ./attachment ./clock ./counter ./delta ./encoding ./extensions ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./cmd/crdt-analyze ./cmd/crdt-sync-probe ./examples/extensions-provider; do go test $$package; done
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -37,6 +37,7 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzMVRegisterUnmarshal -fuzztime=10s ./register
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=10s ./delta
 	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=10s ./replica
+	go test -run=^$$ -fuzz=FuzzWireDecoders -fuzztime=10s ./extensions
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=10s ./text
 	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=10s ./tree
 
