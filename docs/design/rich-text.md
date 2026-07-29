@@ -4,7 +4,7 @@
 
 Add rich text as a new **experimental, manifest-bound** CRDT instead of
 changing either RGA v1 (`11/12`) or RGA run-v2 (`19/20`). The proposed wire
-pair is `21/22`, with semantic version `1` and an explicit
+pair is `23/24`, with semantic version `1` and an explicit
 `crdt.ProtocolPolicy{AllowExperimental: true}` at every replication boundary.
 
 The first version deliberately supports **inline attributes** only: bold,
@@ -70,7 +70,7 @@ richtext.Document
    `-- LWW attribute registers (stable RGA positions)
              |
              v
-       Type 21/22 canonical outer frame
+       Type 23/24 canonical outer frame
              |
              v
  authenticated replica.Manifest + experimental policy
@@ -94,7 +94,7 @@ can recover exactly.
 | Concurrency | A document-level mutex makes a compound text-plus-format delta atomic to public callers; RGA retains its own synchronization. |
 | Security | Attributes are UTF-8 strings, not HTML, CSS, JSON, URLs, or executable values. Rendering policy, link allowlists, sanitization, authorization, rate limits, and identity remain application-owned. CRC-32C detects corruption, not attackers. |
 | Persistence | Save the rich-text state frame and its shared RGA HLC state atomically. Keep removed attributes and text tombstones until the same authenticated epoch/exact-ack checkpoint rule permits retirement. |
-| Compatibility | Frames `21/22` are rejected by the zero policy. A rich-text manifest cannot be mixed with raw RGA `19/20` frames in one replication group. |
+| Compatibility | Frames `23/24` are rejected by the zero policy. A rich-text manifest cannot be mixed with raw RGA `19/20` frames in one replication group. |
 
 ## API contract
 

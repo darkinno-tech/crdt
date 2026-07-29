@@ -37,6 +37,11 @@ const (
 	// one Unicode scalar while a list position is one opaque application value.
 	TypeIDListRGAState uint64 = 21
 	TypeIDListRGADelta uint64 = 22
+	// Rich text nests a run-v2 RGA frame with bounded inline formatting
+	// registers. It is experimental until cross-language vectors, renderer
+	// schema, and formatting-metadata GC rules are promoted.
+	TypeIDRichTextState uint64 = 23
+	TypeIDRichTextDelta uint64 = 24
 )
 
 // FrameType describes one fully implemented framed CRDT protocol. The type
@@ -60,6 +65,7 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
 	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
 	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, UsesHLC: true},
+	{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, UsesHLC: true},
 }
 
 // DefaultRGAFrameType returns the compact run-v2 protocol for new RGA
@@ -74,16 +80,18 @@ func DefaultRGAFrameType() FrameType {
 // ProtocolPolicy's zero value, so an application must opt in per replication
 // group before advertising or accepting them from a peer.
 var experimentalFrameTypes = map[uint64]struct{}{
-	TypeIDLWWSetState:  {},
-	TypeIDLWWSetDelta:  {},
-	TypeIDLWWMapState:  {},
-	TypeIDLWWMapDelta:  {},
-	TypeIDRGAState:     {},
-	TypeIDRGADelta:     {},
-	TypeIDORTreeState:  {},
-	TypeIDORTreeDelta:  {},
-	TypeIDListRGAState: {},
-	TypeIDListRGADelta: {},
+	TypeIDLWWSetState:   {},
+	TypeIDLWWSetDelta:   {},
+	TypeIDLWWMapState:   {},
+	TypeIDLWWMapDelta:   {},
+	TypeIDRGAState:      {},
+	TypeIDRGADelta:      {},
+	TypeIDORTreeState:   {},
+	TypeIDORTreeDelta:   {},
+	TypeIDListRGAState:  {},
+	TypeIDListRGADelta:  {},
+	TypeIDRichTextState: {},
+	TypeIDRichTextDelta: {},
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group
@@ -96,8 +104,9 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
 	// AllowExperimental includes framed LWW-Set, LWW-Map, legacy scalar RGA v1,
-	// generic list RGA, and OR-Tree protocols. Keep it false until the replication group has
-	// accepted their experimental API and tombstone-retention lifecycle.
+	// generic list RGA, OR-Tree, and rich-text protocols. Keep it false until
+	// the replication group has accepted their experimental API and
+	// tombstone-retention lifecycle.
 	AllowExperimental bool
 }
 

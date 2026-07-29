@@ -379,7 +379,27 @@ func (r *RGA) InsertRunBinaryWithLimits(offset int, value string, limits frame.D
 	return encoded, err
 }
 
+// PrepareInsertRunBinaryWithLimits returns a canonical run-v2 insertion delta
+// without adding its nodes to r. It reserves HLC tags, so a failed enclosing
+// transaction may leave safely skipped tags in ClockState. Callers that need
+// an atomic composed CRDT operation can encode and validate their outer frame
+// before applying the returned delta with ApplyDelta.
+func (r *RGA) PrepareInsertRunBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareInsert(offset, value, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
 func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
+	delta, encoded, err := r.prepareInsert(offset, value, limits, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
+}
+
+func (r *RGA) prepareInsert(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
 	if r == nil || r.clock == nil {
 		return Delta{}, nil, ErrNilText
 	}
@@ -429,9 +449,6 @@ func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, enco
 			return Delta{}, nil, err
 		}
 	}
-	if err := r.ApplyDelta(delta); err != nil {
-		return Delta{}, nil, err
-	}
 	return delta, encoded, nil
 }
 
@@ -466,7 +483,25 @@ func (r *RGA) DeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderL
 	return encoded, err
 }
 
+// PrepareDeleteRunBinaryWithLimits returns a canonical run-v2 deletion delta
+// without applying its tombstones. It is intended for a composed CRDT that
+// must preflight an enclosing frame before committing local text changes.
+func (r *RGA) PrepareDeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareDelete(offset, count, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
 func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
+	delta, encoded, err := r.prepareDelete(offset, count, limits, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
+}
+
+func (r *RGA) prepareDelete(offset, count int, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
 	if r == nil {
 		return Delta{}, nil, ErrNilText
 	}
@@ -497,10 +532,39 @@ func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits, encode delt
 			return Delta{}, nil, err
 		}
 	}
-	if err := r.ApplyDelta(delta); err != nil {
-		return Delta{}, nil, err
-	}
 	return delta, encoded, nil
+}
+
+// NextTag reserves a local HLC tag without creating an RGA node. It exists
+// for composed CRDTs that persist their formatting metadata with this RGA's
+// clock state. A reserved but un-emitted tag is safe to skip.
+func (r *RGA) NextTag() (Position, error) {
+	if r == nil || r.clock == nil {
+		return Position{}, ErrNilText
+	}
+	return r.clock.Now()
+}
+
+// WitnessTag advances the RGA clock beyond a remote composed-CRDT tag without
+// changing text content. Callers must persist the resulting ClockState with
+// their enclosing state before reusing the replica ID.
+func (r *RGA) WitnessTag(tag Position) error {
+	if r == nil || r.clock == nil {
+		return ErrNilText
+	}
+	return r.clock.Witness(tag)
+}
+
+// NodePositions returns sorted stable IDs for the nodes carried by d. It does
+// not expose their text or parent links, and is useful when an enclosing CRDT
+// needs to attach metadata to an insertion before it applies the delta.
+func (d Delta) NodePositions() []Position {
+	positions := make([]Position, 0, len(d.nodes))
+	for position := range d.nodes {
+		positions = append(positions, position)
+	}
+	sortPositions(positions)
+	return positions
 }
 
 func (r *RGA) String() string {
