@@ -57,6 +57,31 @@ func BenchmarkMapApplyDeltaTenKeys(b *testing.B) {
 	}
 }
 
+func BenchmarkMapApplyDuplicateDelta(b *testing.B) {
+	source, err := NewMap("source")
+	if err != nil {
+		b.Fatal(err)
+	}
+	change, err := source.SetWithDelta("key", []byte("value"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	target, err := NewMap("target")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := target.ApplyDelta(change); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := target.ApplyDelta(change); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkMapMarshalTenThousandKeys(b *testing.B) {
 	value, err := NewMap("source")
 	if err != nil {

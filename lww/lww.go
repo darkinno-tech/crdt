@@ -398,13 +398,34 @@ func (m *Map) ApplyDelta(delta MapDelta) error {
 	if err := validateMapEntries(delta.entries); err != nil {
 		return err
 	}
+	if m.subsumes(delta.entries) {
+		return nil
+	}
 	return m.applyOwnedMapEntries(cloneMapEntries(delta.entries))
+}
+
+// subsumes reports whether every incoming entry is already represented by an
+// equal or newer local entry. A true result keeps duplicate and obsolete delta
+// delivery read-only, including the persisted HLC state.
+func (m *Map) subsumes(entries map[string]mapEntry) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for key, incoming := range entries {
+		current, exists := m.entries[key]
+		if !exists || current.tag.Compare(incoming.tag) < 0 || mapEntriesConflict(current, incoming) {
+			return false
+		}
+	}
+	return true
 }
 
 // applyOwnedMapEntries joins entries that are already owned by the caller.
 // Merge uses it after taking its one source snapshot, avoiding a second full
 // map clone while retaining ApplyDelta's public ownership boundary.
 func (m *Map) applyOwnedMapEntries(entries map[string]mapEntry) error {
+	if m.subsumes(entries) {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, incoming := range entries {
