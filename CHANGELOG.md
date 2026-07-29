@@ -9,17 +9,170 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Added a bounded, manifest-bound WebSocket provider reference and Go client
+  example with authenticated upgrade hooks, logical-actor authorization,
+  duplicate suppression, and bounded inbox/write queues. It remains a
+  reference integration rather than a production synchronization service.
 - Added a dependency-free TypeScript decoder for the bounded canonical frame
   envelope and an RGA v1 Go/Wasm client runtime for browser/WebView local
   merges.
 - Added real Wasm/Node and browser verification, including three-replica
   duplicate, reordering, malformed-input, and snapshot-recovery scenarios.
+- Added RGA snapshot-based delta recovery and compact run-v2 frames for new Go
+  replication groups.
+- Added bounded retained-state handling for LWW collections and attachment
+  references.
 
 ### Changed
 
 - Added explicit output and recovery limits for RGA state/delta serialization
   and snapshot restoration, so embedders can use the same budgets at every
   browser-facing boundary.
+- Enforced LWW decoder budgets before allocation, required checkpoint-bound
+  membership receipts, and classified duplicate replica delivery outcomes.
+- Reduced OR-Set merge allocation and improved bounded RGA recovery behavior.
+
+## [1.0.17] - 2026-07-29
+
+### Changed
+
+- Removed machine-specific benchmark host names from the public README.
+
+## [1.0.16] - 2026-07-29
+
+### Added
+
+- Added the cross-host synchronization probe operations runbook and public
+  system-context architecture assets.
+
+## [1.0.15] - 2026-07-29
+
+### Changed
+
+- Reorganized public documentation into integration, protocol, design, and
+  operations entry points.
+
+## [1.0.14] - 2026-07-29
+
+### Changed
+
+- Removed internal fault-review notes from the public release tree.
+
+## [1.0.13] - 2026-07-29
+
+### Fixed
+
+- Serialized short fuzz workers in CI to avoid unstable concurrent fuzz runs.
+
+## [1.0.12] - 2026-07-29
+
+### Added
+
+- Added the attachment collaboration example and integration guide for
+  manifest-bound RGA text and immutable attachment references.
+
+### Fixed
+
+- Verified referenced attachment content by bounded streaming SHA-256 and
+  length checks before accepting it.
+- Hardened RGA recovery/duplicate delivery and LWW-Map replication recovery.
+
+### Changed
+
+- Added framed LWW-Set replication, bounded/compactable OR-Tree tombstone
+  handling, and canonical visible-tree projection caching.
+
+## [1.0.11] - 2026-07-29
+
+### Changed
+
+- This release tag points to the same source revision as `v1.0.9`; it contains
+  no additional source changes.
+
+## [1.0.10] - 2026-07-29
+
+### Added
+
+- Added bounded immutable attachment references and content-verification
+  guidance.
+- Added framed LWW-Set replication with canonical state/delta encoding and
+  snapshot recovery.
+- Added OR-Tree tombstone limits, leaf-only compaction support, and lifecycle
+  documentation.
+
+### Fixed
+
+- Rejected stale experimental replica anchors and hardened LWW-Map and RGA
+  recovery paths.
+
+## [1.0.9] - 2026-07-29
+
+### Changed
+
+- Stopped tracking local fault-review artifacts in the public repository.
+
+## [1.0.8] - 2026-07-29
+
+### Added
+
+- Added G-Set and causal MV-Register framed replication, safe JSON diagnostics,
+  authority-backed membership epochs, signed gossip reference material, and
+  executable replication examples.
+- Added RGA bounded out-of-order integration, run-wire coverage, checkpoint
+  boundaries, and exact-acknowledgement tombstone-GC support.
+
+### Changed
+
+- Documented the canonical Go module path and public package index; added the
+  contribution guide and release changelog.
+- Improved delta batching, Merkle root caching, and RGA pending-queue handling.
+
+## [1.0.7] - 2026-07-29
+
+### Changed
+
+- Updated GitHub Actions runtime compatibility and removed the stale
+  Staticcheck Node 20 cache dependency.
+
+### Fixed
+
+- Prevented stale release-tag workflow runs from being reused.
+
+## [1.0.6] - 2026-07-29
+
+### Added
+
+- Added framed G-Set and MV-Register replication simulations and RGA
+  replication/scale coverage.
+
+### Fixed
+
+- Kept experimental RGA opt-in explicit and linearized pending dependency
+  validation before integration.
+
+### Changed
+
+- Improved the RGA resolved-batch fast path and clarified its tombstone
+  lifecycle.
+
+## [1.0.5] - 2026-07-29
+
+### Added
+
+- Added G-Set and MV-Register implementations with framed protocol support.
+- Added safe, summary-only JSON diagnostics for CRDT states and deltas.
+
+### Fixed
+
+- Synchronized CI fuzz targets and aligned stable-protocol/release guidance.
+
+## [1.0.4] - 2026-07-29
+
+### Fixed
+
+- Normalized the Go module declaration, internal imports, examples, and
+  documentation to the canonical `github.com/DarkInno/crdt` path. This removes
+  the module-path casing mismatch that prevented reliable `go get` usage.
 
 ## [1.0.4-beta.1] - 2026-07-28
 
