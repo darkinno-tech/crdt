@@ -185,6 +185,28 @@ old deltas. LWW-Set, LWW-Map, and OR-Tree still have no exact-acknowledgement co
 so integrations must budget, monitor, and retain their tombstones rather than
 calling a generic GC.
 
+### 5.1 Attachment references
+
+`attachment.Register` is an experimental, schema-constrained use of the LWW-Map
+frames for image, audio, video, and arbitrary data references. Create one
+separate manifest per attachment group with state/delta IDs 9/10, schema ID
+`github.com/DarkInno/crdt/attachment-reference/v1`, an empty codec ID, and
+`attachment.SemanticsVersion`. Do not use the same manifest for RGA text: one
+manifest binds exactly one concrete CRDT protocol.
+
+At the receive boundary, authenticate the exact manifest, decode with
+`attachment.UnmarshalDeltaWithLimits` using both transport and attachment
+retention limits, then apply the delta. Persist `SnapshotCurrentState()` and
+restore a same-ID replica with `attachment.NewFromSnapshotWithOptions`.
+
+An attachment reference is metadata only. The surrounding application owns
+storage authorization, uploads/downloads, scanning, encryption, and retries.
+After an authorized download, call `Reference.Verify` before decode or render;
+it streams the object, rejects short/oversized content, and compares SHA-256.
+The [attachment integration guide](ATTACHMENT_INTEGRATION.md) and its
+[runnable example](examples/attachment-collaboration) provide the complete
+flow and limits checklist.
+
 ## 6. Recovery, anti-entropy, and tombstones
 
 Bootstrap a new or recovering replica from a complete state snapshot. For an

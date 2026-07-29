@@ -286,6 +286,19 @@ authenticated experimental-protocol handshake described above:
 go run ./examples/experimental-collaboration
 ```
 
+The [attachment collaboration example](examples/attachment-collaboration)
+uses separate manifest-bound groups for RGA text and attachment references,
+persists both receiver states through snapshots, and streams an authorized
+download through `Reference.Verify` before accepting it:
+
+```sh
+go run ./examples/attachment-collaboration
+```
+
+See [attachment reference integration](ATTACHMENT_INTEGRATION.md) for the
+manifest fields, limits, storage boundary, deletion retention, and verification
+requirements.
+
 For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 [协作任务示例](examples/collaborative-board) and
 [仓库复制示例](examples/warehouse-replication) and
@@ -351,6 +364,7 @@ encoders for that.
 | `counter` | G-Counter, PN-Counter, and their delta codecs. |
 | `set` | G-Set, add-wins OR-Set, and element-codec contract. |
 | `lww` | Experimental framed LWW-Set and LWW-Map. |
+| `attachment` | Experimental bounded media/data references with streaming size and SHA-256 verification. |
 | `text` | Experimental framed RGA collaborative text and run-v2 codec. |
 | `tree` | Experimental framed observed-remove tree. |
 | `register` | In-memory LWW/max registers and framed causal MV-Register. |
