@@ -1,4 +1,9 @@
 .git
 .github
-docs
+docs/*
+!docs/protocol/
+docs/protocol/*
+!docs/protocol/testdata/
+docs/protocol/testdata/*
+!docs/protocol/testdata/rga-run-v2-vectors.json
 coverage
