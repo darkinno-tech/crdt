@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 470" width="100%" height="auto">
+  <!-- Conceptual comparison only; it does not claim protocol compatibility. -->
+  <defs>
+    <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 L7 4 L1 7 Z" fill="#52525B"/>
+    </marker>
+    <style>
+      .hdr { font-family: "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", system-ui, sans-serif; font-weight: 600; font-size: 16px; }
+      .sub { font-family: "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", system-ui, sans-serif; font-weight: 400; font-size: 12px; fill: #52525B; }
+      .th  { font-family: "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", system-ui, sans-serif; font-weight: 500; font-size: 14px; fill: #171717; }
+      .ts  { font-family: "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei", system-ui, sans-serif; font-weight: 400; font-size: 12px; fill: #52525B; }
+      .brand-th { fill: #1A1759; }
+      .brand-ts { fill: #4B3FE3; opacity: 0.8; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect width="720" height="470" fill="#F7F7F8"/>
+
+  <!-- Headers -->
+  <text x="190" y="28" text-anchor="middle" class="hdr" fill="#171717">DarkInno/crdt</text>
+  <text x="190" y="44" text-anchor="middle" class="sub">Go · State-based CRDT</text>
+  <text x="530" y="28" text-anchor="middle" class="hdr" fill="#171717">Yjs</text>
+  <text x="530" y="44" text-anchor="middle" class="sub">JS · Op-based CRDT (YATA)</text>
+
+  <!-- Layer 1: Application -->
+  <path d="M190 56 L190 70" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <path d="M530 56 L530 70" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="40" y="72" width="300" height="48" rx="8" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="190" y="92" text-anchor="middle" class="th">Application</text>
+  <text x="190" y="108" text-anchor="middle" class="ts">your Go service</text>
+  <rect x="380" y="72" width="300" height="48" rx="8" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="530" y="92" text-anchor="middle" class="th">App + Bindings</text>
+  <text x="530" y="108" text-anchor="middle" class="ts">y-prosemirror · y-quill · …</text>
+
+  <!-- Layer 2: Key differentiator -->
+  <path d="M190 120 L190 134" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <path d="M530 120 L530 134" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="40" y="136" width="300" height="48" rx="8" fill="#F2F7FF" stroke="#4B3FE3"/>
+  <text x="190" y="156" text-anchor="middle" class="th brand-th">Replica Session</text>
+  <text x="190" y="172" text-anchor="middle" class="ts brand-ts">manifest · frontier · checkpoint</text>
+  <rect x="380" y="136" width="300" height="48" rx="8" fill="#F2F7FF" stroke="#4B3FE3"/>
+  <text x="530" y="156" text-anchor="middle" class="th brand-th">Shared Types</text>
+  <text x="530" y="172" text-anchor="middle" class="ts brand-ts">YText · YArray · YMap · YXml</text>
+
+  <!-- Layer 3: CRDT Types / Core -->
+  <path d="M190 184 L190 198" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <path d="M530 184 L530 198" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="40" y="200" width="300" height="48" rx="8" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="190" y="220" text-anchor="middle" class="th">CRDT Types (9)</text>
+  <text x="190" y="236" text-anchor="middle" class="ts">GCounter · ORSet · RGA · ORTree · …</text>
+  <rect x="380" y="200" width="300" height="48" rx="8" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="530" y="220" text-anchor="middle" class="th">Core Engine</text>
+  <text x="530" y="236" text-anchor="middle" class="ts">Doc · StructStore · Transaction</text>
+
+  <!-- Layer 4: Infrastructure / Serialization -->
+  <path d="M190 248 L190 262" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <path d="M530 248 L530 262" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="40" y="264" width="300" height="48" rx="8" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="190" y="284" text-anchor="middle" class="th">Infrastructure</text>
+  <text x="190" y="300" text-anchor="middle" class="ts">clock · encoding · delta · merkle · GC</text>
+  <rect x="380" y="264" width="300" height="48" rx="8" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="530" y="284" text-anchor="middle" class="th">Serialization</text>
+  <text x="530" y="300" text-anchor="middle" class="ts">Update V1/V2 · State Vector</text>
+
+  <!-- Layer 5: Transport -->
+  <path d="M190 312 L190 326" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <path d="M530 312 L530 326" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" fill="none" marker-end="url(#arr)"/>
+  <rect x="40" y="328" width="300" height="48" rx="8" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="190" y="348" text-anchor="middle" class="th">No Transport</text>
+  <text x="190" y="364" text-anchor="middle" class="ts">network-agnostic by design</text>
+  <rect x="380" y="328" width="300" height="48" rx="8" fill="#F2F7FF" stroke="#4B3FE3"/>
+  <text x="530" y="348" text-anchor="middle" class="th brand-th">Provider Ecosystem</text>
+  <text x="530" y="364" text-anchor="middle" class="ts brand-ts">y-websocket · y-webrtc · y-indexeddb</text>
+
+  <!-- Legend -->
+  <rect x="200" y="410" width="12" height="12" rx="2" fill="#F2F7FF" stroke="#4B3FE3"/>
+  <text x="220" y="420" class="ts" fill="#52525B">关键差异层</text>
+  <rect x="340" y="410" width="12" height="12" rx="2" fill="#FFFFFF" stroke="rgba(23,23,23,0.12)"/>
+  <text x="360" y="420" class="ts" fill="#52525B">标准层</text>
+
+  <!-- Divider -->
+  <line x1="360" y1="60" x2="360" y2="390" stroke="rgba(23,23,23,0.08)" stroke-width="1" stroke-dasharray="4 4"/>
+</svg>

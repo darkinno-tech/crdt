@@ -8,6 +8,13 @@ despite duplicate delivery, reordering, and temporary partitions.
 
 > Status: first public module release `v1.0.0`; APIs follow semantic versioning.
 
+## Architecture at a glance
+
+![Conceptual architecture comparison of crdt and Yjs](assets/crdt_vs_yjs_architecture.svg)
+
+This is a conceptual comparison of integration boundaries, not a wire-compatibility,
+feature-parity, or performance claim.
+
 ## Features
 
 - State-based **G-Counter** with joinable, type-isolated deltas.
