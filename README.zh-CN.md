@@ -72,10 +72,11 @@ for _, kind := range policy.FrameTypes() {
 ```
 
 接收实验帧之前，必须在经过认证的握手中将其绑定到 `replica.Manifest`。Manifest
-包含 group、schema、epoch、codec 与语义版本；在每个 replica 边界
-（`NewChangeWithPolicy`、`NewInboxWithPolicy`、`NewCheckpointWithPolicy`、
-`NewSessionWithPolicy`）均传入同一份显式 Policy。仅凭 Frame Type ID 不能证明
-线协议语义兼容。
+包含 group、schema、epoch、codec 与语义版本。为在构造同一个 group 的本地 replica
+对象时只显式 opt-in 一次，可创建 `replica.NewSessionBuilder(..., policy)`，再调用其
+`NewChange`、`NewInbox`、`NewCheckpoint` 与 `NewSession`。Builder 只是本地封装，
+不是握手：零值 Policy 仍会拒绝实验 Manifest，且仅凭 Frame Type ID 不能证明线协议
+语义兼容。需要单独使用时，原有的 `*WithPolicy` 构造函数仍然可用。
 
 零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter 与默认 RGA run-v2
 协议。该策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、

@@ -87,6 +87,53 @@ func TestORSetRejectsTypedNilAndSnapshotDecodeFailure(t *testing.T) {
 	}
 }
 
+type countingStringCodec struct {
+	id      string
+	idCalls int
+}
+
+func (c *countingStringCodec) ID() string {
+	c.idCalls++
+	return c.id
+}
+
+func (*countingStringCodec) Marshal(value string) ([]byte, error)  { return []byte(value), nil }
+func (*countingStringCodec) Unmarshal(data []byte) (string, error) { return string(data), nil }
+
+func TestStatefulSetsBindCodecIDAtConstruction(t *testing.T) {
+	codec := &countingStringCodec{id: "example.com/bound-codec/v1"}
+	value := mustNewORSet(t, "orset", codec)
+	if codec.idCalls != 1 {
+		t.Fatalf("OR-Set construction codec ID calls = %d, want 1", codec.idCalls)
+	}
+	if _, err := value.Add("item"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.MarshalBinary(); err != nil {
+		t.Fatal(err)
+	}
+	if codec.idCalls != 1 {
+		t.Fatalf("OR-Set state marshal codec ID calls = %d, want 1", codec.idCalls)
+	}
+
+	gset, err := NewGSet("gset", codec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codec.idCalls != 2 {
+		t.Fatalf("G-Set construction codec ID calls = %d, want 2", codec.idCalls)
+	}
+	if _, err := gset.Add("item"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gset.MarshalBinary(); err != nil {
+		t.Fatal(err)
+	}
+	if codec.idCalls != 2 {
+		t.Fatalf("G-Set state marshal codec ID calls = %d, want 2", codec.idCalls)
+	}
+}
+
 func TestORSetRejectsNonCanonicalTagsAndCodecCollisions(t *testing.T) {
 	validTag := crdt.Tag{ReplicaID: "replica", WallTime: 2, Logical: 3}
 	encoded := appendTag(nil, validTag)
