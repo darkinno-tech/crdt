@@ -1,5 +1,6 @@
-# Local design and review documents
-docs/
+# Internal notes must not be published with the library.
+/docs/fault-reviews/
+/docs/internal/
 
 # OS metadata
 .DS_Store

@@ -48,7 +48,7 @@ go run ./examples/collaborative-board
 make test-integration
 ```
 
-`cmd/crdt-sync-probe` 仅用于受控的本地/集成演练，默认应绑定 loopback；令牌使用受限权限的临时文件。完整启动、清理和预期结果见 [INTEGRATION.md](INTEGRATION.md)。它不是生产同步服务。
+`cmd/crdt-sync-probe` 仅用于受控的本地/集成演练，默认应绑定 loopback；令牌使用受限权限的临时文件。完整启动、清理和预期结果见 [集成教程](docs/integration/overview.md)。它不是生产同步服务。
 
 ## 架构边界
 
@@ -117,7 +117,7 @@ make test-integration
 | 输入处理 | Fuzz 合法种子和随机/截断字节；目标是不 panic、不超限分配，并且错误路径不留下部分状态。 |
 | 集成路径 | 至少三副本、重复和乱序投递、分区后的冲突、快照/批处理/反熵修复，以及最终确定性状态。 |
 
-修复缺陷时，先加入能在修复前失败的回归测试。公开行为、示例输出或配置边界变化时，同步更新 `README.md`、`INTEGRATION.md` 或相关 Go 文档。
+修复缺陷时，先加入能在修复前失败的回归测试。公开行为、示例输出或配置边界变化时，同步更新 `README.md`、`docs/integration/overview.md` 或相关 Go 文档。
 
 ## 提交前检查与 PR
 

@@ -3,7 +3,7 @@
 `attachment.Register` 是图片、音频、视频和任意二进制数据的实验性 CRDT 边界。它复制有边界、
 不可变的引用；绝不传输对象原始字节。
 
-完整的文本、附件、Manifest、快照和校验流程见[可运行附件协作示例](examples/attachment-collaboration)：
+完整的文本、附件、Manifest、快照和校验流程见[可运行附件协作示例](../../examples/attachment-collaboration)：
 
 ```sh
 go run ./examples/attachment-collaboration
