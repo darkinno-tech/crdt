@@ -24,6 +24,8 @@ be committed.
 
 - [Cross-host probe deployment runbook](operations/cross-host-probe.md)
 - [跨机器同步探针部署手册](operations/cross-host-probe.zh-CN.md)
+- [Durable relay benchmark](operations/durable-benchmark-2026-07-29.md)
+- [Durable relay 基准测试](operations/durable-benchmark-2026-07-29.zh-CN.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 

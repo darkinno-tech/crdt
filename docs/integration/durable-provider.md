@@ -82,7 +82,9 @@ The server exposes `GET /ws` with the `crdt-durable-v1` subprotocol. Its
 `bbolt` file is opened with an exclusive lock, but deployment must still ensure
 that one active pod/process owns the persistent volume. Do not mount the same
 file into multiple replicas. A highly available deployment needs a different
-store implementation with the same transaction contract.
+store implementation with the same transaction contract. `MaxEvents` and
+`MaxBytes` apply per configured replication group; put a fixed per-tenant
+group quota in front of a multi-tenant service.
 
 ## Durable receive and reconnect
 

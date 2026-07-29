@@ -69,7 +69,7 @@ One `bbolt` update transaction performs all of the following:
 - checks the exact `(actor, counter)` binding;
 - returns the original sequence for an identical retry;
 - rejects a different canonical payload for an existing dot;
-- checks maximum retained operations and bytes;
+- checks maximum retained operations and bytes per replication group;
 - allocates the next strictly increasing server sequence;
 - stores the canonical event and its SHA-256 binding; and
 - updates high-water, count, and byte metadata.

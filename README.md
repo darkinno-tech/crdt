@@ -38,6 +38,8 @@ feature-parity, or performance claim.
 - Safe concurrent access for the provided CRDT implementations.
 - Opt-in manifest-bound WebSocket and HTTP/SSE live-relay reference surfaces;
   disabled unless an application explicitly enables them.
+- A single-writer durable WebSocket relay reference with a bbolt operation log,
+  exact-dot binding, bounded replay, and reconnect support.
 - Experimental framed LWW-Set, LWW-Map, RGA text, and OR-Tree collections, enabled
   only by an explicit per-replication-group protocol policy. RGA v1 now has
   bounded delayed integration and incremental visible indexing, but its
@@ -51,6 +53,11 @@ or retry policy. The optional [`extensions`](docs/integration/extensions.md) pac
 explicitly enabled WebSocket and HTTP/SSE live-relay reference surfaces, but it
 does not start a listener or provide durability, replay, reconnect, TLS,
 anti-entropy, or identity/session management. Those remain application-owned.
+The separate [`durable`](docs/integration/durable-provider.md) reference adds
+one persistent operation log and reconnect/replay flow for a single process and
+one protected storage volume. It still does not provide clustered storage,
+application CRDT checkpoint transactions, TLS, identity/session lifecycle,
+membership, or tombstone GC.
 `tombstonegc.Coordinator` performs safe automatic collection only after the
 application supplies an authoritative, authenticated active-membership view.
 It does not discover, authenticate, or persist that view. A checksum detects
@@ -310,6 +317,11 @@ service:
 go run ./examples/extensions-provider
 ```
 
+For persistent operation replay and reconnect behavior, use the separate
+[durable WebSocket relay reference](docs/integration/durable-provider.md). It
+is a single-writer bbolt deployment shape with bounded replay rather than a
+replacement for a replicated database or application checkpoint transaction.
+
 See [attachment reference integration](docs/integration/attachment.md) for the
 manifest fields, limits, storage boundary, deletion retention, and verification
 requirements.
@@ -319,6 +331,7 @@ For the Chinese versions, see [集成教程](docs/integration/overview.zh-CN.md)
 [仓库复制示例](examples/warehouse-replication) and
 [实验协作示例](examples/experimental-collaboration) and
 [可选传输扩展](docs/integration/extensions.zh-CN.md).
+另见[可持久化 WebSocket relay 参考实现](docs/integration/durable-provider.zh-CN.md)。
 
 ## Correct use in a distributed system
 

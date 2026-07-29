@@ -29,6 +29,7 @@
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
 - 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
+- 单写者 durable WebSocket relay 参考实现：带 bbolt 操作日志、精确 Dot 绑定、有界重放与重连。
 - 实验性 LWW-Set、LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
   RGA v1 现具备有边界的延迟集成与增量可见索引，但其墓碑生命周期仍为实验性。
 
@@ -40,6 +41,7 @@ HTTP/SSE live relay 参考端点，但它不启动 listener，也不提供持久
 反熵或身份/session 管理；这些仍由应用负责。只有当应用提供权威且经过认证的活跃成员视图后，
 `tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该成员视图。
 校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
+独立的 [`durable`](docs/integration/durable-provider.zh-CN.md) 参考实现为一个进程和一个受保护持久卷提供操作日志、重放与重连；它仍不提供集群存储、应用 CRDT checkpoint 事务、TLS、身份/session 生命周期、成员权威或墓碑 GC。
 
 ## 实验性 LWW-Set、LWW-Map、RGA 与 OR-Tree 协议
 
@@ -270,6 +272,8 @@ live relay，不是持久化复制服务：
 ```sh
 go run ./examples/extensions-provider
 ```
+
+持久操作重放与断线重连请使用独立的[durable WebSocket relay 参考实现](docs/integration/durable-provider.zh-CN.md)。它针对单写者 bbolt 部署形态并限制重放窗口，不能替代复制数据库或应用 checkpoint 事务。
 
 Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](docs/integration/attachment.zh-CN.md)。
 

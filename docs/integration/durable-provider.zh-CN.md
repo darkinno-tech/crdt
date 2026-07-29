@@ -58,6 +58,7 @@ mux.Handle("/crdt/durable/", http.StripPrefix("/crdt/durable", handler))
 ```
 
 服务端通过 `GET /ws` 暴露 `crdt-durable-v1` 子协议。`bbolt` 会对文件加独占锁，但部署仍必须保证一个持久卷只有一个 active pod/process；不要把同一文件挂到多副本。高可用需要替换为保留相同事务语义的存储实现。
+`MaxEvents` 与 `MaxBytes` 对每个 replication group 生效；多租户服务还需要在此前增加固定的每租户 group 配额。
 
 ## 持久接收与重连
 

@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Added disabled-by-default, manifest-bound WebSocket and HTTP/SSE live relay
   reference surfaces in `extensions`, plus runnable provider, race, fuzz,
   duplicate/reorder, concurrency, and loopback benchmark coverage.
+- Added the `durable` single-writer WebSocket relay reference: transactional
+  bbolt operation retention, exact Dot-to-payload binding, bounded replay,
+  reconnect support, restart/partition simulation, fuzzing, and local
+  append/replay/reconnect benchmark evidence.
 
 ## [1.0.4-beta.1] - 2026-07-28
 
