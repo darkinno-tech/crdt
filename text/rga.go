@@ -55,6 +55,141 @@ type deltaPlan struct {
 	pendingBytes int
 }
 
+// resolvedRunFastPathMinNodes avoids sorting a small interactive edit only to
+// save planning allocations that are already tiny. Larger text pastes and
+// run-v2 deltas take the dedicated parent-before-child path below.
+const resolvedRunFastPathMinNodes = 16
+
+// childIndex stores the overwhelmingly common one-child RGA parent directly
+// on its already-retained sequencePair. Only genuinely concurrent sibling
+// sets allocate a map entry and slice. This keeps the ordering rule unchanged
+// without adding a second per-character map to a locally inserted run.
+type childIndex struct {
+	branches map[Position][]*sequencePair
+}
+
+func newChildIndex() childIndex {
+	return childIndex{
+		branches: make(map[Position][]*sequencePair),
+	}
+}
+
+func (index *childIndex) count(parent *sequencePair) int {
+	if parent == nil {
+		return 0
+	}
+	if siblings, exists := index.branches[parent.position]; exists {
+		return len(siblings)
+	}
+	if parent.singleChild != nil {
+		return 1
+	}
+	return 0
+}
+
+// insert records child in RGA's descending Position sibling order and returns
+// its preceding sibling, if any. Callers use that sibling's exit marker as the
+// insertion anchor for RGA depth-first order.
+func (index *childIndex) insert(parent, child *sequencePair) (*sequencePair, bool) {
+	if siblings, exists := index.branches[parent.position]; exists {
+		insertAt := sort.Search(len(siblings), func(position int) bool {
+			return siblings[position].position.Compare(child.position) < 0
+		})
+		if insertAt < len(siblings) && siblings[insertAt].position == child.position {
+			if insertAt == 0 {
+				return nil, false
+			}
+			return siblings[insertAt-1], true
+		}
+		var previous *sequencePair
+		if insertAt > 0 {
+			previous = siblings[insertAt-1]
+		}
+		siblings = append(siblings, nil)
+		copy(siblings[insertAt+1:], siblings[insertAt:])
+		siblings[insertAt] = child
+		index.branches[parent.position] = siblings
+		return previous, insertAt > 0
+	}
+
+	current := parent.singleChild
+	if current == nil {
+		parent.singleChild = child
+		return nil, false
+	}
+	if current.position == child.position {
+		return nil, false
+	}
+	parent.singleChild = nil
+	if current.position.Compare(child.position) < 0 {
+		index.branches[parent.position] = []*sequencePair{child, current}
+		return nil, false
+	}
+	index.branches[parent.position] = []*sequencePair{current, child}
+	return current, true
+}
+
+func (index *childIndex) remove(parent, child *sequencePair) bool {
+	if siblings, exists := index.branches[parent.position]; exists {
+		removeAt := sort.Search(len(siblings), func(position int) bool {
+			return siblings[position].position.Compare(child.position) <= 0
+		})
+		if removeAt == len(siblings) || siblings[removeAt].position != child.position {
+			return false
+		}
+		copy(siblings[removeAt:], siblings[removeAt+1:])
+		siblings = siblings[:len(siblings)-1]
+		switch len(siblings) {
+		case 0:
+			delete(index.branches, parent.position)
+		case 1:
+			delete(index.branches, parent.position)
+			parent.singleChild = siblings[0]
+		default:
+			index.branches[parent.position] = siblings
+		}
+		return true
+	}
+	if parent.singleChild != nil && parent.singleChild.position == child.position {
+		parent.singleChild = nil
+		return true
+	}
+	return false
+}
+
+// removeSelected removes exactly candidates whose removed bit is true. It is
+// used by batched tombstone compaction to keep wide sibling-set filtering
+// linear without forcing singleton parents into slice allocations.
+func (index *childIndex) removeSelected(parent *sequencePair, candidates map[Position]int, removed []bool) {
+	if siblings, exists := index.branches[parent.position]; exists {
+		retained := siblings[:0]
+		for _, child := range siblings {
+			candidateIndex, selected := candidates[child.position]
+			if selected && removed[candidateIndex] {
+				continue
+			}
+			retained = append(retained, child)
+		}
+		switch len(retained) {
+		case 0:
+			delete(index.branches, parent.position)
+		case 1:
+			delete(index.branches, parent.position)
+			parent.singleChild = retained[0]
+		default:
+			index.branches[parent.position] = retained
+		}
+		return
+	}
+	child := parent.singleChild
+	if child == nil {
+		return
+	}
+	if candidateIndex, selected := candidates[child.position]; selected && removed[candidateIndex] {
+		parent.singleChild = nil
+	}
+}
+
 // eligibleCompactionPlan stores a child-before-parent deletion order and the
 // membership index needed to rebuild affected child slices without one map per
 // tombstone.
@@ -113,7 +248,7 @@ type RGA struct {
 	tombstones      map[Position]struct{}
 	version         uint64
 	sequence        *sequenceIndex
-	children        map[Position][]Position
+	children        childIndex
 }
 
 var _ crdt.CRDT[*RGA] = (*RGA)(nil)
@@ -153,7 +288,7 @@ func NewFromClockWithOptions(state clock.State, options Options) (*RGA, error) {
 		waitingByParent: make(map[Position]map[Position]struct{}),
 		tombstones:      make(map[Position]struct{}),
 		sequence:        newSequenceIndex(),
-		children:        make(map[Position][]Position),
+		children:        newChildIndex(),
 	}, nil
 }
 
@@ -312,9 +447,9 @@ func (r *RGA) String() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]rune, 0, visibleCount(r.sequence.root))
-	for current := r.sequence.entries[Position{}].next; current != nil; current = current.next {
+	for current := r.sequence.entry(Position{}).next; current != nil; current = current.next {
 		if current.visible {
-			id := current.position
+			id := current.pair.position
 			result = append(result, r.nodes[id].rune)
 		}
 	}
@@ -356,6 +491,15 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 	if r.subsumesLocked(delta) {
 		return nil
 	}
+	// A local paste and a decoded run-v2 frame commonly describe one new,
+	// same-replica parent chain. Once that is established against the retained
+	// state, it is already acyclic and fully resolved. Avoid constructing the
+	// generic dependency plan (maps for nodes, children, and reachability) for
+	// this hot path. Any partial, branching, duplicate, or out-of-order delta
+	// deliberately falls through to the conservative planner.
+	if ids, ok := r.resolvedLinearRunLocked(delta); ok {
+		return r.applyResolvedLinearRunLocked(delta, ids)
+	}
 	// Integrated nodes have complete, previously validated parent chains. Only
 	// a pending node can still point at an ID introduced by this delta, so
 	// copying or traversing the full live document is unnecessary here.
@@ -384,7 +528,87 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 	if r.integrateReady() {
 		changed = true
 	}
-	for id := range delta.tombstones {
+	if r.applyTombstonesLocked(delta.tombstones) {
+		changed = true
+	}
+	if changed {
+		r.version++
+	}
+	return nil
+}
+
+// resolvedLinearRunLocked recognizes a complete, new, same-replica chain in
+// canonical tag order. It is intentionally strict: accepting only a root or
+// retained initial parent means no pending edge can participate in the fast
+// path. The caller must hold r.mu for writing.
+func (r *RGA) resolvedLinearRunLocked(delta Delta) ([]Position, bool) {
+	if len(delta.nodes) < resolvedRunFastPathMinNodes {
+		return nil, false
+	}
+	ids := sortedNodeIDs(delta.nodes)
+	first := delta.nodes[ids[0]]
+	if first.parent.Valid() {
+		if _, exists := r.nodes[first.parent]; !exists {
+			return nil, false
+		}
+	}
+	replicaID := ids[0].ReplicaID
+	for index, id := range ids {
+		if id.ReplicaID != replicaID {
+			return nil, false
+		}
+		if _, exists := r.nodes[id]; exists {
+			return nil, false
+		}
+		if _, exists := r.pending[id]; exists {
+			return nil, false
+		}
+		if index > 0 && delta.nodes[id].parent != ids[index-1] {
+			return nil, false
+		}
+	}
+	return ids, true
+}
+
+// applyResolvedLinearRunLocked integrates a chain accepted by
+// resolvedLinearRunLocked. It preserves ApplyDelta's validation, limits, HLC
+// witness, pending replay, tombstone, and version semantics while avoiding
+// the transient generic delta-plan graph. The caller must hold r.mu.
+func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
+	if len(r.nodes)+len(r.pending)+len(ids) > r.options.MaxNodes ||
+		len(r.tombstones)+newTombstones(delta.tombstones, r.tombstones) > r.options.MaxTombstones {
+		return ErrResourceLimit
+	}
+	if tag, ok := greatestTag(delta); ok {
+		if err := r.clock.Witness(tag); err != nil {
+			return err
+		}
+	}
+	for _, id := range ids {
+		item := delta.nodes[id]
+		r.nodes[id] = item
+		r.integrateNode(id, item)
+	}
+	changed := len(ids) > 0
+	if r.integrateReady() {
+		changed = true
+	}
+	if r.applyTombstonesLocked(delta.tombstones) {
+		changed = true
+	}
+	if changed {
+		r.version++
+	}
+	return nil
+}
+
+// applyTombstonesLocked retains each new tombstone and hides its node when it
+// is already integrated. A tombstone for a missing node remains retained so a
+// later out-of-order insert is hidden on integration. The caller must hold
+// r.mu for writing.
+func (r *RGA) applyTombstonesLocked(tombstones map[Position]struct{}) bool {
+	changed := false
+	for id := range tombstones {
 		if _, exists := r.tombstones[id]; exists {
 			continue
 		}
@@ -392,10 +616,7 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 		r.sequence.setVisible(id, false)
 		changed = true
 	}
-	if changed {
-		r.version++
-	}
-	return nil
+	return changed
 }
 
 func (r *RGA) Merge(other *RGA) error {
@@ -487,25 +708,15 @@ func (r *RGA) CompactTombstones(tags []Position) (int, error) {
 		if _, tombstoned := r.tombstones[tag]; !tombstoned {
 			continue
 		}
-		if _, exists := r.nodes[tag]; !exists || len(r.children[tag]) > 0 || len(r.waitingByParent[tag]) > 0 || r.sequence.entries[tag] == nil || r.sequence.exits[tag] == nil {
+		if _, exists := r.nodes[tag]; !exists || r.children.count(r.sequence.pair(tag)) > 0 || len(r.waitingByParent[tag]) > 0 || !r.sequence.has(tag) {
 			return 0, ErrUnsafeCompaction
 		}
 		compact = append(compact, tag)
 	}
 	for _, tag := range compact {
 		item := r.nodes[tag]
-		siblings := r.children[item.parent]
-		for index, candidate := range siblings {
-			if candidate == tag {
-				copy(siblings[index:], siblings[index+1:])
-				siblings = siblings[:len(siblings)-1]
-				break
-			}
-		}
-		if len(siblings) == 0 {
-			delete(r.children, item.parent)
-		} else {
-			r.children[item.parent] = siblings
+		if !r.children.remove(r.sequence.pair(item.parent), r.sequence.pair(tag)) {
+			return 0, ErrUnsafeCompaction
 		}
 		if !r.sequence.removeLeaf(tag) {
 			return 0, ErrUnsafeCompaction
@@ -576,7 +787,7 @@ func (r *RGA) eligibleCompactionPlanLocked(tags []Position) eligibleCompactionPl
 	remainingChildren := make([]int, len(candidates))
 	ready := make([]int, 0, len(candidates))
 	for index, tag := range candidates {
-		remainingChildren[index] = len(r.children[tag])
+		remainingChildren[index] = r.children.count(r.sequence.pair(tag))
 		if remainingChildren[index] == 0 {
 			ready = append(ready, index)
 		}
@@ -608,7 +819,7 @@ func (r *RGA) eligibleCompactionCandidateLocked(tag Position) bool {
 	if _, exists := r.nodes[tag]; !exists || len(r.waitingByParent[tag]) > 0 {
 		return false
 	}
-	return r.sequence.entries[tag] != nil && r.sequence.exits[tag] != nil
+	return r.sequence.has(tag)
 }
 
 // applyEligibleCompactionPlanLocked removes a plan made by
@@ -616,14 +827,14 @@ func (r *RGA) eligibleCompactionCandidateLocked(tag Position) bool {
 // sibling set is compacted in linear rather than repeated-shift time.
 func (r *RGA) applyEligibleCompactionPlanLocked(plan eligibleCompactionPlan) bool {
 	removed := make([]bool, len(plan.candidateIndexes))
-	affectedParents := make(map[Position]struct{}, len(plan.tags))
+	affectedParents := make(map[Position]*sequencePair, len(plan.tags))
 	for _, tag := range plan.tags {
 		item, exists := r.nodes[tag]
 		if !exists {
 			return false
 		}
 		removed[plan.candidateIndexes[tag]] = true
-		affectedParents[item.parent] = struct{}{}
+		affectedParents[item.parent] = r.sequence.pair(item.parent)
 	}
 	for _, tag := range plan.tags {
 		if !r.sequence.removeLeaf(tag) {
@@ -632,20 +843,8 @@ func (r *RGA) applyEligibleCompactionPlanLocked(plan eligibleCompactionPlan) boo
 		delete(r.nodes, tag)
 		delete(r.tombstones, tag)
 	}
-	for parent := range affectedParents {
-		siblings := r.children[parent]
-		retained := siblings[:0]
-		for _, sibling := range siblings {
-			index, selected := plan.candidateIndexes[sibling]
-			if !selected || !removed[index] {
-				retained = append(retained, sibling)
-			}
-		}
-		if len(retained) == 0 {
-			delete(r.children, parent)
-			continue
-		}
-		r.children[parent] = retained
+	for _, parent := range affectedParents {
+		r.children.removeSelected(parent, plan.candidateIndexes, removed)
 	}
 	return true
 }
@@ -748,31 +947,26 @@ func (r *RGA) integrateReady() bool {
 }
 
 func (r *RGA) integrateNode(id Position, item node) {
-	siblings := r.children[item.parent]
-	insertAt := sort.Search(len(siblings), func(index int) bool {
-		return siblings[index].Compare(id) < 0
-	})
-	anchor := r.sequence.entries[item.parent]
-	if insertAt > 0 {
-		anchor = r.sequence.exits[siblings[insertAt-1]]
-	}
-	if anchor == nil {
+	parent := r.sequence.pair(item.parent)
+	if parent == nil {
 		panic("text: integrating node without integrated parent")
 	}
-	siblings = append(siblings, Position{})
-	copy(siblings[insertAt+1:], siblings[insertAt:])
-	siblings[insertAt] = id
-	r.children[item.parent] = siblings
 	_, deleted := r.tombstones[id]
-	r.sequence.insertAfter(anchor, id, !deleted)
+	pair := newSequencePair(id, !deleted)
+	previous, hasPrevious := r.children.insert(parent, pair)
+	anchor := &parent.entry
+	if hasPrevious {
+		anchor = &previous.exit
+	}
+	r.sequence.insertPairAfter(anchor, pair)
 }
 
-func buildSequence(nodes map[Position]node, tombstones map[Position]struct{}) (*sequenceIndex, map[Position][]Position, error) {
+func buildSequence(nodes map[Position]node, tombstones map[Position]struct{}) (*sequenceIndex, childIndex, error) {
 	value := &RGA{
 		nodes:      nodes,
 		tombstones: tombstones,
 		sequence:   newSequenceIndex(),
-		children:   make(map[Position][]Position),
+		children:   newChildIndex(),
 	}
 	byParent := make(map[Position][]Position, len(nodes))
 	for id, item := range nodes {
@@ -787,15 +981,15 @@ func buildSequence(nodes map[Position]node, tombstones map[Position]struct{}) (*
 		id := ready[0]
 		ready = ready[1:]
 		item, ok := nodes[id]
-		if !ok || value.sequence.entries[item.parent] == nil {
-			return nil, nil, ErrInvalidDelta
+		if !ok || value.sequence.entry(item.parent) == nil {
+			return nil, childIndex{}, ErrInvalidDelta
 		}
 		value.integrateNode(id, item)
 		integrated++
 		ready = append(ready, byParent[id]...)
 	}
 	if integrated != len(nodes) {
-		return nil, nil, ErrInvalidDelta
+		return nil, childIndex{}, ErrInvalidDelta
 	}
 	return value.sequence, value.children, nil
 }
