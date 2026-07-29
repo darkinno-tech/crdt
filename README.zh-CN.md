@@ -22,6 +22,7 @@
 - 处于实验阶段、支持 Delta 复制的 **LWW-Set**，使用调用方定义的元素编解码器和确定性的 HLC 冲突决议。
 - 因果复制的 **MV-Register**：保留并发的不透明字节写入，而非用墙上时钟裁决。
 - 处于实验阶段、支持 Delta 复制的 **LWW-Map**，使用不透明字节值和确定性的 HLC 冲突决议。
+- 实验性的**附件引用**：用于图片、音频、视频和数据，仅复制受限元数据，媒体对象由经过认证的应用存储管理。
 - 混合逻辑时钟（HLC）标签和可持久化的时钟状态，支持副本重启。
 - 规范化、带校验和的二进制帧；解码有边界且编码确定。
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
@@ -69,6 +70,21 @@ for _, kind := range policy.FrameTypes() {
 零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该
 策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
 RGA 和 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
+
+## 实验性附件引用
+
+`attachment.Register` 将文档中的图片、音频、视频或其他二进制数据表示为一个有边界的
+LWW-Map 不可变引用。每条引用仅包含不透明对象 ID、规范 MIME 类型、声明字节长度和
+SHA-256 摘要；CRDT delta、快照、日志和诊断信息中均不携带媒体原始字节。用户可协作编辑
+的文本仍应使用 `text.RGA`；普通结构化数据则按冲突语义选择 `lww.Map`、OR-Set 或 OR-Tree。
+
+附件引用复用实验性 LWW-Map 帧 TypeID 9/10。每个复制组必须在 `replica.Manifest` 中绑定
+schema ID `github.com/DarkInno/crdt/attachment-reference/v1`、空 codec ID 和
+`attachment.SemanticsVersion`，并在所有边界显式启用 `AllowExperimental`。必须将
+`SnapshotCurrentState()` 与 HLC 状态原子持久化，并在满足 LWW 墓碑生命周期前保留删除元数据。
+
+应用负责授权、对象存储生命周期、内容扫描、限流、下载大小限制，以及下载后、解码或渲染前的
+摘要校验。不得把签名 URL、凭据、个人数据或媒体原始内容放入 `Reference.ObjectID`。
 
 ## 要求
 

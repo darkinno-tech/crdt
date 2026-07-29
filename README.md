@@ -24,6 +24,8 @@ feature-parity, or performance claim.
   codec and deterministic HLC conflict resolution.
 - Experimental delta-replicated **LWW-Map** with opaque byte values and
   deterministic HLC conflict resolution.
+- Experimental **attachment references** for images, audio, video, and data:
+  bounded metadata only, backed by an authenticated application object store.
 - Causally replicated **MV-Register** that preserves concurrent opaque-byte
   writes instead of resolving them by wall clock.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
@@ -90,6 +92,27 @@ MV-Register, and PN-Counter protocols. The policy is neither a global switch
 nor a plugin registry: unknown and reserved frame types remain unsupported.
 Experimental LWW-Set, LWW-Map, RGA, and OR-Tree replicas must persist HLC state with
 snapshots and retain their tombstones.
+
+## Experimental attachment references
+
+`attachment.Register` represents a document's images, audio, video, or other
+binary data as a bounded LWW-Map of immutable references. A reference contains
+an opaque object ID, canonical MIME type, declared byte length, and SHA-256
+digest; it never carries media bytes in a CRDT delta, snapshot, log, or
+diagnostic. Text that users edit remains `text.RGA`; ordinary structured data
+remains `lww.Map`, OR-Set, or OR-Tree according to its conflict semantics.
+
+Attachment references use the experimental LWW-Map frame IDs (9/10). Bind each
+replication group to a `replica.Manifest` with schema ID
+`github.com/DarkInno/crdt/attachment-reference/v1`, an empty codec ID, and
+`attachment.SemanticsVersion`; enable `AllowExperimental` on every boundary.
+Persist `SnapshotCurrentState()` with its HLC state, and retain delete metadata
+until the LWW tombstone lifecycle is complete.
+
+The application owns authorization, object-store lifecycle, content scanning,
+rate limits, download size limits, and digest verification before decoding or
+rendering a fetched object. Do not put signed URLs, credentials, personal data,
+or raw media content in `Reference.ObjectID`.
 
 ## Requirements
 
