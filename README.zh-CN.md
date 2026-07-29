@@ -29,19 +29,20 @@
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
 - 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
-- 实验性 LWW-Set、LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
-  RGA v1 现具备有边界的延迟集成与增量可见索引，但其墓碑生命周期仍为实验性。
+- 实验性、带帧的 LWW-Set、LWW-Map、旧标量 RGA v1 与 OR-Tree 集合；仅能通过每个复制组的
+  显式协议策略启用。新的 Go RGA 复制组使用紧凑的 run-v2 帧；RGA 墓碑生命周期仍要求谨慎
+  留存和精确确认处理。
 
 ## 范围
 
 核心库提供 CRDT 数据类型和线协议基础组件，不负责选择成员协议、认证方案、存储后端或
-重试策略。可选的 [`extensions`](docs/integration/extensions.zh-CN.md) 包提供显式启用的 WebSocket 与
-HTTP/SSE live relay 参考端点，但它不启动 listener，也不提供持久化、重放、重连、TLS、
-反熵或身份/session 管理；这些仍由应用负责。只有当应用提供权威且经过认证的活跃成员视图后，
+重试策略。可选的 [WebSocket Provider 参考实现](docs/integration/websocket-provider.zh-CN.md)
+是有边界、绑定 Manifest 的集成适配器；它不提供持久投递、恢复、TLS、成员管理、授权策略或
+生产运维，这些仍由应用负责。只有当应用提供权威且经过认证的活跃成员视图后，
 `tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该成员视图。
 校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
 
-## 实验性 LWW-Set、LWW-Map、RGA 与 OR-Tree 协议
+## 实验性 LWW-Set、LWW-Map、旧版 RGA v1 与 OR-Tree 协议
 
 LWW-Set（`lww.Set`，TypeID 7/8）通过应用提供的规范化 `lww.ElementCodec`
 编码泛型元素，并保留删除元数据。必须原子持久化
@@ -52,9 +53,15 @@ RGA 文本 v1（`text`，TypeID 11/12）通过有边界的延迟集成队列处�
 不完整快照，并以增量索引替代每次编辑后的全量可见投影重建；在完整墓碑生命周期经过
 验证前仍为实验性协议。必须原子持久化其带 HLC 的快照。
 
+新的 Go RGA 复制组通过 `crdt.DefaultRGAFrameType()` 选择紧凑的 run-v2 帧（TypeID
+19/20）。run-v2 组必须用 `Delta.MarshalRunBinary` 编码 delta、用
+`RGA.MarshalRunBinary` 和 `RGA.SnapshotRunCurrentState` 生成完整状态，并在 Manifest
+中绑定相同 TypeID。run 编码保留标量 RGA position 语义，但一个 Manifest 仍只表示一种
+wire 协议：不能与旧 v1 客户端或帧流混用。
+
 `CompactTombstones` 有意保持保守：只有在经过认证的精确确认纪元已持久化回收后快照
 并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Set、LWW-Map、
-RGA run-v2（TypeID 19/20）和 OR-Tree 仍为实验性能力，必须显式启用：
+旧标量 RGA v1（TypeID 11/12）和 OR-Tree 仍为实验性能力，必须显式启用：
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -70,16 +77,16 @@ for _, kind := range policy.FrameTypes() {
 `NewSessionWithPolicy`）均传入同一份显式 Policy。仅凭 Frame Type ID 不能证明
 线协议语义兼容。
 
-零值策略仅通告稳定的 G-Counter、G-Set、OR-Set、MV-Register 和 PN-Counter 协议。该
-策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
-RGA 和 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
+零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter 与默认 RGA run-v2
+协议。该策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
+旧版 RGA v1 与 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
 
 ## 浏览器与 JavaScript 移动端客户端
 
 仓库在 [`clients/typescript`](clients/typescript/README.md) 中提供了有边界的
-TypeScript v1 frame 外层解码器，以及 RGA v1 Wasm 客户端运行时。TypeScript 层检查
-公共二进制信封；Wasm 层直接复用 Go 的 RGA 合并、乱序、墓碑和 HLC 语义，因此浏览器或
-兼容 WebView 可以本地合并，而不是等待服务端仲裁。
+TypeScript frame 外层解码器，以及 Go/Wasm RGA 客户端 runtime。默认 artifact 使用 run-v2
+TypeID 19/20 和语义版本 2，与 `crdt.DefaultRGAFrameType()` 一致。Wasm 层直接复用 Go 的
+RGA 合并、乱序、墓碑和 HLC 语义，因此浏览器或兼容 WebView 可以本地合并，而不是等待服务端仲裁。
 
 构建和验证命令：
 
@@ -89,10 +96,10 @@ make typescript-test
 make wasm-test
 ```
 
-这仅是实验性的 RGA v1 客户端。收到帧之前必须认证 Manifest 并协商
-`AllowExperimental`；CRC-32C 不能认证对端。客户端快照的 state、clock 与 frontier
-必须原子持久化。没有兼容 WebAssembly 运行时的原生移动端，仍需要经过独立验证的绑定或
-语义实现。单次本地编辑超过 64 KiB 或 16,384 rune 时应先按顺序拆分。
+收到帧之前必须认证精确的 Manifest（包括协议 ID 与语义版本）；CRC-32C 不能认证对端。
+客户端快照的 state、clock 与 frontier 必须原子持久化。没有兼容 WebAssembly runtime 的原生
+移动端，加入 run-v2 组前必须遵循 [RGA run-v2 线协议](docs/protocol/rga-run-v2.zh-CN.md)
+及其向量。单次本地编辑超过 64 KiB 或 16,384 rune 时应先按顺序拆分。
 
 ## 实验性附件引用
 

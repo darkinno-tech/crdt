@@ -23,6 +23,11 @@ the TypeScript loader checks the expected contract before exposing a runtime.
 For an explicitly negotiated legacy v1 group, build `make wasm-v1` and pass
 `RGA_PROTOCOL_V1`; do not place both formats in one document runtime.
 
+The [RGA run-v2 wire specification](../../docs/protocol/rga-run-v2.md) and its
+machine-readable vectors are the contract for a non-Wasm implementation. The
+Wasm wrapper remains the recommended path when the host can run it because it
+uses the same parser and merge engine as Go.
+
 ## Build and verify
 
 From the repository root:

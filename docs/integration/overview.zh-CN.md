@@ -226,7 +226,7 @@ make test-integration
 | 分区修复 | 副本经快照引导或状态/Merkle 交换修复后收敛。 |
 | 输入安全 | 解码前已认证；有边界的解码器拒绝损坏、超限、类型或 codec 不匹配帧。 |
 | 业务语义 | 产品方已接受 add-wins、只增长 G-Set、计数器及 MV-Register 并发值语义。 |
-| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 LWW-Set/LWW-Map/RGA/OR-Tree；其 HLC 状态已持久化且墓碑被保留。 |
+| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 LWW-Set/LWW-Map/旧版 RGA v1/OR-Tree；其 HLC 状态已持久化且墓碑被保留。 |
 | 运维归属 | outbox 重试、监控、备份、成员退役和墓碑策略均有明确负责人。 |
 
 `go test` 通过只证明当前修订中的库和示例；它不证明浏览器、移动端、生产网络、

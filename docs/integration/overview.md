@@ -266,7 +266,7 @@ make test-integration
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
 | Business semantics | Product owners have accepted add-wins, grow-only G-Set and counter limits, and concurrent MV-Register value semantics. |
-| Experimental protocol agreement | LWW-Set/LWW-Map/RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
+| Experimental protocol agreement | LWW-Set/LWW-Map/legacy RGA v1/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
 Passing `go test` proves the library and examples at this revision. It does not

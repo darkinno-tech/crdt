@@ -136,10 +136,11 @@ frame ID、codec ID 和语义版本都必须匹配，之后对端才能发送数
 - `crdt.DefaultRGAFrameType()` 选择紧凑的 run-v2 帧 19/20。
 - 仅选择 frame type 不会改变编码器：delta 应使用 `Delta.MarshalRunBinary`，完整 state
   与恢复应使用 `RGA.MarshalRunBinary` / `RGA.SnapshotRunCurrentState`。
-- 当前浏览器/JavaScript Wasm 客户端只接受旧的标量 RGA v1 帧 11/12，且必须使用
-  `ProtocolPolicy{AllowExperimental: true}`。
-- 因此，run-v2 Go 组不能与该 v1 客户端共用 Manifest。请为客户端显式协商 v1 组，或等待
-  单独协商的 run-v2 客户端实现；绝不能静默地重新解释帧。
+- 默认浏览器/JavaScript Wasm artifact 接受 run-v2 帧 19/20 与语义版本 2；`make wasm-v1`
+  仅保留给经过显式协商的旧版 v1 迁移组。
+- 一个 Manifest 只绑定精确的一对帧。没有 Wasm 的原生客户端必须遵循 [RGA run-v2
+  线协议](protocol/rga-run-v2.zh-CN.md)及其 canonical vector；绝不能把 v1 帧静默地
+  重新解释成 run-v2，反之亦然。
 
 LWW-Set、LWW-Map、旧版 RGA v1 和 OR-Tree 在每个 manifest、change、inbox、checkpoint、
 session 边界都要求同样的显式实验性 opt-in。选择前先阅读
@@ -154,6 +155,7 @@ session 边界都要求同样的显式实验性 opt-in。选择前先阅读
 | 接入 WebSocket endpoint 与 Go client | [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md) |
 | 复制不可变媒体/文件引用 | [附件引用集成](integration/attachment.zh-CN.md) |
 | 在浏览器或 WebView 中本地合并 RGA | [TypeScript/Wasm 客户端指南](../clients/typescript/README.md) |
+| 实现不使用 Wasm 的 RGA 客户端 | [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md) |
 | 设计新集合或评估协议成熟度 | [集合扩展设计](design/crdt-extension.md) |
 | 参与本库开发 | [贡献指南](../CONTRIBUTING.md) |
 

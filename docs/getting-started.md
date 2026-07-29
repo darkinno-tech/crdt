@@ -149,11 +149,12 @@ New Go RGA groups need special attention:
 - The frame type alone does not change an encoder: use `Delta.MarshalRunBinary`
   for deltas and `RGA.MarshalRunBinary` / `RGA.SnapshotRunCurrentState` for
   complete state and recovery.
-- The current browser/JavaScript Wasm client accepts only legacy scalar RGA v1
-  frames 11/12, which require `ProtocolPolicy{AllowExperimental: true}`.
-- A run-v2 Go group and that v1 client therefore cannot share a manifest. Use
-  an explicitly negotiated v1 group for the client or wait for a separately
-  negotiated run-v2 client implementation; never silently reinterpret frames.
+- The default browser/JavaScript Wasm artifact accepts run-v2 frames 19/20 and
+  semantics version 2. `make wasm-v1` remains available only for an explicitly
+  negotiated legacy-v1 migration group.
+- A manifest binds one exact frame pair. Native clients without Wasm must follow
+  the [RGA run-v2 wire protocol](protocol/rga-run-v2.md) and its canonical
+  vectors; never silently reinterpret a v1 frame as run-v2 or vice versa.
 
 LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree require the same explicit
 experimental opt-in at every manifest, change, inbox, checkpoint, and session
@@ -169,6 +170,7 @@ has its browser deployment, persistence, and CSP requirements.
 | Add a WebSocket endpoint and Go client | [WebSocket provider reference](integration/websocket-provider.md) |
 | Replicate immutable media/file references | [Attachment reference integration](integration/attachment.md) |
 | Build browser or WebView local RGA merge | [TypeScript/Wasm client guide](../clients/typescript/README.md) |
+| Implement a non-Wasm RGA client | [RGA run-v2 wire protocol](protocol/rga-run-v2.md) |
 | Design a new collection or assess protocol maturity | [Collection extension design](design/crdt-extension.md) |
 | Work on the library itself | [Contributing guide](../CONTRIBUTING.md) |
 
