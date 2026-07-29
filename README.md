@@ -269,13 +269,16 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
   restore a same-ID OR-Set from bytes alone.
 - For automatic tombstone collection, create a coordinator with a stable
   replication-group ID. Each active member reports its exact
-  `ORSet.TombstoneTags()` under that ID and the current
-  `tombstonegc.Coordinator` membership epoch; pass both values to
-  `AcknowledgeAndCompact` for every received report. Do not derive
+  `ORSet.TombstoneTags()` (or experimental `ORTree.TombstoneTags()`) under that
+  ID and the current `tombstonegc.Coordinator` membership epoch; pass both
+  values to `AcknowledgeAndCompact` (or `AcknowledgeAndCompactTarget` for the
+  tree) for every received report. The tree target additionally refuses to
+  remove a tombstoned node with any known child. Do not derive
   acknowledgements from `Frontier()` when delta delivery can be out of order:
   a maximum tag does not prove that prior tombstones were received. Removing a
   member requires retiring it from replication; a rejoining member must
-  bootstrap from a post-compaction snapshot.
+  bootstrap from a post-compaction snapshot. Persist that checkpoint and bind
+  every new frame to the next membership epoch before accepting compaction.
 - `ORSet.Compact` remains available only for transports that independently
   prove a gap-free causal prefix for every supplied frontier.
 - Persist an MV-Register state snapshot before reusing its replica ID. Its
@@ -284,8 +287,8 @@ For the Chinese versions, see [集成教程](INTEGRATION.zh-CN.md) and
 - Use `ProtocolPolicy.FrameTypes()` as an authenticated connection/setup
   capability advertisement. Send LWW-Map, RGA, or OR-Tree frames only when
   both peers opt in. Persist HLC-backed snapshots atomically. RGA tombstone
-  compaction additionally requires an authenticated exact-acknowledgement epoch
-  and retirement of old deltas.
+  compaction additionally requires an authenticated exact-acknowledgement epoch,
+  durable post-compaction checkpoint, and retirement of old deltas.
 - Keep `ElementCodec.ID`, `Marshal`, and `Unmarshal` deterministic and safe for
   concurrent calls. Encoded values must round-trip canonically.
 - Treat received bytes as untrusted. Use `UnmarshalBinaryWithLimits` and
