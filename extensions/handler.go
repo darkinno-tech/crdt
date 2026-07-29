@@ -25,6 +25,8 @@ const (
 	defaultMaxActorBytes     = 128
 	defaultMaxQueuedMessages = 16
 	defaultMaxQueuedBytes    = 4 << 20
+	defaultMaxBatchChanges   = 16
+	maximumBatchChanges      = 1 << 10
 	defaultHandshakeTimeout  = 10 * time.Second
 	defaultWriteTimeout      = 10 * time.Second
 )
@@ -49,8 +51,13 @@ type Config struct {
 	MaxActorBytes     int
 	MaxQueuedMessages int
 	MaxQueuedBytes    int
-	HandshakeTimeout  time.Duration
-	WriteTimeout      time.Duration
+	// MaxBatchChanges bounds independently identified changes in one
+	// crdt-sync-v2 WebSocket message. It is relevant only when
+	// FeatureWebSocketBatch is enabled and cannot exceed MaxQueuedMessages,
+	// so v1 and SSE peers can be queued atomically or disconnected.
+	MaxBatchChanges  int
+	HandshakeTimeout time.Duration
+	WriteTimeout     time.Duration
 }
 
 // Handler exposes enabled optional endpoints. It is safe to mount into an
@@ -68,6 +75,7 @@ type Handler struct {
 	maxActorBytes     int
 	maxQueuedMessages int
 	maxQueuedBytes    int
+	maxBatchChanges   int
 	handshakeTimeout  time.Duration
 	writeTimeout      time.Duration
 }
@@ -77,6 +85,9 @@ type Handler struct {
 // invoke authentication or start background work.
 func NewHandler(config Config) (*Handler, error) {
 	if config.Features&^knownFeatures != 0 {
+		return nil, ErrInvalidConfig
+	}
+	if config.Features.Enabled(FeatureWebSocketBatch) && !config.Features.Enabled(FeatureWebSocket) {
 		return nil, ErrInvalidConfig
 	}
 	if config.Features == 0 {
@@ -95,6 +106,13 @@ func NewHandler(config Config) (*Handler, error) {
 	)
 	if err != nil {
 		return nil, err
+	}
+	maxBatchChanges := 0
+	if config.Features.Enabled(FeatureWebSocketBatch) {
+		maxBatchChanges, err = normalizeBatchChanges(config.MaxBatchChanges)
+		if err != nil || maxBatchChanges > limits.maxQueuedMessages {
+			return nil, ErrInvalidConfig
+		}
 	}
 	if err := validateOriginPatterns(config.OriginPatterns); err != nil {
 		return nil, err
@@ -124,6 +142,7 @@ func NewHandler(config Config) (*Handler, error) {
 		maxActorBytes:         limits.maxActorBytes,
 		maxQueuedMessages:     limits.maxQueuedMessages,
 		maxQueuedBytes:        limits.maxQueuedBytes,
+		maxBatchChanges:       maxBatchChanges,
 		handshakeTimeout:      limits.handshakeTimeout,
 		writeTimeout:          limits.writeTimeout,
 	}, nil
@@ -202,15 +221,20 @@ func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Reque
 	if !ok {
 		return
 	}
+	subprotocols := []string{Subprotocol}
+	if h.features.Enabled(FeatureWebSocketBatch) {
+		subprotocols = []string{BatchSubprotocol, Subprotocol}
+	}
 	conn, err := websocket.Accept(writer, request, &websocket.AcceptOptions{
-		Subprotocols:    []string{Subprotocol},
+		Subprotocols:    subprotocols,
 		OriginPatterns:  h.origins,
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return
 	}
-	if conn.Subprotocol() != Subprotocol {
+	batchEnabled := conn.Subprotocol() == BatchSubprotocol
+	if (!batchEnabled && conn.Subprotocol() != Subprotocol) || (batchEnabled && !h.features.Enabled(FeatureWebSocketBatch)) {
 		_ = conn.CloseNow()
 		return
 	}
@@ -222,7 +246,7 @@ func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Reque
 		_ = conn.CloseNow()
 		return
 	}
-	peerConnection := newWebSocketSubscriber(conn, h.maxQueuedMessages, h.maxQueuedBytes, h.writeTimeout)
+	peerConnection := newWebSocketSubscriber(conn, h.maxQueuedMessages, h.maxQueuedBytes, h.writeTimeout, batchEnabled)
 	group.add(peerConnection)
 	if err := conn.Write(handshakeContext, websocket.MessageText, response); err != nil {
 		cancelHandshake()
@@ -235,7 +259,7 @@ func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Reque
 	defer group.remove(peerConnection)
 	defer peerConnection.close()
 	go peerConnection.writeLoop()
-	peerConnection.readLoop(peer, group, h.authorize, h.maxMessageBytes, h.maxActorBytes)
+	peerConnection.readLoop(peer, group, h.authorize, h.maxMessageBytes, h.maxActorBytes, h.maxBatchChanges)
 }
 
 func (h *Handler) readServerHandshake(ctx context.Context, conn *websocket.Conn, peer Peer) (*Group, []byte, error) {
@@ -474,7 +498,18 @@ func normalizeLimits(messageBytes, actorBytes, queuedMessages, queuedBytes int, 
 	}, nil
 }
 
+func normalizeBatchChanges(batchChanges int) (int, error) {
+	if batchChanges == 0 {
+		batchChanges = defaultMaxBatchChanges
+	}
+	if batchChanges <= 0 || batchChanges > maximumBatchChanges {
+		return 0, ErrInvalidConfig
+	}
+	return batchChanges, nil
+}
+
 type peerQueue struct {
+	mu          sync.Mutex
 	outbound    chan []byte
 	done        chan struct{}
 	maxBytes    int64
@@ -491,35 +526,41 @@ func newPeerQueue(maxMessages, maxBytes int) peerQueue {
 }
 
 func (q *peerQueue) enqueue(data []byte) bool {
-	if q == nil || len(data) == 0 || int64(len(data)) > q.maxBytes {
+	return q.enqueueAll([][]byte{data})
+}
+
+func (q *peerQueue) enqueueAll(data [][]byte) bool {
+	if q == nil || len(data) == 0 {
 		return false
 	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	select {
 	case <-q.done:
 		return false
 	default:
 	}
-	copyData := append([]byte(nil), data...)
-	size := int64(len(copyData))
-	for {
-		current := q.queuedBytes.Load()
-		if current > q.maxBytes-size {
+	if len(data) > cap(q.outbound)-len(q.outbound) {
+		return false
+	}
+	copyData := make([][]byte, 0, len(data))
+	var size int64
+	for _, item := range data {
+		if len(item) == 0 || int64(len(item)) > q.maxBytes-size {
 			return false
 		}
-		if q.queuedBytes.CompareAndSwap(current, current+size) {
-			break
-		}
+		copied := append([]byte(nil), item...)
+		copyData = append(copyData, copied)
+		size += int64(len(copied))
 	}
-	select {
-	case q.outbound <- copyData:
-		return true
-	case <-q.done:
-		q.queuedBytes.Add(-size)
-		return false
-	default:
-		q.queuedBytes.Add(-size)
+	if q.queuedBytes.Load() > q.maxBytes-size {
 		return false
 	}
+	q.queuedBytes.Add(size)
+	for _, item := range copyData {
+		q.outbound <- item
+	}
+	return true
 }
 
 func (q *peerQueue) dequeue() ([]byte, bool) {
@@ -557,7 +598,11 @@ func (q *peerQueue) dequeueContext(ctx context.Context) ([]byte, bool) {
 
 func (q *peerQueue) close() {
 	if q != nil {
-		q.closeOnce.Do(func() { close(q.done) })
+		q.closeOnce.Do(func() {
+			q.mu.Lock()
+			defer q.mu.Unlock()
+			close(q.done)
+		})
 	}
 }
 
@@ -567,10 +612,11 @@ type webSocketSubscriber struct {
 	queue        peerQueue
 	conn         *websocket.Conn
 	writeTimeout time.Duration
+	batchEnabled bool
 	closeOnce    sync.Once
 }
 
-func newWebSocketSubscriber(conn *websocket.Conn, maxMessages, maxBytes int, writeTimeout time.Duration) *webSocketSubscriber {
+func newWebSocketSubscriber(conn *websocket.Conn, maxMessages, maxBytes int, writeTimeout time.Duration, batchEnabled bool) *webSocketSubscriber {
 	connectionContext, cancel := context.WithCancel(context.Background())
 	return &webSocketSubscriber{
 		context:      connectionContext,
@@ -578,6 +624,7 @@ func newWebSocketSubscriber(conn *websocket.Conn, maxMessages, maxBytes int, wri
 		queue:        newPeerQueue(maxMessages, maxBytes),
 		conn:         conn,
 		writeTimeout: writeTimeout,
+		batchEnabled: batchEnabled,
 	}
 }
 
@@ -585,11 +632,25 @@ func (c *webSocketSubscriber) enqueue(data []byte) bool {
 	return c != nil && c.queue.enqueue(data)
 }
 
-func (c *webSocketSubscriber) readLoop(peer Peer, group *Group, authorize Authorize, maxMessageBytes, maxActorBytes int) {
+func (c *webSocketSubscriber) enqueueAll(data [][]byte) bool {
+	return c != nil && c.queue.enqueueAll(data)
+}
+
+func (c *webSocketSubscriber) batchesEnabled() bool {
+	return c != nil && c.batchEnabled
+}
+
+func (c *webSocketSubscriber) readLoop(peer Peer, group *Group, authorize Authorize, maxMessageBytes, maxActorBytes, maxBatchChanges int) {
 	for {
 		messageType, data, err := c.conn.Read(c.context)
 		if err != nil || messageType != websocket.MessageBinary {
 			return
+		}
+		if c.batchEnabled && isChangeBatch(data) {
+			if err := group.receiveBatch(peer, authorize, data, maxMessageBytes, maxActorBytes, maxBatchChanges); err != nil {
+				return
+			}
+			continue
 		}
 		if _, err := group.receive(peer, authorize, data, maxMessageBytes, maxActorBytes); err != nil {
 			return
@@ -633,6 +694,10 @@ func newSSESubscriber(maxMessages, maxBytes int) *sseSubscriber {
 
 func (s *sseSubscriber) enqueue(data []byte) bool {
 	return s != nil && s.queue.enqueue(data)
+}
+
+func (s *sseSubscriber) enqueueAll(data [][]byte) bool {
+	return s != nil && s.queue.enqueueAll(data)
 }
 
 func (s *sseSubscriber) dequeue() ([]byte, bool) {

@@ -110,9 +110,11 @@ func TestNormalizeLimitsAndClientLimits(t *testing.T) {
 
 func FuzzWireDecoders(f *testing.F) {
 	f.Add([]byte{transportVersion, 1, 'a', 1, 1, 0})
+	f.Add([]byte{batchTransportVersion, 1, 6, transportVersion, 1, 'a', 1, 1, 0})
 	f.Add([]byte(`{"version":1,"manifest":{}}`))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _, _ = unmarshalChange(data, 1<<20, 128)
+		_, _ = unmarshalChangeBatch(data, 1<<20, 128, defaultMaxBatchChanges)
 		_, _ = unmarshalHello(data)
 		_, _, _ = readSSEEvent(bufio.NewReader(bytes.NewReader(data)), 1<<20)
 	})

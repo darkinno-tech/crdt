@@ -131,6 +131,23 @@ func TestWebSocketClientPublishRejectsInvalidLocalChanges(t *testing.T) {
 	}
 }
 
+func TestWebSocketClientIgnoresBatchLimitWhenBatchesAreDisabled(t *testing.T) {
+	server, _, manifest, _ := newCounterHandler(t, FeatureWebSocket, nil)
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	client, err := DialWebSocket(context.Background(), endpoint, manifest, ClientConfig{
+		Header:          bearerHeader("writer"),
+		MaxBatchChanges: maximumBatchChanges + 1,
+		OnChange:        func(replica.Change) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("v1 dial rejected an irrelevant batch limit: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+	if err := client.PublishBatch(context.Background(), nil); !errors.Is(err, ErrBatchUnsupported) {
+		t.Fatalf("v1 PublishBatch error = %v, want %v", err, ErrBatchUnsupported)
+	}
+}
+
 func TestHTTPClientReadLoopRejectsLiveProtocolViolations(t *testing.T) {
 	manifest := testManifest(t, "scripted-http")
 	hello, err := marshalHello(manifest)
