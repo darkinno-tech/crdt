@@ -90,7 +90,8 @@ network-replicable library primitive:
 - Images, audio, video, and files are replicated as `attachment.Reference`
   metadata only: opaque object ID, canonical MIME type, declared size, and
   SHA-256 digest. The application owns object authorization, malware/content
-  scanning, delivery quotas, and digest verification before decode/render.
+  scanning, and delivery quotas; it calls `Reference.Verify` to stream-check
+  exact size and digest before decode/render.
   `attachment.Register` uses the experimental LWW-Map TypeIDs 9/10 under a
   distinct manifest schema and semantics version; raw or signed media URLs
   never belong in CRDT values.

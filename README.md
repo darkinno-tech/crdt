@@ -110,9 +110,10 @@ Persist `SnapshotCurrentState()` with its HLC state, and retain delete metadata
 until the LWW tombstone lifecycle is complete.
 
 The application owns authorization, object-store lifecycle, content scanning,
-rate limits, download size limits, and digest verification before decoding or
-rendering a fetched object. Do not put signed URLs, credentials, personal data,
-or raw media content in `Reference.ObjectID`.
+rate limits, and download policy. After a fetch, call `Reference.Verify` before
+decoding or rendering: it streams the object without buffering it and rejects a
+short, oversized, or digest-mismatched response. Do not put signed URLs,
+credentials, personal data, or raw media content in `Reference.ObjectID`.
 
 ## Requirements
 
