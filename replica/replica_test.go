@@ -8,6 +8,8 @@ import (
 	"github.com/DarkInno/crdt/clock"
 	"github.com/DarkInno/crdt/counter"
 	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/text"
+	"github.com/DarkInno/crdt/tree"
 )
 
 func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
@@ -593,6 +595,158 @@ func TestInboxRejectsChangesFromAnotherEpoch(t *testing.T) {
 	}
 }
 
+func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
+	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	protocol := Protocol{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1}
+	oldManifest := mustExperimentalManifest(t, "text", "example.com/text/v1", 1, protocol, policy)
+	newManifest := mustExperimentalManifest(t, "text", "example.com/text/v1", 2, protocol, policy)
+
+	oldAnchor, err := text.New("old-anchor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchorDelta, err := oldAnchor.Insert(0, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := oldAnchor.Positions()[0]
+	tombstoneDelta, err := oldAnchor.Delete(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := oldAnchor.CompactTombstones([]text.Position{anchor}); err != nil || removed != 1 {
+		t.Fatalf("CompactTombstones = %d, %v", removed, err)
+	}
+
+	oldParent, err := text.New("old-parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oldParent.Insert(0, "p"); err != nil {
+		t.Fatal(err)
+	}
+	childDelta, err := oldParent.Insert(1, "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rebased, err := text.New("rebased")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rebased.Insert(0, "fresh"); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := mustRGARebaseCheckpoint(t, newManifest, rebased, policy)
+	recovered := mustRestoreRGA(t, checkpoint)
+	inbox := mustRGAInbox(t, newManifest, checkpoint.Frontier(), recovered, policy)
+
+	for _, test := range []struct {
+		name   string
+		change Change
+	}{
+		{"compacted old anchor", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 1}, mustMarshalRGADelta(t, anchorDelta), policy)},
+		{"old anchor tombstone", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 2}, mustMarshalRGADelta(t, tombstoneDelta), policy)},
+		{"old parent reference", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-parent", Counter: 2}, mustMarshalRGADelta(t, childDelta), policy)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := inbox.Receive(test.change); !errors.Is(err, ErrManifestMismatch) {
+				t.Fatalf("Receive(old epoch) = %v, want %v", err, ErrManifestMismatch)
+			}
+		})
+	}
+	if got := recovered.String(); got != "fresh" {
+		t.Fatalf("old epoch revived RGA state = %q", got)
+	}
+	if pending := recovered.PendingCount(); pending != 0 {
+		t.Fatalf("old parent entered RGA pending queue: %d", pending)
+	}
+	if pending, _ := inbox.Pending(); pending != 0 {
+		t.Fatalf("old changes entered Inbox queue: %d", pending)
+	}
+
+	future, err := rebased.Insert(5, "!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := mustExperimentalChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalRGADelta(t, future), policy)
+	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
+		t.Fatalf("Receive(new epoch) = %#v, %v", delivery, err)
+	}
+	if got := recovered.String(); got != "fresh!" {
+		t.Fatalf("new epoch RGA text = %q", got)
+	}
+}
+
+func TestCheckpointRebaseRejectsOldEpochORTreeAnchorsAndParents(t *testing.T) {
+	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	protocol := Protocol{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, SemanticsVersion: 1}
+	oldManifest := mustExperimentalManifest(t, "tree", "example.com/tree/v1", 1, protocol, policy)
+	newManifest := mustExperimentalManifest(t, "tree", "example.com/tree/v1", 2, protocol, policy)
+
+	old, err := tree.New("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRoot, oldRootDelta, err := old.Add(tree.NodeID{}, []byte("old-root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, oldChildDelta, err := old.Add(oldRoot, []byte("old-child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRemoveDelta, err := old.Remove(oldRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rebased, err := tree.New("rebased")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRoot, _, err := rebased.Add(tree.NodeID{}, []byte("fresh-root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := mustORTreeRebaseCheckpoint(t, newManifest, rebased, policy)
+	recovered := mustRestoreORTree(t, checkpoint)
+	inbox := mustORTreeInbox(t, newManifest, checkpoint.Frontier(), recovered, policy)
+
+	for _, test := range []struct {
+		name   string
+		change Change
+	}{
+		{"old anchor", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 1}, mustMarshalORTreeDelta(t, oldRootDelta), policy)},
+		{"old parent reference", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 2}, mustMarshalORTreeDelta(t, oldChildDelta), policy)},
+		{"old anchor tombstone", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 3}, mustMarshalORTreeDelta(t, oldRemoveDelta), policy)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := inbox.Receive(test.change); !errors.Is(err, ErrManifestMismatch) {
+				t.Fatalf("Receive(old epoch) = %v, want %v", err, ErrManifestMismatch)
+			}
+		})
+	}
+	if nodes := recovered.Nodes(); len(nodes) != 1 || string(nodes[0].Value) != "fresh-root" {
+		t.Fatalf("old epoch revived OR-Tree nodes = %#v", nodes)
+	}
+	if pending, _ := inbox.Pending(); pending != 0 {
+		t.Fatalf("old changes entered Inbox queue: %d", pending)
+	}
+
+	_, future, err := rebased.Add(newRoot, []byte("fresh-child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := mustExperimentalChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalORTreeDelta(t, future), policy)
+	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
+		t.Fatalf("Receive(new epoch) = %#v, %v", delivery, err)
+	}
+	if nodes := recovered.Nodes(); len(nodes) != 2 || string(nodes[1].Value) != "fresh-child" {
+		t.Fatalf("new epoch OR-Tree nodes = %#v", nodes)
+	}
+}
+
 func TestCheckpointRecoveryIgnoresPreCheckpointDeltasAndAcceptsFutureDelta(t *testing.T) {
 	manifest, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
 		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1,
@@ -754,6 +908,150 @@ func testCheckpoint(t *testing.T) (Manifest, Checkpoint) {
 		t.Fatalf("NewCheckpoint: %v", err)
 	}
 	return manifest, checkpoint
+}
+
+func mustExperimentalManifest(t testing.TB, groupID, schemaID string, epoch uint64, protocol Protocol, policy crdt.ProtocolPolicy) Manifest {
+	t.Helper()
+	manifest, err := NewManifest(groupID, schemaID, epoch, protocol, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest
+}
+
+func mustExperimentalChange(t testing.TB, manifest Manifest, dot Dot, delta []byte, policy crdt.ProtocolPolicy) Change {
+	t.Helper()
+	change, err := NewChangeWithPolicy(manifest, dot, delta, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return change
+}
+
+func mustMarshalRGADelta(t testing.TB, delta text.Delta) []byte {
+	t.Helper()
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func mustRGARebaseCheckpoint(t testing.TB, manifest Manifest, source *text.RGA, policy crdt.ProtocolPolicy) Checkpoint {
+	t.Helper()
+	state, clockState, err := source.MarshalBinaryWithClockState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontier, err := NewFrontier(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := NewCheckpointWithPolicy(manifest, state, frontier, clockState, func(data []byte) error {
+		candidate, err := text.New("validator")
+		if err != nil {
+			return err
+		}
+		return candidate.UnmarshalBinary(data)
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return checkpoint
+}
+
+func mustRestoreRGA(t testing.TB, checkpoint Checkpoint) *text.RGA {
+	t.Helper()
+	clockState, ok := checkpoint.ClockState()
+	if !ok {
+		t.Fatal("RGA checkpoint omitted HLC state")
+	}
+	restored, err := text.NewFromClock(clockState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.UnmarshalBinary(checkpoint.State()); err != nil {
+		t.Fatal(err)
+	}
+	return restored
+}
+
+func mustRGAInbox(t testing.TB, manifest Manifest, frontier Frontier, target *text.RGA, policy crdt.ProtocolPolicy) *Inbox {
+	t.Helper()
+	inbox, err := NewInboxWithPolicy(manifest, frontier, 8, frame.DefaultLimits().MaxFrameBytes, func(encoded []byte) error {
+		delta, err := text.UnmarshalRGADelta(encoded)
+		if err != nil {
+			return err
+		}
+		return target.ApplyDelta(delta)
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inbox
+}
+
+func mustMarshalORTreeDelta(t testing.TB, delta tree.Delta) []byte {
+	t.Helper()
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func mustORTreeRebaseCheckpoint(t testing.TB, manifest Manifest, source *tree.ORTree, policy crdt.ProtocolPolicy) Checkpoint {
+	t.Helper()
+	state, clockState, err := source.MarshalBinaryWithClockState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontier, err := NewFrontier(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := NewCheckpointWithPolicy(manifest, state, frontier, clockState, func(data []byte) error {
+		candidate, err := tree.New("validator")
+		if err != nil {
+			return err
+		}
+		return candidate.UnmarshalBinary(data)
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return checkpoint
+}
+
+func mustRestoreORTree(t testing.TB, checkpoint Checkpoint) *tree.ORTree {
+	t.Helper()
+	clockState, ok := checkpoint.ClockState()
+	if !ok {
+		t.Fatal("OR-Tree checkpoint omitted HLC state")
+	}
+	restored, err := tree.NewFromClock(clockState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.UnmarshalBinary(checkpoint.State()); err != nil {
+		t.Fatal(err)
+	}
+	return restored
+}
+
+func mustORTreeInbox(t testing.TB, manifest Manifest, frontier Frontier, target *tree.ORTree, policy crdt.ProtocolPolicy) *Inbox {
+	t.Helper()
+	inbox, err := NewInboxWithPolicy(manifest, frontier, 8, frame.DefaultLimits().MaxFrameBytes, func(encoded []byte) error {
+		delta, err := tree.UnmarshalDelta(encoded)
+		if err != nil {
+			return err
+		}
+		return target.ApplyDelta(delta)
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inbox
 }
 
 func mustFrame(t testing.TB, typeID uint64, codecID string) []byte {
