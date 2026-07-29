@@ -1,0 +1,27 @@
+name: Release Train
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  beta-only:
+    name: beta-only
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the repository beta branch
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${HEAD_REPOSITORY}" != "${REPOSITORY}" || "${HEAD_REF}" != "beta" ]]; then
+            echo "main accepts release PRs from ${REPOSITORY}:beta only; received ${HEAD_REPOSITORY}:${HEAD_REF}" >&2
+            exit 1
+          fi
