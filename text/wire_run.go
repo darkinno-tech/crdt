@@ -467,7 +467,7 @@ func makeRunBlocksFromSortedItems(items []runNode) [][]runNode {
 
 // UnmarshalRGARunDelta decodes a bounded run-v2 delta.
 func UnmarshalRGARunDelta(data []byte) (Delta, error) {
-	return unmarshalRGARunDeltaWithLimits(data, frame.DefaultLimits())
+	return UnmarshalRGARunDeltaWithLimits(data, frame.DefaultLimits())
 }
 
 // UnmarshalRGARunDeltaWithLimits decodes a bounded run-v2 delta while

@@ -100,8 +100,33 @@ rm -rf "$scenario_dir"
 ```
 
 The probe requires `X-CRDT-Probe-Token`, binds to loopback by default, and
-limits request bodies to 1 MiB. It has no TLS, durable state, membership,
-replay policy, or authorization model. Do not expose it to the public Internet.
+limits counter/OR-Set request bodies to 1 MiB. It has no TLS, durable state,
+membership, replay policy, or authorization model. Do not expose it to the
+public Internet.
+
+### Optional experimental RGA diagnostic
+
+`/rga` is disabled by default. It is only for a controlled probe of one
+explicit RGA frame shape; it does not negotiate a manifest or a production
+`ProtocolPolicy`. Configure every receiver and sender with the same
+`-rga-protocol=v1` or `-rga-protocol=run-v2`. The route allows at most 16 MiB
+and 200,000 generated runes per delta, sends an empty `204` acknowledgement,
+and reports only final convergence data in `/state`.
+
+```sh
+# Add the same protocol flag to both receiver processes above, then:
+go run ./cmd/crdt-sync-probe -mode send \
+  -target http://127.0.0.1:49511,http://127.0.0.1:49512 \
+  -replica text-gate -token-file "$scenario_dir/probe.token" \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
+```
+
+The two final `text` objects must agree on `protocol`, `runes`, `sha256`, and
+zero `pending`. A v1 receiver rejects a run-v2 frame (and vice versa) before
+mutating text. This proves only the exercised in-memory duplicate/reorder path;
+it does not prove HLC persistence, recovery, membership, or tombstone-GC
+safety.
 
 ## 3. Production integration contract
 
@@ -170,7 +195,8 @@ experimental protocols. They are suitable only after the capability check above 
 the policy is local to a replication group and is not a dynamic plugin
 mechanism. Use each concrete decoder after the frame type is accepted—for
 example, `lww.UnmarshalSetDeltaWithLimits` for LWW-Set deltas,
-`text.UnmarshalRGADeltaWithLimits` for RGA deltas and
+`text.UnmarshalRGADeltaWithLimits` for explicitly agreed v1 RGA deltas,
+`text.UnmarshalRGARunDeltaWithLimits` for explicitly agreed run-v2 RGA deltas, and
 `tree.UnmarshalDeltaWithLimits` for OR-Tree deltas. Do not dispatch an
 untrusted frame to a type merely because it has a valid checksum.
 

@@ -397,7 +397,8 @@ go run ./cmd/crdt-analyze -file ./state.frame
 `crdt-sync-probe` 是用于跨主机验证重复增量投递的短生命周期 HTTP 测试工具，
 不是生产复制服务。其默认监听地址仅为回环地址；每个端点都要求非空令牌。优先
 使用 `-token-file`（权限 `0600`）而非 `-token`，且仅在受控测试窗口内绑定
-公网地址。
+公网地址。非回环监听还必须显式指定 `-allow-non-loopback`，且只能用于受防火墙
+限制的短期测试窗口。
 
 ```sh
 # 在每个接收端执行。
@@ -408,6 +409,28 @@ go run ./cmd/crdt-sync-probe -mode send \
   -target http://receiver-a:49511,http://receiver-b:49511 \
   -replica sender -token-file ./probe.token -duplicates 3
 ```
+
+探针也可以验证实验性 RGA delta 投递，但它不执行 Manifest 或能力协商。只有接收端和
+发送端都显式选择**同一个** `-rga-protocol`（`v1` 或 `run-v2`）时才会开放 `/rga`。
+变更请求返回带 `X-CRDT-Apply-Micros` 的空 `204`；应使用最终的认证 `/state` 响应比较
+`text.protocol`、可见 rune 数、SHA-256 和未决依赖。
+
+```sh
+# 两个接收端必须选择同一个实验性 wire shape。
+go run ./cmd/crdt-sync-probe -mode serve -replica receiver \
+  -rga-protocol run-v2 -token-file ./probe.token
+
+go run ./cmd/crdt-sync-probe -mode send \
+  -target http://receiver-a:49511,http://receiver-b:49511 \
+  -replica text-sender -token-file ./probe.token \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
+```
+
+RGA 探针对每个生成 delta 限制为 16 MiB 和 200,000 个 rune；这是诊断上限，不是生产
+容量建议。它没有持久化 HLC 状态、outbox、重放、恢复或墓碑 GC 权威。`run-v2` 能压缩
+同副本的线性 frame，但规范化解码会带来独立的 CPU 与分配成本；选择前必须在目标机器上
+测量两种 wire shape。
 
 使用 `make test-unit` 分别运行各包；使用 `make test-integration` 运行三副本、
 恢复、批处理、编码和反熵流程。

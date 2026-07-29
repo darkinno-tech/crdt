@@ -91,7 +91,9 @@ directory readable only by the deployment account.
 
 ## 4. Run the two receivers
 
-The default listener is `127.0.0.1:49511`. Bind `0.0.0.0:49511` only for a
+The default listener is `127.0.0.1:49511`, and the command rejects a
+non-loopback address unless `-allow-non-loopback` is present. Prefer private
+networking or an authenticated tunnel; bind `0.0.0.0:49511` only for a
 temporary, firewall-restricted cross-host test.
 
 ```sh
@@ -99,6 +101,7 @@ cd /opt/crdt-e2e
 nohup ./crdt-sync-probe \
   -mode serve \
   -listen 0.0.0.0:49511 \
+  -allow-non-loopback \
   -replica host-a \
   -token-file ./probe.token \
   > server.log 2>&1 &
@@ -130,11 +133,47 @@ Repeat from host B and the local machine with distinct IDs and elements. The
 returned JSON from both targets must have identical counter component maps and
 the same sorted element set.
 
+### Optional experimental RGA path
+
+The probe does **not** negotiate a `replica.Manifest` or `ProtocolPolicy`.
+Treat RGA as an explicit controlled test only: start every receiver and sender
+with the same `-rga-protocol` (`v1` or `run-v2`). Without that flag `/rga` is
+disabled. Do not mix the two wire shapes; a mismatched receiver rejects the
+frame before its RGA changes.
+
+```sh
+# Add the same flag on both host receivers in step 4.
+./crdt-sync-probe -mode serve -listen 0.0.0.0:49511 -allow-non-loopback \
+  -replica host-a -rga-protocol run-v2 -token-file ./probe.token
+
+# From a controlled sender, exercise duplicate delivery and final convergence.
+./crdt-sync-probe -mode send \
+  -target http://<host-a>:49511,http://<host-b>:49511 \
+  -replica rga-sender-a -token-file ./probe.token \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3 -timeout 30s
+```
+
+Each accepted mutation returns an empty `204 No Content` with
+`X-CRDT-Apply-Micros`; the sender fetches `/state` once afterward. Both target
+reports must agree on `text.protocol`, `text.runes`, `text.sha256`, and zero
+`text.pending`. RGA input is bounded to 16 MiB and 200,000 generated runes per
+delta. These diagnostics do not prove durable HLC recovery, tombstone-GC
+safety, or a production latency SLO. `run-v2` may reduce bytes for one
+same-replica linear edit but has an independent canonical-decoding CPU and
+allocation cost; compare the target workload with:
+
+```sh
+go test -run='^$' -bench='BenchmarkRGADeltaWireProtocols$' -benchmem ./text
+```
+
 Validate negative paths on each receiver:
 
 - Request `GET /state` without the token: expect HTTP `401`.
 - Send a non-frame body to `POST /counter` with a valid token: expect `400`.
 - Send a body larger than 1 MiB with a valid token: expect `400`.
+- Send a `run-v2` RGA frame to a receiver explicitly configured for `v1`:
+  expect `400` and unchanged text state.
 - Confirm valid state is unchanged after each rejected request.
 
 For a local capacity gate before a cross-host exercise, `make test-extreme`
@@ -185,4 +224,5 @@ approved change process.
 | Delivery idempotency | Repeated delta leaves one counter component and one set membership |
 | Multi-target consistency | Both receivers return equal state for the same broadcast delta |
 | Input protection | Unauthorized = 401; malformed and oversized bodies = 400 |
+| RGA agreement | Both reports have identical protocol, digest, runes, and zero pending; mismatched protocol = 400 |
 | Exposure cleanup | Recorded PIDs stopped; no probe listener remains |

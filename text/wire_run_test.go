@@ -177,6 +177,41 @@ func TestRGARunFramesRoundTripAndCompactLinearInsert(t *testing.T) {
 	}
 }
 
+func TestRGARunDeltaWithLimits(t *testing.T) {
+	value, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := value.Insert(0, "bounded run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := frame.DefaultLimits()
+	encoded, err := delta.MarshalRunBinaryWithLimits(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalRGARunDeltaWithLimits(encoded, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(decoded); err != nil || target.String() != "bounded run" {
+		t.Fatalf("bounded run delta apply = %q, %v", target.String(), err)
+	}
+	limited := limits
+	limited.MaxElements = 1
+	if _, err := delta.MarshalRunBinaryWithLimits(limited); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded run delta marshal limit = %v", err)
+	}
+	if _, err := UnmarshalRGARunDeltaWithLimits(encoded, limited); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("bounded run delta decode limit = %v", err)
+	}
+}
+
 func TestRGARunFramesRejectWrongTypeAndNonCanonicalPayload(t *testing.T) {
 	value, err := New("source")
 	if err != nil {

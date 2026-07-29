@@ -471,9 +471,10 @@ go run ./cmd/crdt-analyze -file ./state.frame
 
 `crdt-sync-probe` is a short-lived HTTP test utility for exercising duplicate
 delta delivery across hosts. It is not a production replication service. Its
-default listener is loopback-only; a non-empty token is required for every
-endpoint. Prefer `-token-file` (mode `0600`) over `-token`, and bind a public
-address only for a controlled test window.
+default listener is enforced as loopback-only; a non-empty token is required
+for every endpoint. Prefer `-token-file` (mode `0600`) over `-token`. A
+non-loopback bind requires the deliberate `-allow-non-loopback` flag and is
+only appropriate for a firewall-restricted test window.
 
 ```sh
 # On each receiver.
@@ -484,6 +485,32 @@ go run ./cmd/crdt-sync-probe -mode send \
   -target http://receiver-a:49511,http://receiver-b:49511 \
   -replica sender -token-file ./probe.token -duplicates 3
 ```
+
+The probe can also exercise experimental RGA delta delivery, but it does not
+perform manifest or capability negotiation. `/rga` is disabled unless each
+receiver and sender explicitly select the **same** `-rga-protocol` (`v1` or
+`run-v2`). A mutation response is an empty `204` with
+`X-CRDT-Apply-Micros`; use the final authenticated `/state` response to compare
+`text.protocol`, visible rune count, SHA-256, and pending dependencies.
+
+```sh
+# Both receivers use the same explicitly selected experimental wire shape.
+go run ./cmd/crdt-sync-probe -mode serve -replica receiver \
+  -rga-protocol run-v2 -token-file ./probe.token
+
+go run ./cmd/crdt-sync-probe -mode send \
+  -target http://receiver-a:49511,http://receiver-b:49511 \
+  -replica text-sender -token-file ./probe.token \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
+```
+
+RGA probe input is bounded to 16 MiB and 200,000 runes per generated delta;
+those are diagnostic limits, not a production capacity recommendation. It has
+no durable HLC state, outbox, replay, recovery, or tombstone-GC authority.
+`run-v2` can compact linear same-replica frames, but canonical decoding is a
+separate CPU and allocation trade-off; benchmark both wire shapes on the target
+machine before selecting one.
 
 Use `make test-unit` to run packages independently and `make test-integration`
 for the three-replica, recovery, batching, encoding, and anti-entropy flow.

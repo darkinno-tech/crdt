@@ -11,21 +11,37 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/DarkInno/crdt/counter"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/set"
+	"github.com/DarkInno/crdt/text"
 )
 
 const (
-	defaultListen = "127.0.0.1:49511"
-	maxBodyBytes  = 1 << 20
+	defaultListen          = "127.0.0.1:49511"
+	maxResponseBytes       = 1 << 20
+	maxSmallRequestBytes   = 1 << 20
+	maxRGARequestBytes     = 16 << 20
+	maxRGARunesPerDelivery = 200_000
+	applyDurationHeader    = "X-CRDT-Apply-Micros"
+)
+
+type rgaProtocol string
+
+const (
+	rgaProtocolDisabled rgaProtocol = "disabled"
+	rgaProtocolV1       rgaProtocol = "v1"
+	rgaProtocolRunV2    rgaProtocol = "run-v2"
 )
 
 type stringCodec struct{}
@@ -35,14 +51,24 @@ func (stringCodec) Marshal(value string) ([]byte, error)  { return []byte(value)
 func (stringCodec) Unmarshal(data []byte) (string, error) { return string(data), nil }
 
 type probe struct {
-	counter *counter.GCounter
-	set     *set.ORSet[string]
-	token   [sha256.Size]byte
+	counter     *counter.GCounter
+	set         *set.ORSet[string]
+	rga         *text.RGA
+	rgaProtocol rgaProtocol
+	token       [sha256.Size]byte
+}
+
+type textState struct {
+	Protocol string `json:"protocol"`
+	Runes    int    `json:"runes"`
+	SHA256   string `json:"sha256"`
+	Pending  int    `json:"pending"`
 }
 
 type probeState struct {
 	Counts   map[string]uint64 `json:"counts"`
 	Elements []string          `json:"elements"`
+	Text     textState         `json:"text"`
 }
 
 func main() {
@@ -61,8 +87,12 @@ func run(args []string) error {
 	token := flags.String("token", "", "shared bearer token; prefer -token-file to avoid process argument exposure")
 	tokenFile := flags.String("token-file", "", "path to a file containing the shared bearer token")
 	replica := flags.String("replica", "", "non-empty logical replica ID")
+	allowNonLoopback := flags.Bool("allow-non-loopback", false, "allow a non-loopback listener for a controlled test only")
 	increment := flags.Uint64("counter-increment", 1, "counter increment to deliver; zero skips counter delivery")
 	element := flags.String("element", "probe", "OR-Set element to deliver; empty skips set delivery")
+	rgaRunes := flags.Int("rga-runes", 0, "number of one-rune RGA characters to deliver; zero skips RGA delivery")
+	rgaRune := flags.String("rga-rune", "x", "one UTF-8 rune repeated for each RGA character")
+	rgaProtocolName := flags.String("rga-protocol", string(rgaProtocolDisabled), "RGA frame protocol: disabled, v1, or run-v2")
 	duplicates := flags.Int("duplicates", 3, "deliver each generated delta this many times")
 	timeout := flags.Duration("timeout", 15*time.Second, "network timeout")
 	if err := flags.Parse(args); err != nil {
@@ -70,21 +100,30 @@ func run(args []string) error {
 	}
 
 	authToken, err := loadToken(*token, *tokenFile)
-	if err != nil || *replica == "" || *duplicates <= 0 || *timeout <= 0 {
+	protocol, protocolErr := parseRGAProtocol(*rgaProtocolName)
+	if err != nil {
+		return err
+	}
+	if protocolErr != nil {
+		return protocolErr
+	}
+	if *replica == "" || *rgaRunes < 0 || *duplicates <= 0 || *timeout <= 0 {
 		return errors.New("a non-empty -token or -token-file, -replica, positive -duplicates, and positive -timeout are required")
 	}
-
 	switch *mode {
 	case "serve":
-		if err := serve(*listen, *replica, authToken, *timeout); err != nil {
+		if err := serve(*listen, *replica, authToken, protocol, *timeout, *allowNonLoopback); err != nil {
 			return fmt.Errorf("serve probe: %w", err)
 		}
 		return nil
 	case "send":
-		if *target == "" || (*increment == 0 && *element == "") {
+		if *target == "" || (*increment == 0 && *element == "" && *rgaRunes == 0) {
 			return errors.New("-target and at least one non-empty mutation are required for send")
 		}
-		if err := send(*target, *replica, authToken, *increment, *element, *duplicates, *timeout); err != nil {
+		if *rgaRunes > 0 && protocol == rgaProtocolDisabled {
+			return errors.New("-rga-runes requires explicit -rga-protocol=v1 or -rga-protocol=run-v2")
+		}
+		if err := send(*target, *replica, authToken, protocol, *increment, *element, *rgaRunes, *rgaRune, *duplicates, *timeout); err != nil {
 			return fmt.Errorf("send probe: %w", err)
 		}
 		return nil
@@ -126,7 +165,19 @@ func loadToken(value, path string) (result string, err error) {
 	return result, nil
 }
 
-func newProbe(replicaID, token string) (*probe, error) {
+func parseRGAProtocol(value string) (rgaProtocol, error) {
+	switch rgaProtocol(value) {
+	case rgaProtocolDisabled, rgaProtocolV1, rgaProtocolRunV2:
+		return rgaProtocol(value), nil
+	default:
+		return "", errors.New("-rga-protocol must be disabled, v1, or run-v2")
+	}
+}
+
+func newProbe(replicaID, token string, protocol rgaProtocol) (*probe, error) {
+	if _, err := parseRGAProtocol(string(protocol)); err != nil {
+		return nil, err
+	}
 	counterValue, err := counter.NewGCounter(replicaID)
 	if err != nil {
 		return nil, err
@@ -135,11 +186,24 @@ func newProbe(replicaID, token string) (*probe, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &probe{counter: counterValue, set: setValue, token: sha256.Sum256([]byte(token))}, nil
+	rgaValue, err := text.NewWithOptions(replicaID, rgaOptions())
+	if err != nil {
+		return nil, err
+	}
+	return &probe{
+		counter:     counterValue,
+		set:         setValue,
+		rga:         rgaValue,
+		rgaProtocol: protocol,
+		token:       sha256.Sum256([]byte(token)),
+	}, nil
 }
 
-func serve(listen, replicaID, token string, timeout time.Duration) error {
-	value, err := newProbe(replicaID, token)
+func serve(listen, replicaID, token string, protocol rgaProtocol, timeout time.Duration, allowNonLoopback bool) error {
+	if err := validateListenAddress(listen, allowNonLoopback); err != nil {
+		return err
+	}
+	value, err := newProbe(replicaID, token, protocol)
 	if err != nil {
 		return err
 	}
@@ -154,6 +218,21 @@ func serve(listen, replicaID, token string, timeout time.Duration) error {
 	return server.ListenAndServe()
 }
 
+func validateListenAddress(address string, allowNonLoopback bool) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid listen address: %w", err)
+	}
+	if allowNonLoopback || strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("probe server must listen on loopback unless -allow-non-loopback is set")
+	}
+	return nil
+}
+
 func (p *probe) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if !p.authorized(request) {
 		writeError(writer, http.StatusUnauthorized, errors.New("unauthorized"))
@@ -166,6 +245,8 @@ func (p *probe) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		p.applyCounter(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/orset":
 		p.applyORSet(writer, request)
+	case request.Method == http.MethodPost && request.URL.Path == "/rga":
+		p.applyRGA(writer, request)
 	default:
 		writeError(writer, http.StatusNotFound, errors.New("not found"))
 	}
@@ -177,7 +258,8 @@ func (p *probe) authorized(request *http.Request) bool {
 }
 
 func (p *probe) applyCounter(writer http.ResponseWriter, request *http.Request) {
-	encoded, err := readRequest(request)
+	started := time.Now()
+	encoded, err := readRequest(request, maxSmallRequestBytes)
 	if err == nil {
 		var decoded counter.GCounterDelta
 		decoded, err = counter.UnmarshalGCounterDeltaWithLimits(encoded, transportLimits())
@@ -189,11 +271,12 @@ func (p *probe) applyCounter(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, p.state())
+	writeApplied(writer, started)
 }
 
 func (p *probe) applyORSet(writer http.ResponseWriter, request *http.Request) {
-	encoded, err := readRequest(request)
+	started := time.Now()
+	encoded, err := readRequest(request, maxSmallRequestBytes)
 	if err == nil {
 		var decoded set.ORSetDelta[string]
 		decoded, err = set.UnmarshalORSetDeltaWithLimits(encoded, stringCodec{}, transportLimits())
@@ -205,26 +288,58 @@ func (p *probe) applyORSet(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, p.state())
+	writeApplied(writer, started)
+}
+
+func (p *probe) applyRGA(writer http.ResponseWriter, request *http.Request) {
+	if p.rgaProtocol == rgaProtocolDisabled {
+		writeError(writer, http.StatusNotFound, errors.New("RGA transport is disabled"))
+		return
+	}
+	started := time.Now()
+	encoded, err := readRequest(request, maxRGARequestBytes)
+	if err == nil {
+		var decoded text.Delta
+		decoded, err = unmarshalRGADelta(encoded, p.rgaProtocol, rgaTransportLimits())
+		if err == nil {
+			err = p.rga.ApplyDelta(decoded)
+		}
+	}
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	writeApplied(writer, started)
 }
 
 func (p *probe) state() probeState {
 	elements := p.set.Elements()
 	sort.Strings(elements)
-	return probeState{Counts: p.counter.Counts(), Elements: elements}
+	value := p.rga.String()
+	digest := sha256.Sum256([]byte(value))
+	return probeState{
+		Counts:   p.counter.Counts(),
+		Elements: elements,
+		Text: textState{
+			Protocol: string(p.rgaProtocol),
+			Runes:    utf8.RuneCountInString(value),
+			SHA256:   fmt.Sprintf("%x", digest),
+			Pending:  p.rga.PendingCount(),
+		},
+	}
 }
 
-func send(targetList, replicaID, token string, increment uint64, element string, duplicates int, timeout time.Duration) error {
+func send(targetList, replicaID, token string, protocol rgaProtocol, increment uint64, element string, rgaRunes int, rgaRune string, duplicates int, timeout time.Duration) error {
 	targets, err := parseTargets(targetList)
 	if err != nil {
 		return err
 	}
-	value, err := newProbe(replicaID, token)
+	value, err := newProbe(replicaID, token, protocol)
 	if err != nil {
 		return err
 	}
 	client := &http.Client{Timeout: timeout}
-	var counterDelta, setDelta []byte
+	var counterDelta, setDelta, rgaDelta []byte
 	if increment != 0 {
 		delta, err := value.counter.Increment(increment)
 		if err != nil {
@@ -245,6 +360,15 @@ func send(targetList, replicaID, token string, increment uint64, element string,
 			return err
 		}
 	}
+	if rgaRunes != 0 {
+		if protocol == rgaProtocolDisabled {
+			return errors.New("RGA delivery requires explicit v1 or run-v2 protocol")
+		}
+		rgaDelta, err = newRGADelta(replicaID, protocol, rgaRunes, rgaRune)
+		if err != nil {
+			return err
+		}
+	}
 	reports := make(map[string]probeState, len(targets))
 	for _, baseURL := range targets {
 		if counterDelta != nil {
@@ -257,6 +381,11 @@ func send(targetList, replicaID, token string, increment uint64, element string,
 				return fmt.Errorf("deliver OR-Set to %s: %w", baseURL, err)
 			}
 		}
+		if rgaDelta != nil {
+			if err := postRepeated(client, baseURL+"/rga", token, rgaDelta, duplicates); err != nil {
+				return fmt.Errorf("deliver RGA to %s: %w", baseURL, err)
+			}
+		}
 		state, err := fetchState(client, baseURL, token)
 		if err != nil {
 			return fmt.Errorf("read state from %s: %w", baseURL, err)
@@ -264,6 +393,46 @@ func send(targetList, replicaID, token string, increment uint64, element string,
 		reports[baseURL] = state
 	}
 	return json.NewEncoder(os.Stdout).Encode(reports)
+}
+
+func newRGADelta(replicaID string, protocol rgaProtocol, runes int, value string) ([]byte, error) {
+	if runes <= 0 || runes > maxRGARunesPerDelivery {
+		return nil, fmt.Errorf("RGA rune count must be in [1,%d]", maxRGARunesPerDelivery)
+	}
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) != 1 {
+		return nil, errors.New("RGA rune must be exactly one valid UTF-8 rune")
+	}
+	source, err := text.NewWithOptions(replicaID, rgaOptions())
+	if err != nil {
+		return nil, err
+	}
+	delta, err := source.Insert(0, strings.Repeat(value, runes))
+	if err != nil {
+		return nil, err
+	}
+	return marshalRGADelta(delta, protocol, rgaTransportLimits())
+}
+
+func marshalRGADelta(delta text.Delta, protocol rgaProtocol, limits frame.DecoderLimits) ([]byte, error) {
+	switch protocol {
+	case rgaProtocolV1:
+		return delta.MarshalBinaryWithLimits(limits)
+	case rgaProtocolRunV2:
+		return delta.MarshalRunBinaryWithLimits(limits)
+	default:
+		return nil, errors.New("unsupported RGA protocol")
+	}
+}
+
+func unmarshalRGADelta(data []byte, protocol rgaProtocol, limits frame.DecoderLimits) (text.Delta, error) {
+	switch protocol {
+	case rgaProtocolV1:
+		return text.UnmarshalRGADeltaWithLimits(data, limits)
+	case rgaProtocolRunV2:
+		return text.UnmarshalRGARunDeltaWithLimits(data, limits)
+	default:
+		return text.Delta{}, errors.New("unsupported RGA protocol")
+	}
 }
 
 func parseTargets(value string) ([]string, error) {
@@ -305,7 +474,7 @@ func fetchState(client *http.Client, baseURL, token string) (probeState, error) 
 		return probeState{}, fmt.Errorf("unexpected HTTP status %s", response.Status)
 	}
 	var state probeState
-	decodeErr := json.NewDecoder(io.LimitReader(response.Body, maxBodyBytes)).Decode(&state)
+	decodeErr := json.NewDecoder(io.LimitReader(response.Body, maxResponseBytes)).Decode(&state)
 	closeErr := response.Body.Close()
 	if decodeErr != nil {
 		return probeState{}, decodeErr
@@ -328,7 +497,7 @@ func postRepeated(client *http.Client, endpoint, token string, data []byte, dupl
 		if err != nil {
 			return err
 		}
-		_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, maxBodyBytes))
+		_, readErr := io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBytes))
 		closeErr := response.Body.Close()
 		if readErr != nil {
 			return readErr
@@ -336,24 +505,27 @@ func postRepeated(client *http.Client, endpoint, token string, data []byte, dupl
 		if closeErr != nil {
 			return closeErr
 		}
-		if response.StatusCode != http.StatusOK {
+		if response.StatusCode != http.StatusNoContent {
 			return fmt.Errorf("deliver delta: unexpected HTTP status %s", response.Status)
 		}
 	}
 	return nil
 }
 
-func readRequest(request *http.Request) (data []byte, err error) {
+func readRequest(request *http.Request, maxBytes int) (data []byte, err error) {
+	if maxBytes <= 0 {
+		return nil, errors.New("request body limit must be positive")
+	}
 	defer func() {
 		if closeErr := request.Body.Close(); err == nil && closeErr != nil {
 			err = closeErr
 		}
 	}()
-	data, err = io.ReadAll(io.LimitReader(request.Body, maxBodyBytes+1))
+	data, err = io.ReadAll(io.LimitReader(request.Body, int64(maxBytes)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) == 0 || len(data) > maxBodyBytes {
+	if len(data) == 0 || len(data) > maxBytes {
 		return nil, errors.New("request body is empty or exceeds transport limit")
 	}
 	return data, nil
@@ -361,12 +533,39 @@ func readRequest(request *http.Request) (data []byte, err error) {
 
 func transportLimits() frame.DecoderLimits {
 	limits := frame.DefaultLimits()
-	limits.MaxFrameBytes = maxBodyBytes
-	limits.MaxPayload = maxBodyBytes - 1024
+	limits.MaxFrameBytes = maxSmallRequestBytes
+	limits.MaxPayload = maxSmallRequestBytes - 1024
 	limits.MaxElements = 1 << 16
 	limits.MaxTags = 1 << 16
 	limits.MaxStringBytes = 1 << 16
 	return limits
+}
+
+func rgaTransportLimits() frame.DecoderLimits {
+	limits := frame.DefaultLimits()
+	limits.MaxFrameBytes = maxRGARequestBytes
+	limits.MaxPayload = maxRGARequestBytes - 1024
+	limits.MaxElements = maxRGARunesPerDelivery
+	limits.MaxTags = maxRGARunesPerDelivery
+	limits.MaxStringBytes = 1 << 16
+	return limits
+}
+
+func rgaOptions() text.Options {
+	return text.Options{
+		MaxNodes:        maxRGARunesPerDelivery * 2,
+		MaxTombstones:   maxRGARunesPerDelivery * 2,
+		MaxPendingNodes: maxRGARunesPerDelivery,
+		MaxPendingBytes: maxRGARunesPerDelivery * 128,
+	}
+}
+
+// writeApplied acknowledges a validated, idempotently applied delta without
+// rebuilding complete state on the delivery hot path. Callers obtain canonical
+// convergence data from the final /state request.
+func writeApplied(writer http.ResponseWriter, started time.Time) {
+	writer.Header().Set(applyDurationHeader, strconv.FormatInt(time.Since(started).Microseconds(), 10))
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

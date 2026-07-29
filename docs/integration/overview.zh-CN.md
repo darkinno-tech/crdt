@@ -93,9 +93,29 @@ wait "$pid_a" "$pid_b" 2>/dev/null || true
 rm -rf "$scenario_dir"
 ```
 
-探针的每个端点都要求 `X-CRDT-Probe-Token`，默认仅绑定 loopback，且请求体上限
-为 1 MiB。它没有 TLS、持久化状态、成员管理、重放策略或授权模型，绝不能暴露到
-公网。
+探针的每个端点都要求 `X-CRDT-Probe-Token`，默认仅绑定 loopback，counter/OR-Set
+请求体上限为 1 MiB。它没有 TLS、持久化状态、成员管理、重放策略或授权模型，绝不能
+暴露到公网。
+
+### 可选的实验性 RGA 诊断路径
+
+`/rga` 默认关闭，只用于受控地验证一种显式选择的 RGA frame shape；它不会协商 Manifest
+或生产级 `ProtocolPolicy`。每个接收端和发送端必须使用相同的
+`-rga-protocol=v1` 或 `-rga-protocol=run-v2`。该路由的单个 delta 最多为 16 MiB、最多
+生成 200,000 个 rune，成功后返回空 `204`，最终收敛信息只从 `/state` 获取。
+
+```sh
+# 在上面的两个接收端进程中加入相同的协议 flag，然后执行：
+go run ./cmd/crdt-sync-probe -mode send \
+  -target http://127.0.0.1:49511,http://127.0.0.1:49512 \
+  -replica text-gate -token-file "$scenario_dir/probe.token" \
+  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
+```
+
+两个最终 `text` 对象的 `protocol`、`runes`、`sha256` 必须一致，且 `pending` 为零。v1
+接收端会在修改文本前拒绝 run-v2 帧（反向同理）。这只证明被演练的内存内重复/乱序路径，
+不能证明 HLC 持久化、恢复、成员关系或墓碑 GC 安全性。
 
 ## 3. 接入生产传输层时由应用负责的契约
 
@@ -150,7 +170,7 @@ G-Set 与 MV-Register 是零值 `crdt.ProtocolPolicy` 默认包含的稳定 fram
 
 LWW-Set（`lww.Set`）、LWW-Map（`lww.Map`）、RGA（`text`）和 OR-Tree（`tree`）是带帧、带 HLC 的实验性
 协议，只有通过上述能力检查后才能使用；该策略仅属于一个复制组，并不是动态插件机制。帧类型被接受
-后仍应调用具体解码器，例如 LWW-Set delta 使用 `lww.UnmarshalSetDeltaWithLimits`，RGA delta 使用 `text.UnmarshalRGADeltaWithLimits`，
+后仍应调用具体解码器，例如 LWW-Set delta 使用 `lww.UnmarshalSetDeltaWithLimits`，经显式协商的 v1 RGA delta 使用 `text.UnmarshalRGADeltaWithLimits`，经显式协商的 run-v2 RGA delta 使用 `text.UnmarshalRGARunDeltaWithLimits`，
 OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧的校验和有效
 就按某种类型分派它。
 
