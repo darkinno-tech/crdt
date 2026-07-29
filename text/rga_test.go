@@ -156,6 +156,46 @@ func TestRGAQueuesMissingParentsAndReplaysWhenTheyArrive(t *testing.T) {
 	}
 }
 
+func TestRGAApplyDuplicateDeltaDoesNotAdvanceClock(t *testing.T) {
+	source := mustRGA(t, "source")
+	insert := mustInsertRGA(t, source, 0, "a")
+	target := mustRGA(t, "target")
+	mustApplyRGA(t, target, insert)
+	clockBeforeDuplicate := target.ClockState()
+	mustApplyRGA(t, target, insert)
+	if got := target.ClockState(); got != clockBeforeDuplicate {
+		t.Fatalf("duplicate integrated delta advanced clock: got %#v, want %#v", got, clockBeforeDuplicate)
+	}
+
+	deleteDelta, err := source.Delete(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustApplyRGA(t, target, deleteDelta)
+	clockBeforeDuplicate = target.ClockState()
+	mustApplyRGA(t, target, deleteDelta)
+	if got := target.ClockState(); got != clockBeforeDuplicate {
+		t.Fatalf("duplicate tombstone delta advanced clock: got %#v, want %#v", got, clockBeforeDuplicate)
+	}
+
+	parent := mustInsertRGA(t, source, 0, "p")
+	child := mustInsertRGA(t, source, 1, "c")
+	pendingTarget := mustRGA(t, "pending-target")
+	mustApplyRGA(t, pendingTarget, child)
+	if got := pendingTarget.PendingCount(); got != 1 {
+		t.Fatalf("pending count = %d, want 1", got)
+	}
+	clockBeforeDuplicate = pendingTarget.ClockState()
+	mustApplyRGA(t, pendingTarget, child)
+	if got := pendingTarget.ClockState(); got != clockBeforeDuplicate {
+		t.Fatalf("duplicate pending delta advanced clock: got %#v, want %#v", got, clockBeforeDuplicate)
+	}
+	mustApplyRGA(t, pendingTarget, parent)
+	if got := pendingTarget.String(); got != "pc" {
+		t.Fatalf("replayed pending text = %q, want pc", got)
+	}
+}
+
 func TestRGAIntegratesNewChildAgainstExistingParent(t *testing.T) {
 	source, err := New("source")
 	if err != nil {

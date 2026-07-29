@@ -68,6 +68,31 @@ func BenchmarkRGAApplyDeltaLinearChain(b *testing.B) {
 	}
 }
 
+func BenchmarkRGAApplyDuplicateDelta(b *testing.B) {
+	source, err := New("source")
+	if err != nil {
+		b.Fatal(err)
+	}
+	delta, err := source.Insert(0, "duplicate delivery")
+	if err != nil {
+		b.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := target.ApplyDelta(delta); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := target.ApplyDelta(delta); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkRGAAppendToIndexedDocument(b *testing.B) {
 	options := DefaultOptions()
 	options.MaxNodes = 16 << 20
