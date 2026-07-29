@@ -16,10 +16,14 @@ import (
 // each change to an application-owned, manifest-compatible replica.Inbox (or
 // another equally durable delivery boundary).
 type ClientConfig struct {
-	Header           http.Header
-	Policy           crdt.ProtocolPolicy
-	MaxMessageBytes  int
-	MaxActorBytes    int
+	Header          http.Header
+	Policy          crdt.ProtocolPolicy
+	MaxMessageBytes int
+	MaxActorBytes   int
+	// EnableBatches negotiates BatchSubprotocol and allows PublishBatch. Each
+	// contained change retains its own Dot; v1 remains the default.
+	EnableBatches    bool
+	MaxBatchChanges  int
 	HandshakeTimeout time.Duration
 	WriteTimeout     time.Duration
 	OnChange         func(replica.Change) error
@@ -35,7 +39,9 @@ type Client struct {
 
 	maxMessageBytes int
 	maxActorBytes   int
+	maxBatchChanges int
 	writeTimeout    time.Duration
+	batchEnabled    bool
 	connection      *websocket.Conn
 	context         context.Context
 	cancel          context.CancelFunc
@@ -58,6 +64,7 @@ func Dial(ctx context.Context, endpoint string, manifest replica.Manifest, confi
 		config.MaxMessageBytes,
 		config.MaxActorBytes,
 		1,
+		config.MaxBatchChanges,
 		config.HandshakeTimeout,
 		config.WriteTimeout,
 	)
@@ -69,15 +76,22 @@ func Dial(ctx context.Context, endpoint string, manifest replica.Manifest, confi
 	}
 	handshakeContext, cancelHandshake := context.WithTimeout(ctx, limits.handshakeTimeout)
 	defer cancelHandshake()
+	subprotocols := []string{Subprotocol}
+	if config.EnableBatches {
+		// Offer v1 as a fallback so an upgraded client can still connect to a
+		// legacy provider. New handlers prefer BatchSubprotocol.
+		subprotocols = []string{BatchSubprotocol, Subprotocol}
+	}
 	connection, _, err := websocket.Dial(handshakeContext, endpoint, &websocket.DialOptions{
 		HTTPHeader:      config.Header.Clone(),
-		Subprotocols:    []string{Subprotocol},
+		Subprotocols:    subprotocols,
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if connection.Subprotocol() != Subprotocol {
+	batchEnabled := connection.Subprotocol() == BatchSubprotocol
+	if connection.Subprotocol() != Subprotocol && !batchEnabled {
 		_ = connection.CloseNow()
 		return nil, errInvalidWireMessage
 	}
@@ -117,7 +131,9 @@ func Dial(ctx context.Context, endpoint string, manifest replica.Manifest, confi
 		onChange:        config.OnChange,
 		maxMessageBytes: limits.maxMessageBytes,
 		maxActorBytes:   limits.maxActorBytes,
+		maxBatchChanges: limits.maxBatchChanges,
 		writeTimeout:    limits.writeTimeout,
+		batchEnabled:    batchEnabled,
 		connection:      connection,
 		context:         connectionContext,
 		cancel:          cancelConnection,
@@ -150,6 +166,53 @@ func (client *Client) Publish(ctx context.Context, change replica.Change) error 
 	}
 	if len(verified.Dot.Actor) > client.maxActorBytes || len(encoded) > client.maxMessageBytes {
 		return errInvalidWireMessage
+	}
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+	writeContext, cancel := context.WithTimeout(ctx, client.writeTimeout)
+	err = client.connection.Write(writeContext, websocket.MessageBinary, encoded)
+	cancel()
+	if err != nil {
+		client.stop(err)
+	}
+	return err
+}
+
+// PublishBatch validates and sends a bounded group of independently identified
+// changes in one WebSocket message. The server admits each Dot individually,
+// so retry and outbox logic must retain every original change.
+func (client *Client) PublishBatch(ctx context.Context, changes []replica.Change) error {
+	if client == nil {
+		return ErrClosed
+	}
+	if !client.batchEnabled {
+		return ErrBatchUnsupported
+	}
+	select {
+	case <-client.context.Done():
+		return ErrClosed
+	default:
+	}
+	if len(changes) == 0 || len(changes) > client.maxBatchChanges {
+		return ErrBatchLimit
+	}
+	verified := make([]replica.Change, 0, len(changes))
+	for _, change := range changes {
+		item, err := replica.NewChangeWithPolicy(client.manifest, change.Dot, change.Delta(), client.policy)
+		if err != nil {
+			return fmt.Errorf("validate change: %w", err)
+		}
+		if len(item.Dot.Actor) > client.maxActorBytes {
+			return errInvalidWireMessage
+		}
+		verified = append(verified, item)
+	}
+	encoded, err := marshalChangeBatch(verified)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > client.maxMessageBytes {
+		return ErrBatchLimit
 	}
 	client.writeMu.Lock()
 	defer client.writeMu.Unlock()
@@ -209,21 +272,41 @@ func (client *Client) readLoop() {
 			client.stop(errInvalidWireMessage)
 			return
 		}
+		if client.batchEnabled && isChangeBatch(data) {
+			changes, err := unmarshalChangeBatch(data, client.maxMessageBytes, client.maxActorBytes, client.maxBatchChanges)
+			if err != nil {
+				client.stop(err)
+				return
+			}
+			for _, wire := range changes {
+				if err := client.applyChange(wire.dot, wire.delta); err != nil {
+					client.stop(err)
+					return
+				}
+			}
+			continue
+		}
 		dot, delta, err := unmarshalChange(data, client.maxMessageBytes, client.maxActorBytes)
 		if err != nil {
 			client.stop(err)
 			return
 		}
-		change, err := replica.NewChangeWithPolicy(client.manifest, dot, delta, client.policy)
-		if err != nil {
-			client.stop(fmt.Errorf("validate received change: %w", err))
-			return
-		}
-		if err := client.onChange(change); err != nil {
-			client.stop(fmt.Errorf("apply received change: %w", err))
+		if err := client.applyChange(dot, delta); err != nil {
+			client.stop(err)
 			return
 		}
 	}
+}
+
+func (client *Client) applyChange(dot replica.Dot, delta []byte) error {
+	change, err := replica.NewChangeWithPolicy(client.manifest, dot, delta, client.policy)
+	if err != nil {
+		return fmt.Errorf("validate received change: %w", err)
+	}
+	if err := client.onChange(change); err != nil {
+		return fmt.Errorf("apply received change: %w", err)
+	}
+	return nil
 }
 
 func (client *Client) stop(err error) {

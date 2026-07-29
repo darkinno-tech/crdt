@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	protocolVersion = 1
-	maxControlBytes = 16 << 10
+	protocolVersion      = 1
+	batchProtocolVersion = 2
+	maxControlBytes      = 16 << 10
 )
 
 var errInvalidWireMessage = errors.New("websocket provider: invalid wire message")
@@ -28,6 +29,11 @@ func controlLimit(maxMessageBytes int) int {
 type helloMessage struct {
 	Version  uint8            `json:"version"`
 	Manifest replica.Manifest `json:"manifest"`
+}
+
+type wireChange struct {
+	dot   replica.Dot
+	delta []byte
 }
 
 func marshalHello(manifest replica.Manifest) ([]byte, error) {
@@ -89,4 +95,67 @@ func unmarshalChange(data []byte, maxMessageBytes, maxActorBytes int) (replica.D
 		return replica.Dot{}, nil, errInvalidWireMessage
 	}
 	return dot, append([]byte(nil), delta...), nil
+}
+
+func isChangeBatch(data []byte) bool {
+	return len(data) > 0 && data[0] == batchProtocolVersion
+}
+
+func marshalChangeBatch(changes []replica.Change) ([]byte, error) {
+	if len(changes) == 0 {
+		return nil, errInvalidWireMessage
+	}
+	items := make([][]byte, 0, len(changes))
+	for _, change := range changes {
+		encoded, err := marshalChange(change)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, encoded)
+	}
+	return marshalEncodedChangeBatch(items)
+}
+
+func marshalEncodedChangeBatch(items [][]byte) ([]byte, error) {
+	if len(items) == 0 {
+		return nil, errInvalidWireMessage
+	}
+	encoded := make([]byte, 0, 1+len(items)*10)
+	encoded = append(encoded, batchProtocolVersion)
+	encoded = frame.AppendUvarint(encoded, uint64(len(items)))
+	for _, item := range items {
+		if len(item) == 0 || item[0] != protocolVersion {
+			return nil, errInvalidWireMessage
+		}
+		encoded = frame.AppendUvarint(encoded, uint64(len(item)))
+		encoded = append(encoded, item...)
+	}
+	return encoded, nil
+}
+
+func unmarshalChangeBatch(data []byte, maxMessageBytes, maxActorBytes, maxChanges int) ([]wireChange, error) {
+	if len(data) < 2 || len(data) > maxMessageBytes || maxActorBytes <= 0 || maxChanges <= 0 || !isChangeBatch(data) {
+		return nil, errInvalidWireMessage
+	}
+	count, position, ok := frame.ReadUvarint(data, 1)
+	if !ok || count == 0 || count > uint64(maxChanges) {
+		return nil, errInvalidWireMessage
+	}
+	changes := make([]wireChange, 0, int(count))
+	for index := uint64(0); index < count; index++ {
+		item, next, ok := frame.ReadBytes(data, position, maxMessageBytes-position)
+		if !ok || len(item) == 0 {
+			return nil, errInvalidWireMessage
+		}
+		dot, delta, err := unmarshalChange(item, maxMessageBytes, maxActorBytes)
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, wireChange{dot: dot, delta: delta})
+		position = next
+	}
+	if position != len(data) {
+		return nil, errInvalidWireMessage
+	}
+	return changes, nil
 }
