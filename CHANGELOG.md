@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added a dependency-free TypeScript decoder for the bounded canonical frame
+  envelope and an RGA v1 Go/Wasm client runtime for browser/WebView local
+  merges.
+- Added real Wasm/Node and browser verification, including three-replica
+  duplicate, reordering, malformed-input, and snapshot-recovery scenarios.
+
+### Changed
+
+- Added explicit output and recovery limits for RGA state/delta serialization
+  and snapshot restoration, so embedders can use the same budgets at every
+  browser-facing boundary.
+
 ## [1.0.4-beta.1] - 2026-07-28
 
 ### Fixed

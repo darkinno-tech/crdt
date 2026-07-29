@@ -93,6 +93,30 @@ nor a plugin registry: unknown and reserved frame types remain unsupported.
 Experimental LWW-Set, LWW-Map, RGA, and OR-Tree replicas must persist HLC state with
 snapshots and retain their tombstones.
 
+## Browser and JavaScript mobile clients
+
+The repository includes a bounded TypeScript v1 frame-envelope decoder and an
+RGA v1 Wasm client runtime under
+[`clients/typescript`](clients/typescript/README.md). The TypeScript layer
+checks the common binary envelope; the Wasm layer reuses the Go RGA merge,
+out-of-order, tombstone, and HLC implementation so a browser/WebView can merge
+locally instead of waiting for server arbitration.
+
+Build and exercise the client boundary with:
+
+```sh
+make wasm
+make typescript-test
+make wasm-test
+```
+
+This is an experimental RGA v1 client only. Authenticate the manifest and
+negotiate `AllowExperimental` before passing a received frame to it; CRC-32C
+does not authenticate a peer. Persist the client snapshot's state, clock, and
+frontier atomically. Native mobile apps without a compatible WebAssembly
+runtime still need a separately validated binding or semantic implementation.
+Split a local editor transaction above 64 KiB or 16,384 runes before insertion.
+
 ## Experimental attachment references
 
 `attachment.Register` represents a document's images, audio, video, or other

@@ -207,6 +207,31 @@ The [attachment integration guide](attachment.md) and its
 [runnable example](../../examples/attachment-collaboration) provide the complete
 flow and limits checklist.
 
+### 5.2 Browser and JavaScript/WebView RGA clients
+
+`clients/typescript` keeps the cross-language boundary narrow: its TypeScript
+module validates the bounded common frame envelope, while the RGA v1 Wasm
+module calls the existing Go decoder and merge engine. Build it with `make wasm`
+and verify Go-to-client frames and a duplicated/reordered three-replica session
+with `make wasm-test`.
+
+The client accepts RGA v1 state/delta IDs 11/12 only. First authenticate the
+same manifest/capability agreement as a Go peer, then validate the application
+transport body limit before calling `document.applyDelta`. CRC-32C is only an
+accidental-corruption check. Persist the returned `{ state, clock, frontier }`
+as one atomic local record; restoring only the state permits a reused replica
+ID to emit an unsafe HLC tag. Split an editor transaction larger than 64 KiB or
+16,384 runes before local insertion. Use a Worker for long documents. A native
+mobile app without a compatible Wasm runtime still needs a separately validated
+binding or semantic implementation.
+
+This client protocol is not the default for a new Go RGA group:
+`crdt.DefaultRGAFrameType()` selects run-v2 IDs 19/20, whereas the client
+deliberately rejects them. A manifest carries one concrete protocol, so do not
+connect this v1 client to a run-v2 group. Use an explicitly negotiated legacy
+v1 group with `ProtocolPolicy{AllowExperimental: true}`, or wait for a
+separately negotiated run-v2 client implementation.
+
 ## 6. Recovery, anti-entropy, and tombstones
 
 Bootstrap a new or recovering replica from a complete state snapshot. For an

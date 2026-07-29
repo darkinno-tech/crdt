@@ -178,6 +178,24 @@ OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧�
 完整流程和限制清单见[附件引用集成文档](attachment.zh-CN.md)及其
 [可运行示例](../../examples/attachment-collaboration)。
 
+### 5.2 浏览器与 JavaScript/WebView RGA 客户端
+
+`clients/typescript` 将跨语言边界保持得很窄：TypeScript 模块只验证有边界的公共
+frame 外层，RGA v1 Wasm 模块则调用已有的 Go 解码器和合并引擎。使用 `make wasm`
+构建；使用 `make wasm-test` 验证 Go 到客户端的帧，以及重复/乱序投递的三副本会话。
+
+客户端只接受 RGA v1 的 state/delta TypeID 11/12。先完成与 Go 对端相同的、经过认证的
+Manifest/能力协商，再按应用传输体限制调用 `document.applyDelta`。CRC-32C 只检测意外
+损坏。必须将返回的 `{ state, clock, frontier }` 作为一条原子本地记录持久化；只恢复
+state 会导致重用的 replica ID 产生不安全的 HLC 标签。一次编辑事务超过 64 KiB 或
+16,384 rune 时必须在本地插入前按顺序拆分；长文档应在 Worker 中合并。没有兼容 Wasm
+运行时的原生移动端仍需独立验证的绑定或语义实现。
+
+该客户端协议不是新建 Go RGA 复制组的默认选择：`crdt.DefaultRGAFrameType()` 选择
+run-v2 TypeID 19/20，而客户端会刻意拒绝它们。一个 Manifest 只绑定一种具体协议，因此
+不要把此 v1 客户端连到 run-v2 组。应显式协商带 `ProtocolPolicy{AllowExperimental: true}`
+的旧版 v1 组，或等待单独协商的 run-v2 客户端实现。
+
 ## 6. 恢复、反熵与墓碑
 
 新副本或恢复副本应从完整状态快照启动。OR-Set 绝不能只从 `MarshalBinary()` 字节
