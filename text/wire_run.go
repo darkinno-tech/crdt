@@ -35,6 +35,12 @@ type runChild struct {
 // run-v2 frame. It retains v1 scalar Positions and is therefore safe to merge
 // with v1 deltas after decoding.
 func (r *RGA) MarshalRunBinary() ([]byte, error) {
+	return r.MarshalRunBinaryWithLimits(frame.DefaultLimits())
+}
+
+// MarshalRunBinaryWithLimits encodes complete RGA state using the run-v2
+// frame while enforcing caller-selected output limits.
+func (r *RGA) MarshalRunBinaryWithLimits(limits frame.DecoderLimits) ([]byte, error) {
 	if r == nil {
 		return nil, ErrNilText
 	}
@@ -45,12 +51,18 @@ func (r *RGA) MarshalRunBinary() ([]byte, error) {
 	}
 	nodes, tombstones := cloneNodes(r.nodes), cloneTombstones(r.tombstones)
 	r.mu.RUnlock()
-	return marshalRGARun(crdt.TypeIDRGARunState, nodes, tombstones, frame.DefaultLimits())
+	return marshalRGARun(crdt.TypeIDRGARunState, nodes, tombstones, limits)
 }
 
 // MarshalRunBinary encodes a delta with compact same-replica parent chains.
 func (d Delta) MarshalRunBinary() ([]byte, error) {
-	return marshalRGARun(crdt.TypeIDRGARunDelta, d.nodes, d.tombstones, frame.DefaultLimits())
+	return d.MarshalRunBinaryWithLimits(frame.DefaultLimits())
+}
+
+// MarshalRunBinaryWithLimits encodes a delta with compact same-replica parent
+// chains while enforcing caller-selected output limits.
+func (d Delta) MarshalRunBinaryWithLimits(limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGARun(crdt.TypeIDRGARunDelta, d.nodes, d.tombstones, limits)
 }
 
 func marshalRGARun(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits) ([]byte, error) {
@@ -251,10 +263,16 @@ func unmarshalRGARunDeltaWithLimits(data []byte, limits frame.DecoderLimits) (De
 
 // UnmarshalRunBinary installs one complete run-v2 RGA state frame.
 func (r *RGA) UnmarshalRunBinary(data []byte) error {
+	return r.UnmarshalRunBinaryWithLimits(data, frame.DefaultLimits())
+}
+
+// UnmarshalRunBinaryWithLimits installs one complete run-v2 RGA state frame
+// while enforcing caller-selected input limits.
+func (r *RGA) UnmarshalRunBinaryWithLimits(data []byte, limits frame.DecoderLimits) error {
 	if r == nil || r.clock == nil {
 		return ErrNilText
 	}
-	nodes, tombstones, err := unmarshalRGARun(data, crdt.TypeIDRGARunState, frame.DefaultLimits(), true)
+	nodes, tombstones, err := unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true)
 	if err != nil {
 		return err
 	}
@@ -410,6 +428,12 @@ func readRunNode(payload []byte, position int, limits frame.DecoderLimits) (Posi
 
 // SnapshotRunCurrentState returns an HLC-backed, validated run-v2 snapshot.
 func (r *RGA) SnapshotRunCurrentState() (snapshot.Snapshot, error) {
+	return r.SnapshotRunCurrentStateWithLimits(frame.DefaultLimits())
+}
+
+// SnapshotRunCurrentStateWithLimits returns an HLC-backed, validated run-v2
+// snapshot while enforcing caller-selected output limits.
+func (r *RGA) SnapshotRunCurrentStateWithLimits(limits frame.DecoderLimits) (snapshot.Snapshot, error) {
 	if r == nil || r.clock == nil {
 		return snapshot.Snapshot{}, ErrNilText
 	}
@@ -421,7 +445,7 @@ func (r *RGA) SnapshotRunCurrentState() (snapshot.Snapshot, error) {
 	nodes, tombstones, clockState := cloneNodes(r.nodes), cloneTombstones(r.tombstones), r.clock.Snapshot()
 	frontier := frontierForState(nodes, tombstones)
 	r.mu.RUnlock()
-	state, err := marshalRGARun(crdt.TypeIDRGARunState, nodes, tombstones, frame.DefaultLimits())
+	state, err := marshalRGARun(crdt.TypeIDRGARunState, nodes, tombstones, limits)
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}

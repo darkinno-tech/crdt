@@ -12,6 +12,7 @@ import (
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
+	frame "github.com/DarkInno/crdt/encoding"
 )
 
 var (
@@ -167,14 +168,36 @@ func (r *RGA) ClockState() clock.State {
 // node per Unicode scalar, so offset/count are rune based rather than byte
 // based and can never split UTF-8.
 func (r *RGA) Insert(offset int, value string) (Delta, error) {
+	delta, _, err := r.insert(offset, value, nil)
+	return delta, err
+}
+
+// InsertWithLimits inserts text only when its complete canonical delta fits
+// limits. A rejected output frame does not add nodes or tombstones to the RGA,
+// which lets a transport-facing caller fail the local edit before it becomes
+// state that cannot be replicated under its own budget. The HLC may still
+// advance while reserving local tags; those un-emitted tags are safe to skip.
+func (r *RGA) InsertWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, error) {
+	delta, _, err := r.insert(offset, value, &limits)
+	return delta, err
+}
+
+// InsertBinaryWithLimits inserts text and returns the same preflighted
+// canonical delta frame used to establish the local output budget.
+func (r *RGA) InsertBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.insert(offset, value, &limits)
+	return encoded, err
+}
+
+func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits) (Delta, []byte, error) {
 	if r == nil || r.clock == nil {
-		return Delta{}, ErrNilText
+		return Delta{}, nil, ErrNilText
 	}
 	if offset < 0 {
-		return Delta{}, ErrRange
+		return Delta{}, nil, ErrRange
 	}
 	if !utf8.ValidString(value) {
-		return Delta{}, ErrInvalidText
+		return Delta{}, nil, ErrInvalidText
 	}
 	runes := []rune(value)
 	r.mu.RLock()
@@ -182,10 +205,18 @@ func (r *RGA) Insert(offset int, value string) (Delta, error) {
 	visibleCount := visibleCount(r.sequence.root)
 	r.mu.RUnlock()
 	if offset > visibleCount {
-		return Delta{}, ErrRange
+		return Delta{}, nil, ErrRange
 	}
 	if len(runes) == 0 {
-		return Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{})}, nil
+		empty := Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{})}
+		if limits == nil {
+			return empty, nil, nil
+		}
+		encoded, err := empty.MarshalBinaryWithLimits(*limits)
+		if err != nil {
+			return Delta{}, nil, err
+		}
+		return empty, encoded, nil
 	}
 	parent := Position{}
 	if hasPrevious {
@@ -195,47 +226,83 @@ func (r *RGA) Insert(offset int, value string) (Delta, error) {
 	for _, valueRune := range runes {
 		id, err := r.clock.Now()
 		if err != nil {
-			return Delta{}, err
+			return Delta{}, nil, err
 		}
 		delta.nodes[id] = node{parent: parent, rune: valueRune}
 		parent = id
 	}
-	if err := r.ApplyDelta(delta); err != nil {
-		return Delta{}, err
+	var encoded []byte
+	if limits != nil {
+		var err error
+		encoded, err = delta.MarshalBinaryWithLimits(*limits)
+		if err != nil {
+			return Delta{}, nil, err
+		}
 	}
-	return delta, nil
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
 }
 
 // Delete marks count visible runes starting at offset as removed. The delta
 // carries only tombstones; replicas that have not received the inserts yet
 // retain those tombstones until the matching nodes arrive.
 func (r *RGA) Delete(offset, count int) (Delta, error) {
+	delta, _, err := r.delete(offset, count, nil)
+	return delta, err
+}
+
+// DeleteWithLimits deletes visible runes only when the canonical tombstone
+// delta fits limits. A rejected output frame leaves the RGA content and
+// tombstone set unchanged.
+func (r *RGA) DeleteWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, error) {
+	delta, _, err := r.delete(offset, count, &limits)
+	return delta, err
+}
+
+// DeleteBinaryWithLimits deletes visible text and returns the same preflighted
+// canonical tombstone frame used to establish the local output budget.
+func (r *RGA) DeleteBinaryWithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.delete(offset, count, &limits)
+	return encoded, err
+}
+
+func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits) (Delta, []byte, error) {
 	if r == nil {
-		return Delta{}, ErrNilText
+		return Delta{}, nil, ErrNilText
 	}
 	if offset < 0 || count < 0 {
-		return Delta{}, ErrRange
+		return Delta{}, nil, ErrRange
 	}
 	r.mu.RLock()
 	visibleCount := visibleCount(r.sequence.root)
 	if offset > visibleCount || count > visibleCount-offset {
 		r.mu.RUnlock()
-		return Delta{}, ErrRange
+		return Delta{}, nil, ErrRange
 	}
 	delta := Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{}, count)}
 	for index := 0; index < count; index++ {
 		id, ok := r.sequence.visibleAt(offset + index)
 		if !ok {
 			r.mu.RUnlock()
-			return Delta{}, ErrRange
+			return Delta{}, nil, ErrRange
 		}
 		delta.tombstones[id] = struct{}{}
 	}
 	r.mu.RUnlock()
-	if err := r.ApplyDelta(delta); err != nil {
-		return Delta{}, err
+	var encoded []byte
+	if limits != nil {
+		var err error
+		encoded, err = delta.MarshalBinaryWithLimits(*limits)
+		if err != nil {
+			return Delta{}, nil, err
+		}
 	}
-	return delta, nil
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
 }
 
 func (r *RGA) String() string {

@@ -11,6 +11,13 @@ import (
 
 // MarshalBinary returns the canonical framed RGA state.
 func (r *RGA) MarshalBinary() ([]byte, error) {
+	return r.MarshalBinaryWithLimits(frame.DefaultLimits())
+}
+
+// MarshalBinaryWithLimits returns the canonical framed RGA state while
+// enforcing caller-selected frame limits. It refuses incomplete state rather
+// than serializing unresolved parent references.
+func (r *RGA) MarshalBinaryWithLimits(limits frame.DecoderLimits) ([]byte, error) {
 	if r == nil {
 		return nil, ErrNilText
 	}
@@ -21,19 +28,21 @@ func (r *RGA) MarshalBinary() ([]byte, error) {
 	}
 	nodes, tombstones := cloneNodes(r.nodes), cloneTombstones(r.tombstones)
 	r.mu.RUnlock()
-	return marshalRGA(crdt.TypeIDRGAState, nodes, tombstones)
+	return marshalRGAWithLimits(crdt.TypeIDRGAState, nodes, tombstones, limits)
 }
 
 // MarshalBinary returns the canonical framed RGA delta.
 func (d Delta) MarshalBinary() ([]byte, error) {
+	return d.MarshalBinaryWithLimits(frame.DefaultLimits())
+}
+
+// MarshalBinaryWithLimits returns the canonical framed RGA delta while
+// enforcing caller-selected frame limits.
+func (d Delta) MarshalBinaryWithLimits(limits frame.DecoderLimits) ([]byte, error) {
 	if err := validateDelta(d); err != nil {
 		return nil, err
 	}
-	return marshalRGA(crdt.TypeIDRGADelta, d.nodes, d.tombstones)
-}
-
-func marshalRGA(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}) ([]byte, error) {
-	return marshalRGAWithLimits(typeID, nodes, tombstones, frame.DefaultLimits())
+	return marshalRGAWithLimits(crdt.TypeIDRGADelta, d.nodes, d.tombstones, limits)
 }
 
 func marshalRGAWithLimits(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits) ([]byte, error) {
@@ -151,6 +160,13 @@ func (r *RGA) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimits)
 }
 
 func (r *RGA) MarshalBinaryWithClockState() ([]byte, clock.State, error) {
+	return r.MarshalBinaryWithClockStateAndLimits(frame.DefaultLimits())
+}
+
+// MarshalBinaryWithClockStateAndLimits returns one complete state frame and
+// the HLC state that must be persisted atomically before the replica ID is
+// reused. The frame is constrained by limits.
+func (r *RGA) MarshalBinaryWithClockStateAndLimits(limits frame.DecoderLimits) ([]byte, clock.State, error) {
 	if r == nil || r.clock == nil {
 		return nil, clock.State{}, ErrNilText
 	}
@@ -161,7 +177,7 @@ func (r *RGA) MarshalBinaryWithClockState() ([]byte, clock.State, error) {
 	}
 	nodes, tombstones, state := cloneNodes(r.nodes), cloneTombstones(r.tombstones), r.clock.Snapshot()
 	r.mu.RUnlock()
-	encoded, err := marshalRGA(crdt.TypeIDRGAState, nodes, tombstones)
+	encoded, err := marshalRGAWithLimits(crdt.TypeIDRGAState, nodes, tombstones, limits)
 	return encoded, state, err
 }
 
@@ -174,6 +190,13 @@ func (r *RGA) Snapshot(frontier map[string]crdt.Tag) (snapshot.Snapshot, error) 
 }
 
 func (r *RGA) SnapshotCurrentState() (snapshot.Snapshot, error) {
+	return r.SnapshotCurrentStateWithLimits(frame.DefaultLimits())
+}
+
+// SnapshotCurrentStateWithLimits returns a complete, HLC-backed snapshot
+// while enforcing caller-selected frame limits. Persist the returned snapshot
+// atomically so that state and clock recovery cannot reuse a mutation tag.
+func (r *RGA) SnapshotCurrentStateWithLimits(limits frame.DecoderLimits) (snapshot.Snapshot, error) {
 	if r == nil || r.clock == nil {
 		return snapshot.Snapshot{}, ErrNilText
 	}
@@ -187,7 +210,7 @@ func (r *RGA) SnapshotCurrentState() (snapshot.Snapshot, error) {
 	clockState := r.clock.Snapshot()
 	frontier := frontierForState(nodes, tombstones)
 	r.mu.RUnlock()
-	state, err := marshalRGA(crdt.TypeIDRGAState, nodes, tombstones)
+	state, err := marshalRGAWithLimits(crdt.TypeIDRGAState, nodes, tombstones, limits)
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}
@@ -214,6 +237,39 @@ func NewFromSnapshot(saved snapshot.Snapshot) (*RGA, error) {
 		unmarshal = r.UnmarshalBinary
 	case crdt.TypeIDRGARunState:
 		unmarshal = r.UnmarshalRunBinary
+	default:
+		return nil, ErrInvalidDelta
+	}
+	if err := unmarshal(saved.Bytes()); err != nil {
+		return nil, err
+	}
+	if tag, ok := greatestRGAFrontierTag(saved.Frontier()); ok {
+		if err := r.clock.Witness(tag); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
+}
+
+// NewFromSnapshotWithOptions restores an RGA snapshot using explicit retained
+// state and frame limits. It validates the full state before installation and
+// witnesses the saved frontier before returning, so a reused replica ID cannot
+// create a tag that predates the recovered state.
+func NewFromSnapshotWithOptions(saved snapshot.Snapshot, options Options, limits frame.DecoderLimits) (*RGA, error) {
+	clockState, ok := saved.ClockState()
+	if !ok {
+		return nil, ErrInvalidDelta
+	}
+	r, err := NewFromClockWithOptions(clockState, options)
+	if err != nil {
+		return nil, err
+	}
+	var unmarshal func([]byte) error
+	switch saved.TypeID {
+	case crdt.TypeIDRGAState:
+		unmarshal = func(data []byte) error { return r.UnmarshalBinaryWithLimits(data, limits) }
+	case crdt.TypeIDRGARunState:
+		unmarshal = func(data []byte) error { return r.UnmarshalRunBinaryWithLimits(data, limits) }
 	default:
 		return nil, ErrInvalidDelta
 	}
