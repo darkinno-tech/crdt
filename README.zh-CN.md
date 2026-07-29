@@ -439,12 +439,12 @@ Platinum 8272CL vCPU、3.8 GiB 内存。基准二进制由当前修订以 Go 1.2
 计数图中各有 128 个副本分量。`MarshalBinary` 括号中为其报告的编码吞吐量；三次
 采样的分配数据完全一致。
 
-| 主机 | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
+| 匿名主机 | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
 | --- | ---: | --- | --- | --- | --- |
-| `210.16.171.72` | 1 | 24.9 µs/op；13,136 B；6 allocs | 149.1 ns/op；0 B；0 allocs | 7.51 µs/op；232 B；10 allocs | 69.4 µs/op（55.3 MB/s）；25,680 B；10 allocs |
-| `210.16.171.72` | 4 | 18.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.29 µs/op；232 B；10 allocs | 53.6 µs/op（71.7 MB/s）；25,680 B；10 allocs |
-| `192.140.163.250` | 1 | 25.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.49 µs/op；232 B；10 allocs | 70.4 µs/op（54.6 MB/s）；25,680 B；10 allocs |
-| `192.140.163.250` | 4 | 18.5 µs/op；13,136 B；6 allocs | 153.5 ns/op；0 B；0 allocs | 7.31 µs/op；232 B；10 allocs | 53.3 µs/op（72.1 MB/s）；25,680 B；10 allocs |
+| 主机 A | 1 | 24.9 µs/op；13,136 B；6 allocs | 149.1 ns/op；0 B；0 allocs | 7.51 µs/op；232 B；10 allocs | 69.4 µs/op（55.3 MB/s）；25,680 B；10 allocs |
+| 主机 A | 4 | 18.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.29 µs/op；232 B；10 allocs | 53.6 µs/op（71.7 MB/s）；25,680 B；10 allocs |
+| 主机 B | 1 | 25.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.49 µs/op；232 B；10 allocs | 70.4 µs/op（54.6 MB/s）；25,680 B；10 allocs |
+| 主机 B | 4 | 18.5 µs/op；13,136 B；6 allocs | 153.5 ns/op；0 B；0 allocs | 7.31 µs/op；232 B；10 allocs | 53.3 µs/op（72.1 MB/s）；25,680 B；10 allocs |
 
 `GOMAXPROCS=4` 的各行仍是串行基准测量，不是四核汇总吞吐量。这些受控主机样本
 是当前修订的公开回归证据，不是容量上限或 SLA 承诺；确定生产限制前，请在部署
