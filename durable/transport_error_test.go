@@ -140,8 +140,11 @@ func TestReconnectClientRejectsInvalidWelcomeAndRestoresWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.outbound <- change
-	writeContext, cancel := context.WithCancel(context.Background())
-	cancel()
+	if err := connection.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	writeContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	err = client.writeLoop(writeContext, connection)
 	if err == nil {
 		t.Fatal("write loop succeeded against closed server")
@@ -150,7 +153,6 @@ func TestReconnectClientRejectsInvalidWelcomeAndRestoresWrite(t *testing.T) {
 	if err != nil || restored.Dot != change.Dot {
 		t.Fatalf("restored write = %+v err=%v", restored, err)
 	}
-	_ = connection.CloseNow()
 }
 
 func TestServerPeerWritesSequencedEvent(t *testing.T) {
