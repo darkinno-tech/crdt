@@ -371,6 +371,48 @@ func (m *Map) Get(key string) ([]byte, bool) {
 	return append([]byte(nil), entry.value...), true
 }
 
+// HasEntry reports whether m retains any metadata for key, including a delete
+// tombstone. It is intended for bounded wrappers that must distinguish a new
+// key from an idempotent replay without exposing the entry's tag or value.
+func (m *Map) HasEntry(key string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	_, ok := m.entries[key]
+	m.mu.RUnlock()
+	return ok
+}
+
+// EntryCount returns the total number of retained map entries, including
+// tombstones. It is useful for callers that impose their own retention budget.
+func (m *Map) EntryCount() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	count := len(m.entries)
+	m.mu.RUnlock()
+	return count
+}
+
+// EntryKeys returns every retained key, including delete tombstones, in
+// lexical order. It is for resource accounting; use Keys when only visible
+// application values are needed.
+func (m *Map) EntryKeys() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	keys := make([]string, 0, len(m.entries))
+	for key := range m.entries {
+		keys = append(keys, key)
+	}
+	m.mu.RUnlock()
+	sort.Strings(keys)
+	return keys
+}
+
 // Keys returns the visible keys in lexical order, which keeps callers from
 // accidentally depending on Go's randomized map iteration order.
 func (m *Map) Keys() []string {
@@ -507,6 +549,61 @@ func (d MapDelta) Merge(other MapDelta) (MapDelta, error) {
 		}
 	}
 	return MapDelta{entries: merged}, nil
+}
+
+// Keys returns all keys represented by d, including delete tombstones, in
+// lexical order. The returned slice is owned by the caller.
+func (d MapDelta) Keys() []string {
+	keys := make([]string, 0, len(d.entries))
+	for key := range d.entries {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ValidateValues validates every visible value in d without exposing its
+// private tags or allowing callers to mutate the delta. A nil validator is an
+// error so a wrapper cannot accidentally skip schema validation at a network
+// boundary.
+func (d MapDelta) ValidateValues(validate func(key string, value []byte) error) error {
+	if validate == nil {
+		return ErrInvalidDelta
+	}
+	if err := validateMapEntries(d.entries); err != nil {
+		return err
+	}
+	for key, entry := range d.entries {
+		if entry.present {
+			if err := validate(key, append([]byte(nil), entry.value...)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateValues validates every visible value in m without exposing its
+// private entries. The callback receives a copy and is called without m's
+// lock, so it may safely perform ordinary validation work.
+func (m *Map) ValidateValues(validate func(key string, value []byte) error) error {
+	if m == nil || validate == nil {
+		return ErrNilMap
+	}
+	m.mu.RLock()
+	values := make(map[string][]byte, len(m.entries))
+	for key, entry := range m.entries {
+		if entry.present {
+			values[key] = append([]byte(nil), entry.value...)
+		}
+	}
+	m.mu.RUnlock()
+	for key, value := range values {
+		if err := validate(key, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cloneSetEntries[T comparable](source map[T]setEntry[T]) map[T]setEntry[T] {
