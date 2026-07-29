@@ -2,8 +2,11 @@ package text
 
 import (
 	"bytes"
+	"sort"
+	"unicode/utf8"
 
 	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/clock"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/snapshot"
 )
@@ -18,6 +21,15 @@ type runNode struct {
 	item node
 }
 
+// rgaRunState is an immutable, point-in-time copy of the fields needed to
+// encode a complete run-v2 state. Slices cost substantially less than cloning
+// the node and tombstone maps, while preserving the short read-lock window
+// required by concurrent callers.
+type rgaRunState struct {
+	nodes      []runNode
+	tombstones []Position
+}
+
 // runChildKey groups potential run successors by their parent and replica. A
 // summary avoids allocating one slice per parent while preserving the exact
 // "one unused same-replica child" rule used by canonical run construction.
@@ -28,6 +40,11 @@ type runChildKey struct {
 
 type runChild struct {
 	id    Position
+	count int
+}
+
+type indexedRunChild struct {
+	index int
 	count int
 }
 
@@ -44,14 +61,11 @@ func (r *RGA) MarshalRunBinaryWithLimits(limits frame.DecoderLimits) ([]byte, er
 	if r == nil {
 		return nil, ErrNilText
 	}
-	r.mu.RLock()
-	if len(r.pending) > 0 {
-		r.mu.RUnlock()
-		return nil, ErrIncompleteState
+	state, _, err := r.captureRunState(false)
+	if err != nil {
+		return nil, err
 	}
-	nodes, tombstones := cloneNodes(r.nodes), cloneTombstones(r.tombstones)
-	r.mu.RUnlock()
-	return marshalRGARun(crdt.TypeIDRGARunState, nodes, tombstones, limits)
+	return marshalRGARunState(state, limits)
 }
 
 // MarshalRunBinary encodes a delta with compact same-replica parent chains.
@@ -77,7 +91,29 @@ func marshalRGARun(typeID uint64, nodes map[Position]node, tombstones map[Positi
 		return nil, frame.ErrFrameLimit
 	}
 	blocks := makeRunBlocks(nodes)
-	payloadSize, err := runPayloadSize(blocks, tombstones, limits)
+	tombIDs := sortedTombstoneIDs(tombstones)
+	return marshalRunBlocks(typeID, blocks, tombIDs, limits)
+}
+
+func marshalRGARunState(state rgaRunState, limits frame.DecoderLimits) ([]byte, error) {
+	if len(state.nodes) > limits.MaxElements || len(state.nodes) > limits.MaxTags || len(state.tombstones) > limits.MaxTags-len(state.nodes) {
+		return nil, frame.ErrFrameLimit
+	}
+	sort.Slice(state.nodes, func(i, j int) bool { return state.nodes[i].id.Compare(state.nodes[j].id) < 0 })
+	sort.Slice(state.tombstones, func(i, j int) bool { return state.tombstones[i].Compare(state.tombstones[j]) < 0 })
+	linear, err := validateCompleteRunState(state)
+	if err != nil {
+		return nil, err
+	}
+	blocks := makeRunBlocksFromSortedItems(state.nodes)
+	if linear {
+		blocks = [][]runNode{state.nodes}
+	}
+	return marshalRunBlocks(crdt.TypeIDRGARunState, blocks, state.tombstones, limits)
+}
+
+func marshalRunBlocks(typeID uint64, blocks [][]runNode, tombIDs []Position, limits frame.DecoderLimits) ([]byte, error) {
+	payloadSize, err := runPayloadSizeWithTombstoneIDs(blocks, tombIDs, limits)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +141,6 @@ func marshalRGARun(typeID uint64, nodes map[Position]node, tombstones map[Positi
 				output = frame.AppendUvarint(output, uint64(item.item.rune))
 			}
 		}
-		tombIDs := sortedTombstoneIDs(tombstones)
 		output = frame.AppendUvarint(output, uint64(len(tombIDs)))
 		for _, id := range tombIDs {
 			output = frame.AppendTag(output, id)
@@ -115,6 +150,125 @@ func marshalRGARun(typeID uint64, nodes map[Position]node, tombstones map[Positi
 		}
 		return nil
 	})
+}
+
+// captureRunState snapshots complete state into compact slices while holding
+// r.mu only for the copy. Encoding, sorting, and frame allocation happen
+// after the read lock is released, so writers retain the prior contention
+// behavior without the map-clone allocation cost.
+func (r *RGA) captureRunState(withClock bool) (rgaRunState, clock.State, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.pending) > 0 {
+		return rgaRunState{}, clock.State{}, ErrIncompleteState
+	}
+	state := rgaRunState{
+		nodes:      make([]runNode, 0, len(r.nodes)),
+		tombstones: make([]Position, 0, len(r.tombstones)),
+	}
+	for id, item := range r.nodes {
+		state.nodes = append(state.nodes, runNode{id: id, item: item})
+	}
+	for id := range r.tombstones {
+		state.tombstones = append(state.tombstones, id)
+	}
+	if withClock {
+		if r.clock == nil {
+			return rgaRunState{}, clock.State{}, ErrNilText
+		}
+		return state, r.clock.Snapshot(), nil
+	}
+	return state, clock.State{}, nil
+}
+
+// validateCompleteRunState keeps the same rejection behavior as map-backed
+// state encoding after capture has released r.mu. A sorted linear run proves
+// parent completeness in one pass; the uncommon branching case uses binary
+// search instead of rebuilding a node map.
+func validateCompleteRunState(state rgaRunState) (bool, error) {
+	linear := len(state.nodes) > 0
+	var replicaID string
+	for index, item := range state.nodes {
+		if !item.id.Valid() || !utf8.ValidRune(item.item.rune) || (item.item.parent != (Position{}) && !item.item.parent.Valid()) || item.id == item.item.parent || (index > 0 && state.nodes[index-1].id == item.id) {
+			return false, ErrInvalidDelta
+		}
+		if index == 0 {
+			replicaID = item.id.ReplicaID
+			if item.item.parent.Valid() {
+				linear = false
+			}
+			continue
+		}
+		if item.id.ReplicaID != replicaID || item.item.parent != state.nodes[index-1].id {
+			linear = false
+		}
+	}
+	for _, id := range state.tombstones {
+		if !id.Valid() {
+			return false, ErrInvalidDelta
+		}
+	}
+	if linear {
+		return true, nil
+	}
+	for _, item := range state.nodes {
+		if item.item.parent.Valid() && !containsSortedRunNode(state.nodes, item.item.parent) {
+			return false, ErrIncompleteState
+		}
+	}
+	if !acyclicSortedRunNodes(state.nodes) {
+		return false, ErrInvalidDelta
+	}
+	return false, nil
+}
+
+func containsSortedRunNode(items []runNode, id Position) bool {
+	index := sort.Search(len(items), func(index int) bool { return items[index].id.Compare(id) >= 0 })
+	return index < len(items) && items[index].id == id
+}
+
+func acyclicSortedRunNodes(items []runNode) bool {
+	const (
+		unseen uint8 = iota
+		visiting
+		complete
+	)
+	state := make([]uint8, len(items))
+	path := make([]int, 0)
+	for start := range items {
+		if state[start] != unseen {
+			continue
+		}
+		path = path[:0]
+		current := start
+		for {
+			switch state[current] {
+			case visiting:
+				return false
+			case complete:
+				for _, index := range path {
+					state[index] = complete
+				}
+				goto next
+			}
+			state[current] = visiting
+			path = append(path, current)
+			parent := items[current].item.parent
+			if !parent.Valid() {
+				for _, index := range path {
+					state[index] = complete
+				}
+				goto next
+			}
+			nextIndex := sort.Search(len(items), func(index int) bool { return items[index].id.Compare(parent) >= 0 })
+			if nextIndex >= len(items) || items[nextIndex].id != parent {
+				return false
+			}
+			current = nextIndex
+		}
+	next:
+	}
+	return true
 }
 
 func appendRunNode(output []byte, item runNode) []byte {
@@ -129,6 +283,10 @@ func appendRunNode(output []byte, item runNode) []byte {
 }
 
 func runPayloadSize(blocks [][]runNode, tombstones map[Position]struct{}, limits frame.DecoderLimits) (int, error) {
+	return runPayloadSizeWithTombstoneIDs(blocks, sortedTombstoneIDs(tombstones), limits)
+}
+
+func runPayloadSizeWithTombstoneIDs(blocks [][]runNode, tombIDs []Position, limits frame.DecoderLimits) (int, error) {
 	size := frame.UvarintSize(uint64(len(blocks)))
 	for _, block := range blocks {
 		if len(block) == 1 {
@@ -167,12 +325,12 @@ func runPayloadSize(blocks [][]runNode, tombstones map[Position]struct{}, limits
 		}
 		size += 1 + additional
 	}
-	additional := frame.UvarintSize(uint64(len(tombstones)))
+	additional := frame.UvarintSize(uint64(len(tombIDs)))
 	if additional > limits.MaxPayload-size {
 		return 0, frame.ErrFrameLimit
 	}
 	size += additional
-	for _, id := range sortedTombstoneIDs(tombstones) {
+	for _, id := range tombIDs {
 		if err := addWireTagSize(&size, id, limits); err != nil {
 			return 0, err
 		}
@@ -244,6 +402,59 @@ func makeRunBlocksFromSortedIDs(ids []Position, nodes map[Position]node) [][]run
 			used[next.id] = struct{}{}
 		}
 		blocks = append(blocks, items[start:])
+	}
+	return blocks
+}
+
+// makeRunBlocksFromSortedItems preserves the canonical block construction
+// used for map-backed deltas without rebuilding a map that was already copied
+// into a state snapshot. The common local-insert shape simply reuses items as
+// its one chain.
+func makeRunBlocksFromSortedItems(items []runNode) [][]runNode {
+	if len(items) == 0 {
+		return nil
+	}
+	replicaID := items[0].id.ReplicaID
+	linear := true
+	for index, item := range items {
+		if item.id.ReplicaID != replicaID || (index > 0 && item.item.parent != items[index-1].id) {
+			linear = false
+			break
+		}
+	}
+	if linear {
+		return [][]runNode{items}
+	}
+	children := make(map[runChildKey]indexedRunChild, len(items))
+	for index, item := range items {
+		key := runChildKey{parent: item.item.parent, replicaID: item.id.ReplicaID}
+		child := children[key]
+		child.count++
+		if child.count == 1 {
+			child.index = index
+		}
+		children[key] = child
+	}
+	used := make([]bool, len(items))
+	blocks := make([][]runNode, 0)
+	ordered := make([]runNode, 0, len(items))
+	for index, first := range items {
+		if used[index] {
+			continue
+		}
+		start := len(ordered)
+		currentIndex := index
+		for !used[currentIndex] {
+			current := items[currentIndex]
+			ordered = append(ordered, current)
+			used[currentIndex] = true
+			next, ok := children[runChildKey{parent: current.id, replicaID: first.id.ReplicaID}]
+			if !ok || next.count != 1 || used[next.index] {
+				break
+			}
+			currentIndex = next.index
+		}
+		blocks = append(blocks, ordered[start:])
 	}
 	return blocks
 }
@@ -432,7 +643,7 @@ func readRunNode(payload []byte, position int, limits frame.DecoderLimits) (Posi
 	return id, node{parent: parent, rune: rune(runeValue)}, next, true
 }
 
-// SnapshotRunCurrentState returns an HLC-backed, validated run-v2 snapshot.
+// SnapshotRunCurrentState returns an HLC-backed run-v2 snapshot.
 func (r *RGA) SnapshotRunCurrentState() (snapshot.Snapshot, error) {
 	return r.SnapshotRunCurrentStateWithLimits(frame.DefaultLimits())
 }
@@ -443,19 +654,33 @@ func (r *RGA) SnapshotRunCurrentStateWithLimits(limits frame.DecoderLimits) (sna
 	if r == nil || r.clock == nil {
 		return snapshot.Snapshot{}, ErrNilText
 	}
-	r.mu.RLock()
-	if len(r.pending) > 0 {
-		r.mu.RUnlock()
-		return snapshot.Snapshot{}, ErrIncompleteState
-	}
-	nodes, tombstones, clockState := cloneNodes(r.nodes), cloneTombstones(r.tombstones), r.clock.Snapshot()
-	frontier := frontierForState(nodes, tombstones)
-	r.mu.RUnlock()
-	state, err := marshalRGARun(crdt.TypeIDRGARunState, nodes, tombstones, limits)
+	captured, clockState, err := r.captureRunState(true)
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}
-	return snapshot.NewValidatedWithClockState(state, frontier, clockState, validateRGARunState)
+	state, err := marshalRGARunState(captured, limits)
+	if err != nil {
+		return snapshot.Snapshot{}, err
+	}
+	// state was just created from a complete, captured RGA and checked by
+	// marshalRGARunState. Do not use this constructor for externally supplied
+	// state: recovery still decodes and validates type-specific bytes before
+	// mutation in NewFromSnapshotWithOptions.
+	return snapshot.NewWithClockState(state, frontierForRunState(captured), clockState)
+}
+
+func frontierForRunState(state rgaRunState) map[string]crdt.Tag {
+	frontier := make(map[string]crdt.Tag)
+	for _, item := range state.nodes {
+		recordFrontier(frontier, item.id)
+		if item.item.parent.Valid() {
+			recordFrontier(frontier, item.item.parent)
+		}
+	}
+	for _, id := range state.tombstones {
+		recordFrontier(frontier, id)
+	}
+	return frontier
 }
 
 func validateRGARunState(data []byte) error {

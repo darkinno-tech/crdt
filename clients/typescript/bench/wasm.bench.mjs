@@ -16,17 +16,18 @@ void Promise.resolve(go.run(instance));
 const api = await waitForRuntime();
 benchmark("single_rune", "协", 300);
 benchmark("bulk_4096_runes", "协".repeat(4096), 30);
+benchmark("snapshot_recovery_4096_runes", "协".repeat(4096), 20, runSnapshotRecoveryOnce);
 
-function benchmark(name, payload, iterations) {
+function benchmark(name, payload, iterations, operation = runOnce) {
   for (let index = 0; index < 5; index += 1) {
-    runOnce(payload);
+    operation(payload);
   }
   for (let sample = 0; sample < 5; sample += 1) {
     const beforeHeap = process.memoryUsage().heapUsed;
     const started = performance.now();
     let frameBytes = 0;
     for (let index = 0; index < iterations; index += 1) {
-      frameBytes = runOnce(payload);
+      frameBytes = operation(payload);
     }
     const elapsedMs = performance.now() - started;
     const afterHeap = process.memoryUsage().heapUsed;
@@ -34,6 +35,22 @@ function benchmark(name, payload, iterations) {
       `workload=${name} sample=${sample + 1} frame_bytes=${frameBytes} elapsed_ms=${elapsedMs.toFixed(2)} ms_per_insert_apply=${(elapsedMs / iterations).toFixed(3)} heap_delta_b=${afterHeap - beforeHeap}`,
     );
   }
+}
+
+function runSnapshotRecoveryOnce(payload) {
+  const source = handle(unwrap(api.create("bench-snapshot-source")));
+  unwrap(api.insert(source, 0, payload));
+  const saved = unwrap(api.snapshot(source));
+  const recovered = handle(unwrap(api.restore(saved)));
+  if (unwrap(api.text(recovered)) !== payload) {
+    throw new Error("Wasm snapshot recovery did not converge benchmark document");
+  }
+  unwrap(api.drop(source));
+  unwrap(api.drop(recovered));
+  if (!(saved.state instanceof Uint8Array)) {
+    throw new Error("Wasm snapshot did not return a Uint8Array state");
+  }
+  return saved.state.byteLength;
 }
 
 function runOnce(payload) {

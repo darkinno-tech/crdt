@@ -10,6 +10,8 @@ import (
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
 	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/snapshot"
+	"github.com/DarkInno/crdt/text"
 )
 
 func TestRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
@@ -22,6 +24,73 @@ func TestRuntimeRunV2ThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
 	testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t, DefaultRunRGAOptions(), RGAProtocol{
 		StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion,
 	})
+}
+
+// TestRuntimeRunV2InteroperatesWithNativeRGA proves the negotiated frame and
+// atomic snapshot contracts at the Go-to-browser-runtime boundary. The Node
+// Wasm artifact test exercises the same runtime from JavaScript separately.
+func TestRuntimeRunV2InteroperatesWithNativeRGA(t *testing.T) {
+	options := DefaultRunRGAOptions()
+	runtime, err := NewRuntime(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wasmHandle := mustCreate(t, runtime, "wasm")
+	native, err := text.NewWithOptions("native", options.Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nativeDelta, err := native.InsertRunBinaryWithLimits(0, "native", options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, runtime, wasmHandle, nativeDelta)
+	wasmDelta := mustInsert(t, runtime, wasmHandle, len([]rune(mustText(t, runtime, wasmHandle))), " + wasm")
+	decoded, err := text.UnmarshalRGARunDeltaWithLimits(wasmDelta, options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := native.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mustText(t, runtime, wasmHandle), native.String(); got != want {
+		t.Fatalf("native/runtime text = %q, want %q", got, want)
+	}
+
+	nativeSnapshot, err := native.SnapshotRunCurrentStateWithLimits(options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockState, ok := nativeSnapshot.ClockState()
+	if !ok {
+		t.Fatal("native run snapshot is missing clock state")
+	}
+	recovered, err := runtime.Restore(RGASnapshot{
+		State: nativeSnapshot.Bytes(), Frontier: nativeSnapshot.Frontier(), Clock: clockState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mustText(t, runtime, recovered), native.String(); got != want {
+		t.Fatalf("runtime restored native snapshot = %q, want %q", got, want)
+	}
+
+	runtimeSnapshot, err := runtime.Snapshot(wasmHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := snapshot.NewWithClockState(runtimeSnapshot.State, runtimeSnapshot.Frontier, runtimeSnapshot.Clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeRecovered, err := text.NewFromSnapshotWithOptions(saved, options.Text, options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := nativeRecovered.String(), native.String(); got != want {
+		t.Fatalf("native restored runtime snapshot = %q, want %q", got, want)
+	}
 }
 
 func testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T, options RGAOptions, wantProtocol RGAProtocol) {

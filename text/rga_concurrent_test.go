@@ -74,6 +74,14 @@ func TestRGAConcurrentMutationReadAndRecovery(t *testing.T) {
 				errs <- err
 				return
 			}
+			if _, err := value.MarshalRunBinary(); err != nil {
+				errs <- err
+				return
+			}
+			if _, err := value.SnapshotRunCurrentState(); err != nil {
+				errs <- err
+				return
+			}
 			if err := value.ApplyDelta(seed); err != nil {
 				errs <- err
 				return
