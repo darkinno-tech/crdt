@@ -124,6 +124,16 @@ func (m *Map) UnmarshalBinaryWithLimits(data []byte, limits frame.Limits) error 
 	if err != nil {
 		return err
 	}
+	if len(entries) > m.options.MaxEntries {
+		return ErrResourceLimit
+	}
+	if err := validateMapEntriesWithOptions(entries, m.options); err != nil {
+		return err
+	}
+	tags, err := mapTagIndex(entries)
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if tag, ok := greatestMapTag(entries); ok {
@@ -132,6 +142,7 @@ func (m *Map) UnmarshalBinaryWithLimits(data []byte, limits frame.Limits) error 
 		}
 	}
 	m.entries = entries
+	m.tags = tags
 	return nil
 }
 
@@ -178,14 +189,23 @@ func (m *Map) SnapshotCurrentState() (snapshot.Snapshot, error) {
 // NewMapFromSnapshot restores a map and its HLC state. Snapshots without a
 // clock state are rejected because they cannot safely reuse a replica ID.
 func NewMapFromSnapshot(saved snapshot.Snapshot) (*Map, error) {
+	return NewMapFromSnapshotWithOptions(saved, DefaultMapOptions())
+}
+
+// NewMapFromSnapshotWithOptions restores a map and its HLC state while
+// retaining the receiving replication group's local resource limits.
+func NewMapFromSnapshotWithOptions(saved snapshot.Snapshot, options MapOptions) (*Map, error) {
 	if saved.TypeID != crdt.TypeIDLWWMapState {
 		return nil, ErrInvalidSnapshot
+	}
+	if !options.valid() {
+		return nil, ErrResourceLimit
 	}
 	clockState, ok := saved.ClockState()
 	if !ok {
 		return nil, ErrInvalidSnapshot
 	}
-	m, err := NewMapFromClock(clockState)
+	m, err := NewMapFromClockWithOptions(clockState, options)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +272,9 @@ func unmarshalMap(data []byte, expectedType uint64, limits frame.Limits) (map[st
 		previous = key
 	}
 	if position != len(decoded.Payload) {
+		return nil, frame.ErrInvalidFrame
+	}
+	if err := validateMapEntries(entries); err != nil {
 		return nil, frame.ErrInvalidFrame
 	}
 	return entries, nil

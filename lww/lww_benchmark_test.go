@@ -3,6 +3,8 @@ package lww
 import (
 	"strconv"
 	"testing"
+
+	"github.com/DarkInno/crdt"
 )
 
 func BenchmarkMapMergeTenThousandKeys(b *testing.B) {
@@ -148,4 +150,68 @@ func BenchmarkSetMarshalTenThousandElements(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// BenchmarkMapCreateAndCompactTombstones1024 measures the complete LWW map
+// tombstone lifecycle rather than hiding creation outside the timed region.
+func BenchmarkMapCreateAndCompactTombstones1024(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		value, tags := benchmarkMapTombstones(b, 1024)
+		removed, err := value.CompactTombstones(tags)
+		if err != nil || removed != len(tags) {
+			b.Fatalf("CompactTombstones() = %d, %v; want %d, nil", removed, err, len(tags))
+		}
+	}
+}
+
+// BenchmarkSetCreateAndCompactTombstones1024 measures the complete LWW set
+// tombstone lifecycle with the same retained-entry count as the map benchmark.
+func BenchmarkSetCreateAndCompactTombstones1024(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		value, tags := benchmarkSetTombstones(b, 1024)
+		removed, err := value.CompactTombstones(tags)
+		if err != nil || removed != len(tags) {
+			b.Fatalf("CompactTombstones() = %d, %v; want %d, nil", removed, err, len(tags))
+		}
+	}
+}
+
+func benchmarkMapTombstones(b testing.TB, count int) (*Map, []crdt.Tag) {
+	b.Helper()
+	value, err := NewMap("benchmark")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := 0; index < count; index++ {
+		key := "key-" + strconv.Itoa(index)
+		if err := value.Set(key, []byte("value")); err != nil {
+			b.Fatal(err)
+		}
+		if err := value.Delete(key); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return value, value.TombstoneTags()
+}
+
+func benchmarkSetTombstones(b testing.TB, count int) (*Set[string], []crdt.Tag) {
+	b.Helper()
+	value, err := NewSet[string]("benchmark")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := 0; index < count; index++ {
+		element := "element-" + strconv.Itoa(index)
+		if err := value.Add(element); err != nil {
+			b.Fatal(err)
+		}
+		if err := value.Remove(element); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return value, value.TombstoneTags()
 }
