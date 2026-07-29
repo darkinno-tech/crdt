@@ -66,6 +66,35 @@ func BenchmarkCoordinatorAcknowledgeAndCompact(b *testing.B) {
 	}
 }
 
+// BenchmarkCoordinatorPruneAcknowledgements measures the normal checkpoint
+// path where one durable compaction drains every receipt tracked by a
+// coordinator. Setup is stopped so ns/op covers only the prune operation.
+func BenchmarkCoordinatorPruneAcknowledgements(b *testing.B) {
+	for _, workload := range []struct {
+		name       string
+		members    int
+		tombstones int
+	}{
+		{name: "members_3_tombstones_256", members: 3, tombstones: 256},
+		{name: "members_8_tombstones_1024", members: 8, tombstones: 1024},
+	} {
+		b.Run(workload.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for index := 0; index < b.N; index++ {
+				b.StopTimer()
+				coordinator, tags := benchmarkCoordinator(b, workload.members, workload.tombstones)
+				membership := coordinator.Membership()
+				b.StartTimer()
+				removed, err := coordinator.PruneAcknowledgements(membership.GroupID, membership.Epoch, tags)
+				if err != nil || removed != workload.members*workload.tombstones {
+					b.Fatalf("PruneAcknowledgements() = %d, %v; want %d, nil", removed, err, workload.members*workload.tombstones)
+				}
+				b.StopTimer()
+			}
+		})
+	}
+}
+
 func benchmarkCoordinator(b *testing.B, memberCount, tombstoneCount int) (*Coordinator[string], []crdt.Tag) {
 	b.Helper()
 	members := make([]string, memberCount)

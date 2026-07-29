@@ -54,6 +54,14 @@ type deltaPlan struct {
 	pendingBytes int
 }
 
+// eligibleCompactionPlan stores a child-before-parent deletion order and the
+// membership index needed to rebuild affected child slices without one map per
+// tombstone.
+type eligibleCompactionPlan struct {
+	tags             []Position
+	candidateIndexes map[Position]int
+}
+
 // Delta is a joinable partial RGA state. Nodes and tombstones are deliberately
 // opaque so a malformed delta cannot be assembled by direct field mutation.
 type Delta struct {
@@ -442,6 +450,137 @@ func (r *RGA) CompactTombstones(tags []Position) (int, error) {
 		r.version++
 	}
 	return len(compact), nil
+}
+
+// CompactEligibleTombstones makes best-effort structural progress through an
+// exact-acknowledged batch. Unlike CompactTombstones, a non-leaf in tags does
+// not block unrelated leaves. Deleted descendants are removed before their
+// deleted ancestors, so a fully deleted chain can compact in one call.
+//
+// It remains deliberately fail-closed for unresolved state: any pending node
+// returns ErrUnsafeCompaction without changing the RGA. Callers still need an
+// authenticated exact-acknowledgement epoch, a durable post-compaction
+// checkpoint, and retirement of old deltas before using this method.
+func (r *RGA) CompactEligibleTombstones(tags []Position) (int, error) {
+	if r == nil {
+		return 0, ErrNilText
+	}
+	for _, tag := range tags {
+		if !tag.Valid() {
+			return 0, ErrUnsafeCompaction
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.pending) > 0 {
+		return 0, ErrUnsafeCompaction
+	}
+	plan := r.eligibleCompactionPlanLocked(tags)
+	if len(plan.tags) == 0 {
+		return 0, nil
+	}
+	if !r.applyEligibleCompactionPlanLocked(plan) {
+		return 0, ErrUnsafeCompaction
+	}
+	r.version++
+	return len(plan.tags), nil
+}
+
+// eligibleCompactionPlanLocked returns a child-before-parent removal order.
+// The caller must hold r.mu and have rejected unresolved state.
+func (r *RGA) eligibleCompactionPlanLocked(tags []Position) eligibleCompactionPlan {
+	candidateIndexes := make(map[Position]int, len(tags))
+	candidates := make([]Position, 0, len(tags))
+	for _, tag := range tags {
+		if _, duplicate := candidateIndexes[tag]; duplicate || !r.eligibleCompactionCandidateLocked(tag) {
+			continue
+		}
+		candidateIndexes[tag] = len(candidates)
+		candidates = append(candidates, tag)
+	}
+	if len(candidates) == 0 {
+		return eligibleCompactionPlan{}
+	}
+	sortPositions(candidates)
+	for index, tag := range candidates {
+		candidateIndexes[tag] = index
+	}
+
+	remainingChildren := make([]int, len(candidates))
+	ready := make([]int, 0, len(candidates))
+	for index, tag := range candidates {
+		remainingChildren[index] = len(r.children[tag])
+		if remainingChildren[index] == 0 {
+			ready = append(ready, index)
+		}
+	}
+
+	compact := make([]Position, 0, len(candidates))
+	for len(ready) > 0 {
+		index := ready[0]
+		ready = ready[1:]
+		tag := candidates[index]
+		compact = append(compact, tag)
+		parent := r.nodes[tag].parent
+		parentIndex, selectedParent := candidateIndexes[parent]
+		if !selectedParent {
+			continue
+		}
+		remainingChildren[parentIndex]--
+		if remainingChildren[parentIndex] == 0 {
+			ready = append(ready, parentIndex)
+		}
+	}
+	return eligibleCompactionPlan{tags: compact, candidateIndexes: candidateIndexes}
+}
+
+func (r *RGA) eligibleCompactionCandidateLocked(tag Position) bool {
+	if _, tombstoned := r.tombstones[tag]; !tombstoned {
+		return false
+	}
+	if _, exists := r.nodes[tag]; !exists || len(r.waitingByParent[tag]) > 0 {
+		return false
+	}
+	return r.sequence.entries[tag] != nil && r.sequence.exits[tag] != nil
+}
+
+// applyEligibleCompactionPlanLocked removes a plan made by
+// eligibleCompactionPlanLocked. It batches child-slice filtering so a wide
+// sibling set is compacted in linear rather than repeated-shift time.
+func (r *RGA) applyEligibleCompactionPlanLocked(plan eligibleCompactionPlan) bool {
+	removed := make([]bool, len(plan.candidateIndexes))
+	affectedParents := make(map[Position]struct{}, len(plan.tags))
+	for _, tag := range plan.tags {
+		item, exists := r.nodes[tag]
+		if !exists {
+			return false
+		}
+		removed[plan.candidateIndexes[tag]] = true
+		affectedParents[item.parent] = struct{}{}
+	}
+	for _, tag := range plan.tags {
+		if !r.sequence.removeLeaf(tag) {
+			return false
+		}
+		delete(r.nodes, tag)
+		delete(r.tombstones, tag)
+	}
+	for parent := range affectedParents {
+		siblings := r.children[parent]
+		retained := siblings[:0]
+		for _, sibling := range siblings {
+			index, selected := plan.candidateIndexes[sibling]
+			if !selected || !removed[index] {
+				retained = append(retained, sibling)
+			}
+		}
+		if len(retained) == 0 {
+			delete(r.children, parent)
+			continue
+		}
+		r.children[parent] = retained
+	}
+	return true
 }
 
 func (d Delta) Merge(other Delta) (Delta, error) {

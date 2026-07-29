@@ -1,6 +1,7 @@
 package text
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -112,6 +113,68 @@ func BenchmarkRGAAppendToIndexedDocument(b *testing.B) {
 	}
 }
 
+// BenchmarkRGACompactEligibleTombstones models completed document deletions.
+// Setup time is stopped so ns/op isolates structural collection after an
+// external coordinator has already proved exact acknowledgement. Go's
+// benchmark allocation accounting still includes construction of fresh mutable
+// state for each iteration.
+func BenchmarkRGACompactEligibleTombstones(b *testing.B) {
+	for _, workload := range []struct {
+		name  string
+		build func(testing.TB, int) (*RGA, []Position)
+	}{
+		{name: "chain", build: benchmarkTombstonedRGAChain},
+		{name: "wide", build: benchmarkTombstonedRGAWide},
+	} {
+		for _, tombstoneCount := range []int{128, 1024} {
+			b.Run(workload.name+"_"+strconv.Itoa(tombstoneCount), func(b *testing.B) {
+				b.ReportAllocs()
+				for index := 0; index < b.N; index++ {
+					b.StopTimer()
+					value, tags := workload.build(b, tombstoneCount)
+					b.StartTimer()
+					removed, err := value.CompactEligibleTombstones(tags)
+					if err != nil || removed != tombstoneCount {
+						b.Fatalf("CompactEligibleTombstones() = %d, %v; want %d, nil", removed, err, tombstoneCount)
+					}
+					b.StopTimer()
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkRGACompactTombstonesOneLeafAtATime is the conservative fallback
+// applications previously needed for a fully deleted chain or wide sibling
+// set: submit one known leaf at a time, from the tail of the tag order.
+func BenchmarkRGACompactTombstonesOneLeafAtATime(b *testing.B) {
+	for _, workload := range []struct {
+		name  string
+		build func(testing.TB, int) (*RGA, []Position)
+	}{
+		{name: "chain", build: benchmarkTombstonedRGAChain},
+		{name: "wide", build: benchmarkTombstonedRGAWide},
+	} {
+		for _, tombstoneCount := range []int{128, 1024} {
+			b.Run(workload.name+"_"+strconv.Itoa(tombstoneCount), func(b *testing.B) {
+				b.ReportAllocs()
+				for index := 0; index < b.N; index++ {
+					b.StopTimer()
+					value, tags := workload.build(b, tombstoneCount)
+					b.StartTimer()
+					for tagIndex := len(tags) - 1; tagIndex >= 0; tagIndex-- {
+						removed, err := value.CompactTombstones([]Position{tags[tagIndex]})
+						if err != nil || removed != 1 {
+							b.Fatalf("CompactTombstones(%d) = %d, %v; want 1, nil", tagIndex, removed, err)
+						}
+					}
+					b.StopTimer()
+				}
+			})
+		}
+	}
+}
+
 func benchmarkLinearRGADelta(b testing.TB, count int) Delta {
 	b.Helper()
 	nodes := make(map[Position]node, count)
@@ -122,4 +185,36 @@ func benchmarkLinearRGADelta(b testing.TB, count int) Delta {
 		parent = id
 	}
 	return Delta{nodes: nodes, tombstones: make(map[Position]struct{})}
+}
+
+func benchmarkTombstonedRGAChain(b testing.TB, count int) (*RGA, []Position) {
+	b.Helper()
+	value, err := New("writer")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := value.Insert(0, strings.Repeat("a", count)); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := value.Delete(0, count); err != nil {
+		b.Fatal(err)
+	}
+	return value, value.TombstoneTags()
+}
+
+func benchmarkTombstonedRGAWide(b testing.TB, count int) (*RGA, []Position) {
+	b.Helper()
+	value, err := New("writer")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := 0; index < count; index++ {
+		if _, err := value.Insert(0, "a"); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if _, err := value.Delete(0, count); err != nil {
+		b.Fatal(err)
+	}
+	return value, value.TombstoneTags()
 }
