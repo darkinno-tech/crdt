@@ -102,7 +102,7 @@ func replicateText(policy crdt.ProtocolPolicy) (string, error) {
 	// The application authenticates this immutable manifest during connection
 	// setup. The replica package then keeps each actor's delivery frontier
 	// contiguous, rather than allowing a later change to imply earlier receipt.
-	manifest, err := replica.NewManifest("field-note", "example.com/field-note/v1", 1, replica.Protocol{
+	builder, err := replica.NewSessionBuilder("field-note", "example.com/field-note/v1", 1, replica.Protocol{
 		StateID:          crdt.TypeIDRGAState,
 		DeltaID:          crdt.TypeIDRGADelta,
 		SemanticsVersion: 1,
@@ -126,11 +126,11 @@ func replicateText(policy crdt.ProtocolPolicy) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	first, err := newTextChange(manifest, replica.Dot{Actor: "editor-a", Counter: 1}, firstDelta, policy)
+	first, err := newTextChange(builder, replica.Dot{Actor: "editor-a", Counter: 1}, firstDelta)
 	if err != nil {
 		return "", err
 	}
-	second, err := newTextChange(manifest, replica.Dot{Actor: "editor-a", Counter: 2}, secondDelta, policy)
+	second, err := newTextChange(builder, replica.Dot{Actor: "editor-a", Counter: 2}, secondDelta)
 	if err != nil {
 		return "", err
 	}
@@ -138,13 +138,13 @@ func replicateText(policy crdt.ProtocolPolicy) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	inbox, err := replica.NewInboxWithPolicy(manifest, frontier, 2, 2*receiveLimits.MaxFrameBytes, func(encoded []byte) error {
+	inbox, err := builder.NewInbox(frontier, 2, 2*receiveLimits.MaxFrameBytes, func(encoded []byte) error {
 		received, err := text.UnmarshalRGADeltaWithLimits(encoded, receiveLimits)
 		if err != nil {
 			return err
 		}
 		return reader.ApplyDelta(received)
-	}, policy)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -168,12 +168,12 @@ func replicateText(policy crdt.ProtocolPolicy) (string, error) {
 	return reader.String(), nil
 }
 
-func newTextChange(manifest replica.Manifest, dot replica.Dot, delta text.Delta, policy crdt.ProtocolPolicy) (replica.Change, error) {
+func newTextChange(builder replica.SessionBuilder, dot replica.Dot, delta text.Delta) (replica.Change, error) {
 	encoded, err := delta.MarshalBinary()
 	if err != nil {
 		return replica.Change{}, err
 	}
-	return replica.NewChangeWithPolicy(manifest, dot, encoded, policy)
+	return builder.NewChange(dot, encoded)
 }
 
 func replicateAssetTree(policy crdt.ProtocolPolicy) (int, error) {
