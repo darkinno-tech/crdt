@@ -8,8 +8,8 @@
 | 发现人 | 用户 |
 | 严重程度 | P2-一般 |
 | 影响范围 | GitHub Releases 页面与版本说明可见性 |
-| 关联 Issue/PR | Release CI PR 待创建 |
-| 关联提交 | `18d2f63`（正式 tag 自动化） |
+| 关联 Issue/PR | 后续发布 CI 已合并 |
+| 关联提交 | `d99cd82`（在 tag job 内创建 Release） |
 
 ## 1. 问题描述
 
@@ -63,7 +63,7 @@
 - [x] 独立 Release 工作流仅处理外部 stable tag 与手动补发。
 - [x] 只接受稳定 SemVer，beta 预发布标签不创建正式 Release。
 - [x] 已存在 Release 时幂等退出，避免覆盖手工编辑的发布说明。
-- [ ] 发布验收同时核对 tag 指向和 Releases API 的发布条目。
+- [x] 在 main Test 运行 `30387664449` 中核对 `v1.0.5` 指向 `0b6c134`，且 Releases API 返回正式发布条目。
 
 ## 5. 经验总结
 

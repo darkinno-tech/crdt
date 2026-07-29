@@ -157,8 +157,9 @@ OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧�
 必须在同一 outbox/接收记录事务中，原子持久化本地 LWW-Map、RGA 或 OR-Tree 状态帧及其 HLC
 状态。复用同一 replica ID 时，只能通过 `SnapshotCurrentState()` 和各包的
 `NewFromSnapshot` 恢复；仅有状态字节不能证明下一枚本地标签唯一。RGA 和 OR-Tree
-为处理乱序投递而保留删除墓碑；它们的精确确认式回收尚未实现，因此实验性接入必须
-为墓碑设定预算并监控、继续保留它们，不能调用通用 GC。
+为处理乱序投递而保留删除墓碑。RGA 的 `CompactTombstones` 只能移除已删除的叶节点；应用
+必须先建立经过认证的精确确认纪元、持久化压缩后快照并淘汰旧 delta。LWW-Map 与 OR-Tree
+尚无精确确认式回收，因此实验性接入仍须为墓碑设定预算并监控、继续保留它们，不能调用通用 GC。
 
 ## 6. 恢复、反熵与墓碑
 

@@ -22,8 +22,8 @@ func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
 	}
 	if _, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
 		StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{}); !errors.Is(err, ErrInvalidManifest) {
-		t.Fatalf("disabled experimental protocol error = %v", err)
+	}, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
+		t.Fatalf("experimental RGA manifest error = %v", err)
 	}
 	if _, err := NewManifest("set", "example.com/set/v1", 1, Protocol{
 		StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: 1,
@@ -34,6 +34,49 @@ func TestManifestRejectsDisabledReservedAndMismatchedProtocols(t *testing.T) {
 	remote.Protocol.SemanticsVersion = 2
 	if err := stable.Compatible(remote); !errors.Is(err, ErrProtocolMismatch) {
 		t.Fatalf("semantic mismatch error = %v", err)
+	}
+}
+
+func TestExperimentalProtocolsRequireExplicitPolicyAtUseBoundaries(t *testing.T) {
+	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	manifest, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
+		StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: 2,
+	}, policy)
+	if err != nil {
+		t.Fatalf("NewManifest experimental: %v", err)
+	}
+	frontier, err := NewFrontier(nil)
+	if err != nil {
+		t.Fatalf("NewFrontier: %v", err)
+	}
+	delta := mustFrame(t, crdt.TypeIDRGARunDelta, "")
+	state := mustFrame(t, crdt.TypeIDRGARunState, "")
+	clockState := clock.State{ReplicaID: "local", WallTime: 1}
+	validator := func([]byte) error { return nil }
+
+	if _, err := NewChange(manifest, Dot{Actor: "writer", Counter: 1}, delta); !errors.Is(err, ErrInvalidChange) {
+		t.Fatalf("NewChange without explicit policy = %v, want ErrInvalidChange", err)
+	}
+	if _, err := NewChangeWithPolicy(manifest, Dot{Actor: "writer", Counter: 1}, delta, policy); err != nil {
+		t.Fatalf("NewChange with explicit policy: %v", err)
+	}
+	if _, err := NewInbox(manifest, frontier, 1, 1024, func([]byte) error { return nil }); !errors.Is(err, ErrInvalidChange) {
+		t.Fatalf("NewInbox without explicit policy = %v, want ErrInvalidChange", err)
+	}
+	if _, err := NewInboxWithPolicy(manifest, frontier, 1, 1024, func([]byte) error { return nil }, policy); err != nil {
+		t.Fatalf("NewInbox with explicit policy: %v", err)
+	}
+	if _, err := NewCheckpoint(manifest, state, frontier, clockState, validator); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("NewCheckpoint without explicit policy = %v, want ErrInvalidCheckpoint", err)
+	}
+	if _, err := NewCheckpointWithPolicy(manifest, state, frontier, clockState, validator, policy); err != nil {
+		t.Fatalf("NewCheckpoint with explicit policy: %v", err)
+	}
+	if _, err := NewSession(manifest); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("NewSession without explicit policy = %v, want ErrInvalidManifest", err)
+	}
+	if _, err := NewSessionWithPolicy(manifest, policy); err != nil {
+		t.Fatalf("NewSession with explicit policy: %v", err)
 	}
 }
 
