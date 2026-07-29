@@ -46,6 +46,39 @@ func BenchmarkDurableAppend(b *testing.B) {
 	}
 }
 
+// BenchmarkDurableAppendPrepared isolates Store.Append from concrete CRDT
+// mutation and change construction while retaining the committed bbolt write.
+func BenchmarkDurableAppendPrepared(b *testing.B) {
+	manifest := durableBenchmarkManifest(b)
+	store, err := OpenStore(b.TempDir()+"/relay.db", StoreConfig{MaxEvents: uint64(b.N) + 1, MaxBytes: uint64(b.N+1) * 4096})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	state, err := counter.NewGCounter("writer")
+	if err != nil {
+		b.Fatal(err)
+	}
+	changes := make([]replica.Change, b.N)
+	for index := range changes {
+		delta, err := state.Increment(1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		changes[index], err = durableCounterChange(manifest, "writer", uint64(index+1), delta)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for _, change := range changes {
+		if _, err := store.Append(manifest.GroupID, change); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkDurableReplay measures a complete bounded replay of a 256-operation
 // suffix from a local durable store. It is not a WAN, TLS, or consumer-apply
 // benchmark.
