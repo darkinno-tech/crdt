@@ -11,6 +11,7 @@ import (
 	"github.com/DarkInno/crdt"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/lww"
+	"github.com/DarkInno/crdt/replica"
 	"github.com/DarkInno/crdt/text"
 	"github.com/DarkInno/crdt/tree"
 )
@@ -96,6 +97,17 @@ func replicateText(policy crdt.ProtocolPolicy) (string, error) {
 	if !policy.SupportsFrame(crdt.TypeIDRGADelta) {
 		return "", fmt.Errorf("RGA is not enabled by the replication policy")
 	}
+	// The application authenticates this immutable manifest during connection
+	// setup. The replica package then keeps each actor's delivery frontier
+	// contiguous, rather than allowing a later change to imply earlier receipt.
+	manifest, err := replica.NewManifest("field-note", "example.com/field-note/v1", 1, replica.Protocol{
+		StateID:          crdt.TypeIDRGAState,
+		DeltaID:          crdt.TypeIDRGADelta,
+		SemanticsVersion: 1,
+	}, policy)
+	if err != nil {
+		return "", err
+	}
 	writer, err := text.NewWithOptions("editor-a", textLimits)
 	if err != nil {
 		return "", err
@@ -104,25 +116,62 @@ func replicateText(policy crdt.ProtocolPolicy) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	delta, err := writer.Insert(0, "inspect pump")
+	firstDelta, err := writer.Insert(0, "inspect")
 	if err != nil {
 		return "", err
 	}
-	encoded, err := delta.MarshalBinary()
+	secondDelta, err := writer.Insert(7, " pump")
 	if err != nil {
 		return "", err
 	}
-	received, err := text.UnmarshalRGADeltaWithLimits(encoded, receiveLimits)
+	first, err := newTextChange(manifest, replica.Dot{Actor: "editor-a", Counter: 1}, firstDelta, policy)
 	if err != nil {
 		return "", err
 	}
-	if err := reader.ApplyDelta(received); err != nil {
+	second, err := newTextChange(manifest, replica.Dot{Actor: "editor-a", Counter: 2}, secondDelta, policy)
+	if err != nil {
 		return "", err
+	}
+	frontier, err := replica.NewFrontier(nil)
+	if err != nil {
+		return "", err
+	}
+	inbox, err := replica.NewInboxWithPolicy(manifest, frontier, 2, 2*receiveLimits.MaxFrameBytes, func(encoded []byte) error {
+		received, err := text.UnmarshalRGADeltaWithLimits(encoded, receiveLimits)
+		if err != nil {
+			return err
+		}
+		return reader.ApplyDelta(received)
+	}, policy)
+	if err != nil {
+		return "", err
+	}
+	delivery, err := inbox.Receive(second)
+	if err != nil {
+		return "", err
+	}
+	if !delivery.Buffered || len(delivery.Applied) != 0 {
+		return "", fmt.Errorf("later text change was not buffered")
+	}
+	delivery, err = inbox.Receive(first)
+	if err != nil {
+		return "", err
+	}
+	if delivery.Buffered || len(delivery.Applied) != 2 || inbox.Frontier().Counter("editor-a") != 2 {
+		return "", fmt.Errorf("text delivery frontier did not advance contiguously")
 	}
 	if reader.PendingCount() != 0 {
-		return "", fmt.Errorf("complete delta unexpectedly has pending dependencies")
+		return "", fmt.Errorf("delivered text unexpectedly has pending dependencies")
 	}
 	return reader.String(), nil
+}
+
+func newTextChange(manifest replica.Manifest, dot replica.Dot, delta text.Delta, policy crdt.ProtocolPolicy) (replica.Change, error) {
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		return replica.Change{}, err
+	}
+	return replica.NewChangeWithPolicy(manifest, dot, encoded, policy)
 }
 
 func replicateAssetTree(policy crdt.ProtocolPolicy) (int, error) {
