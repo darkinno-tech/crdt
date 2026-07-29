@@ -78,6 +78,153 @@ func TestRGABinaryStateDeltaAndSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRGAExplicitWireAndRecoveryLimits(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := source.Insert(0, "ab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := source.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if encoded, err := source.MarshalBinaryWithLimits(frame.DefaultLimits()); err != nil || string(encoded) != string(state) {
+		t.Fatalf("MarshalBinaryWithLimits() = %x, %v; want canonical state %x", encoded, err, state)
+	}
+	if encoded, err := delta.MarshalBinaryWithLimits(frame.DefaultLimits()); err != nil {
+		t.Fatalf("Delta.MarshalBinaryWithLimits() error = %v", err)
+	} else if _, err := UnmarshalRGADelta(encoded); err != nil {
+		t.Fatalf("bounded delta was not decodable: %v", err)
+	}
+	if encoded, clockState, err := source.MarshalBinaryWithClockStateAndLimits(frame.DefaultLimits()); err != nil || string(encoded) != string(state) || clockState != source.ClockState() {
+		t.Fatalf("MarshalBinaryWithClockStateAndLimits() = %x, %#v, %v", encoded, clockState, err)
+	}
+
+	tight := frame.DefaultLimits()
+	tight.MaxPayload = 1
+	if _, err := source.MarshalBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded state encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := delta.MarshalBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded delta encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := source.SnapshotCurrentStateWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded snapshot encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := source.MarshalRunBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded run state encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := delta.MarshalRunBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded run delta encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := source.SnapshotRunCurrentStateWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded run snapshot encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+
+	saved, err := source.SnapshotCurrentStateWithLimits(frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodeTight := frame.DefaultLimits()
+	decodeTight.MaxElements = 1
+	if _, err := NewFromSnapshotWithOptions(saved, DefaultOptions(), decodeTight); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("bounded snapshot decode error = %v, want %v", err, frame.ErrInvalidFrame)
+	}
+	receiveTight := DefaultOptions()
+	receiveTight.MaxNodes = 1
+	if _, err := NewFromSnapshotWithOptions(saved, receiveTight, frame.DefaultLimits()); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("bounded snapshot retention error = %v, want %v", err, ErrResourceLimit)
+	}
+
+	restored, err := NewFromSnapshotWithOptions(saved, DefaultOptions(), frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.String(); got != source.String() {
+		t.Fatalf("bounded snapshot recovery text = %q, want %q", got, source.String())
+	}
+
+	runSaved, err := source.SnapshotRunCurrentStateWithLimits(frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFromSnapshotWithOptions(runSaved, DefaultOptions(), decodeTight); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("bounded run snapshot decode error = %v, want %v", err, frame.ErrInvalidFrame)
+	}
+	runRestored, err := NewFromSnapshotWithOptions(runSaved, DefaultOptions(), frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runRestored.String(); got != source.String() {
+		t.Fatalf("bounded run snapshot recovery text = %q, want %q", got, source.String())
+	}
+}
+
+func TestRGAMutationWithLimitsRejectsBeforeDocumentMutation(t *testing.T) {
+	value, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tight := frame.DefaultLimits()
+	tight.MaxPayload = 1
+	if _, err := value.InsertWithLimits(0, "a", tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("InsertWithLimits() error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
+		t.Fatalf("rejected insert mutated document: text=%q state=%#v", got, value.State())
+	}
+	if _, err := value.Insert(0, "a"); err != nil {
+		t.Fatal(err)
+	}
+	before := value.String()
+	beforeTombstones := value.State().TombstoneCount
+	if _, err := value.DeleteWithLimits(0, 1, tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("DeleteWithLimits() error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != before || value.State().TombstoneCount != beforeTombstones {
+		t.Fatalf("rejected delete mutated document: text=%q state=%#v", got, value.State())
+	}
+}
+
+func TestRGARunMutationWithLimitsUsesRunFramesAndRejectsBeforeDocumentMutation(t *testing.T) {
+	value, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tight := frame.DefaultLimits()
+	tight.MaxPayload = 1
+	if _, err := value.InsertRunBinaryWithLimits(0, "a", tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("InsertRunBinaryWithLimits() error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
+		t.Fatalf("rejected run insert mutated document: text=%q state=%#v", got, value.State())
+	}
+
+	encoded, err := value.InsertRunBinaryWithLimits(0, "a", frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := frame.UnmarshalFrame(encoded, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TypeID != crdt.TypeIDRGARunDelta {
+		t.Fatalf("run insert type = %d, want %d", decoded.TypeID, crdt.TypeIDRGARunDelta)
+	}
+	before := value.String()
+	beforeTombstones := value.State().TombstoneCount
+	if _, err := value.DeleteRunBinaryWithLimits(0, 1, tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("DeleteRunBinaryWithLimits() error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != before || value.State().TombstoneCount != beforeTombstones {
+		t.Fatalf("rejected run delete mutated document: text=%q state=%#v", got, value.State())
+	}
+}
+
 func TestRGASnapshotRecoveryWitnessesSuppliedFrontier(t *testing.T) {
 	value, err := New("local")
 	if err != nil {

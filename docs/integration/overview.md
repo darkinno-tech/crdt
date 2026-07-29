@@ -207,9 +207,32 @@ The [attachment integration guide](attachment.md) and its
 [runnable example](../../examples/attachment-collaboration) provide the complete
 flow and limits checklist.
 
-For an application-owned opt-in WebSocket and HTTP/SSE live relay, see the
-[transport extension guide](extensions.md) and its
-[runnable provider example](../../examples/extensions-provider).
+### 5.2 Browser and JavaScript/WebView RGA clients
+
+`clients/typescript` keeps the cross-language boundary narrow: its TypeScript
+module validates the bounded common frame envelope, while the Go/Wasm RGA
+runtime calls the canonical decoder and merge engine. `make wasm` builds the
+default run-v2 artifact (state/delta TypeIDs 19/20, semantics version 2), which
+matches `crdt.DefaultRGAFrameType()`. `make wasm-test` verifies Go-to-client
+frames and a duplicated/reordered three-replica session; `make wasm-v1-test`
+separately verifies the legacy scalar-v1 artifact (TypeIDs 11/12).
+
+First authenticate one exact manifest/capability agreement, including the
+state/delta IDs and semantics version, then validate the application transport
+body limit before calling `document.applyDelta`. CRC-32C detects accidental
+corruption only. Persist the returned `{ state, clock, frontier }` as one
+atomic local record; restoring only state permits a reused replica ID to emit
+an unsafe HLC tag. Split an editor transaction larger than 64 KiB or 16,384
+runes before local insertion, and use a Worker for long documents.
+
+Each manifest binds exactly one RGA wire format. Do not connect a legacy v1
+artifact to a run-v2 group, or vice versa. A native client without a compatible
+Wasm runtime must implement and verify the normative [RGA run-v2 wire
+protocol](../protocol/rga-run-v2.md), including its canonical-vector suite,
+before it is admitted to a run-v2 replication group.
+
+For an application-owned WebSocket integration reference, see the [WebSocket
+provider guide](websocket-provider.md) and its [runnable example](../../examples/websocket-provider).
 
 ## 6. Recovery, anti-entropy, and tombstones
 
@@ -243,7 +266,7 @@ make test-integration
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
 | Business semantics | Product owners have accepted add-wins, grow-only G-Set and counter limits, and concurrent MV-Register value semantics. |
-| Experimental protocol agreement | LWW-Set/LWW-Map/RGA/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
+| Experimental protocol agreement | LWW-Set/LWW-Map/legacy RGA v1/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
 Passing `go test` proves the library and examples at this revision. It does not

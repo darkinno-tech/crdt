@@ -28,6 +28,8 @@ var (
 	ErrInvalidDelta     = errors.New("lww: invalid map delta")
 	ErrInvalidSnapshot  = errors.New("lww: invalid map snapshot")
 	ErrTagConflict      = errors.New("lww: conflicting values for one tag")
+	ErrResourceLimit    = errors.New("lww: resource limit exceeded")
+	ErrUnsafeCompaction = errors.New("lww: unsafe tombstone compaction")
 )
 
 type setEntry[T comparable] struct {
@@ -49,31 +51,68 @@ type ElementCodec[T comparable] interface {
 // callers cannot alter a delta after handing it to replication code.
 type SetDelta[T comparable] struct{ entries map[T]setEntry[T] }
 
+// SetOptions bounds retained LWW-Set entries, including delete tombstones.
+// Applications accepting untrusted or long-lived replication streams should
+// select a limit for each replication group instead of relying on process-wide
+// memory availability.
+type SetOptions struct {
+	MaxEntries int
+}
+
+// DefaultSetOptions returns a conservative default aligned with the default
+// framed element limit.
+func DefaultSetOptions() SetOptions { return SetOptions{MaxEntries: 1 << 20} }
+
+func (o SetOptions) valid() bool { return o.MaxEntries > 0 }
+
 // Set is an LWW element set. Concurrent add/remove operations are resolved by
 // the canonical Tag ordering, rather than by an implicit wall-clock tie rule.
 type Set[T comparable] struct {
 	mu        sync.RWMutex
 	replicaID string
 	clock     *clock.HLC
+	options   SetOptions
 	entries   map[T]setEntry[T]
+	tags      map[crdt.Tag]T
 }
 
 var _ crdt.CRDT[*Set[string]] = (*Set[string])(nil)
 var _ crdt.DeltaCapable[*Set[string], SetDelta[string]] = (*Set[string])(nil)
 
 func NewSet[T comparable](replicaID string) (*Set[T], error) {
-	return NewSetFromClock[T](clock.State{ReplicaID: replicaID})
+	return NewSetWithOptions[T](replicaID, DefaultSetOptions())
+}
+
+// NewSetWithOptions constructs a set with explicit retained-entry limits.
+func NewSetWithOptions[T comparable](replicaID string, options SetOptions) (*Set[T], error) {
+	return NewSetFromClockWithOptions[T](clock.State{ReplicaID: replicaID}, options)
 }
 
 func NewSetFromClock[T comparable](state clock.State) (*Set[T], error) {
+	return NewSetFromClockWithOptions[T](state, DefaultSetOptions())
+}
+
+// NewSetFromClockWithOptions restores a replica clock with explicit retained
+// entry limits. Persist the clock atomically with a complete snapshot before
+// reusing its replica ID.
+func NewSetFromClockWithOptions[T comparable](state clock.State, options SetOptions) (*Set[T], error) {
 	if !(crdt.Tag{ReplicaID: state.ReplicaID}).Valid() {
 		return nil, ErrInvalidReplicaID
+	}
+	if !options.valid() {
+		return nil, ErrResourceLimit
 	}
 	hlc, err := clock.NewHLCFromState(state)
 	if err != nil {
 		return nil, err
 	}
-	return &Set[T]{replicaID: state.ReplicaID, clock: hlc, entries: make(map[T]setEntry[T])}, nil
+	return &Set[T]{
+		replicaID: state.ReplicaID,
+		clock:     hlc,
+		options:   options,
+		entries:   make(map[T]setEntry[T]),
+		tags:      make(map[crdt.Tag]T),
+	}, nil
 }
 
 func (s *Set[T]) ClockState() clock.State {
@@ -109,16 +148,24 @@ func (s *Set[T]) writeDelta(value T, present bool) (SetDelta[T], error) {
 	if s == nil || s.clock == nil {
 		return SetDelta[T]{}, ErrNilSet
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.entries[value]; !exists && len(s.entries) >= s.options.MaxEntries {
+		return SetDelta[T]{}, ErrResourceLimit
+	}
 	tag, err := s.clock.Now()
 	if err != nil {
 		return SetDelta[T]{}, err
 	}
-	incoming := setEntry[T]{tag: tag, present: present}
-	s.mu.Lock()
-	if current, exists := s.entries[value]; !exists || current.tag.Compare(tag) < 0 {
-		s.entries[value] = incoming
+	if owner, exists := s.tags[tag]; exists && owner != value {
+		return SetDelta[T]{}, ErrTagConflict
 	}
-	s.mu.Unlock()
+	incoming := setEntry[T]{tag: tag, present: present}
+	if current, exists := s.entries[value]; !exists || current.tag.Compare(tag) < 0 {
+		delete(s.tags, current.tag)
+		s.entries[value] = incoming
+		s.tags[tag] = value
+	}
 	return SetDelta[T]{entries: map[T]setEntry[T]{value: incoming}}, nil
 }
 
@@ -166,28 +213,7 @@ func (s *Set[T]) ApplyDelta(delta SetDelta[T]) error {
 	if s == nil || s.clock == nil {
 		return ErrNilSet
 	}
-	if err := validateSetEntries(delta.entries); err != nil {
-		return err
-	}
-	if s.subsumes(delta.entries) {
-		return nil
-	}
 	return s.applyOwnedSetEntries(cloneSetEntries(delta.entries))
-}
-
-// subsumes reports whether every incoming entry is already represented by an
-// equal or newer local entry. A true result keeps duplicate delivery read-only,
-// including the persisted HLC state.
-func (s *Set[T]) subsumes(entries map[T]setEntry[T]) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for value, incoming := range entries {
-		current, exists := s.entries[value]
-		if !exists || current.tag.Compare(incoming.tag) < 0 || setEntriesConflict(current, incoming) {
-			return false
-		}
-	}
-	return true
 }
 
 // applyOwnedSetEntries joins entries that already belong to the caller.
@@ -195,15 +221,21 @@ func (s *Set[T]) applyOwnedSetEntries(entries map[T]setEntry[T]) error {
 	if err := validateSetEntries(entries); err != nil {
 		return err
 	}
-	if s.subsumes(entries) {
-		return nil
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ensureSetTagsCompatible(s.tags, entries); err != nil {
+		return err
+	}
 	for value, incoming := range entries {
 		if current, exists := s.entries[value]; exists && current.tag == incoming.tag && current.present != incoming.present {
 			return ErrTagConflict
 		}
+	}
+	if setEntriesSubsumed(s.entries, entries) {
+		return nil
+	}
+	if len(s.entries)+newSetEntries(entries, s.entries) > s.options.MaxEntries {
+		return ErrResourceLimit
 	}
 	if tag, ok := greatestSetTag(entries); ok {
 		if err := s.clock.Witness(tag); err != nil {
@@ -214,7 +246,11 @@ func (s *Set[T]) applyOwnedSetEntries(entries map[T]setEntry[T]) error {
 		current, exists := s.entries[value]
 		switch {
 		case !exists || current.tag.Compare(incoming.tag) < 0:
+			if exists {
+				delete(s.tags, current.tag)
+			}
 			s.entries[value] = incoming
+			s.tags[incoming.tag] = value
 		}
 	}
 	return nil
@@ -236,6 +272,9 @@ func (d SetDelta[T]) Merge(other SetDelta[T]) (SetDelta[T], error) {
 		if current, exists := merged[value]; !exists || current.tag.Compare(incoming.tag) < 0 {
 			merged[value] = incoming
 		}
+	}
+	if err := validateSetEntries(merged); err != nil {
+		return SetDelta[T]{}, err
 	}
 	return SetDelta[T]{entries: merged}, nil
 }
@@ -266,6 +305,72 @@ func (s *Set[T]) Frontier() map[string]crdt.Tag {
 	return setFrontier(s.entries)
 }
 
+// TombstoneTags returns retained delete tags in canonical order. The list is
+// an input to an external exact-acknowledgement epoch; it is not proof that a
+// tombstone may be removed by itself.
+func (s *Set[T]) TombstoneTags() []crdt.Tag {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	tags := make([]crdt.Tag, 0)
+	for _, entry := range s.entries {
+		if !entry.present {
+			tags = append(tags, entry.tag)
+		}
+	}
+	s.mu.RUnlock()
+	sortTags(tags)
+	return tags
+}
+
+// CompactTombstones removes exactly requested deleted entries. Call it only
+// after every active member has acknowledged the exact tags in one
+// authenticated membership epoch, a post-compaction snapshot is durable, and
+// old deltas have been retired. Unknown tags are ignored; attempting to remove
+// a live entry or passing an invalid tag leaves the set unchanged.
+func (s *Set[T]) CompactTombstones(tags []crdt.Tag) (int, error) {
+	if s == nil {
+		return 0, ErrNilSet
+	}
+	for _, tag := range tags {
+		if !tag.Valid() {
+			return 0, ErrUnsafeCompaction
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byTag := make(map[crdt.Tag]T, len(s.entries))
+	for value, entry := range s.entries {
+		if owner, exists := byTag[entry.tag]; exists && owner != value {
+			return 0, ErrUnsafeCompaction
+		}
+		byTag[entry.tag] = value
+	}
+	compact := make([]T, 0, len(tags))
+	seen := make(map[crdt.Tag]struct{}, len(tags))
+	for _, tag := range tags {
+		if _, duplicate := seen[tag]; duplicate {
+			continue
+		}
+		seen[tag] = struct{}{}
+		value, exists := byTag[tag]
+		if !exists {
+			continue
+		}
+		if s.entries[value].present {
+			return 0, ErrUnsafeCompaction
+		}
+		compact = append(compact, value)
+	}
+	for _, value := range compact {
+		entry := s.entries[value]
+		delete(s.entries, value)
+		delete(s.tags, entry.tag)
+	}
+	return len(compact), nil
+}
+
 type mapEntry struct {
 	tag     crdt.Tag
 	present bool
@@ -277,6 +382,25 @@ type mapEntry struct {
 // replica or coalescer.
 type MapDelta struct{ entries map[string]mapEntry }
 
+// MapOptions bounds retained LWW-Map state, including delete tombstones.
+// MaxKeyBytes and MaxValueBytes apply to local writes and accepted deltas, so
+// repeated small frames cannot grow one replica beyond its group budget.
+type MapOptions struct {
+	MaxEntries    int
+	MaxKeyBytes   int
+	MaxValueBytes int
+}
+
+// DefaultMapOptions returns conservative defaults aligned with the default
+// framed element and byte limits.
+func DefaultMapOptions() MapOptions {
+	return MapOptions{MaxEntries: 1 << 20, MaxKeyBytes: 1 << 20, MaxValueBytes: 1 << 20}
+}
+
+func (o MapOptions) valid() bool {
+	return o.MaxEntries > 0 && o.MaxKeyBytes > 0 && o.MaxValueBytes > 0
+}
+
 // Map is a byte-value LWW map. Returning and accepting copies prevents a
 // caller from modifying replicated state through a shared slice. Values are
 // deliberately opaque; applications may use a deterministic JSON, protobuf,
@@ -285,25 +409,48 @@ type Map struct {
 	mu        sync.RWMutex
 	replicaID string
 	clock     *clock.HLC
+	options   MapOptions
 	entries   map[string]mapEntry
+	tags      map[crdt.Tag]string
 }
 
 var _ crdt.CRDT[*Map] = (*Map)(nil)
 var _ crdt.DeltaCapable[*Map, MapDelta] = (*Map)(nil)
 
 func NewMap(replicaID string) (*Map, error) {
-	return NewMapFromClock(clock.State{ReplicaID: replicaID})
+	return NewMapWithOptions(replicaID, DefaultMapOptions())
+}
+
+// NewMapWithOptions constructs a map with explicit retained-state limits.
+func NewMapWithOptions(replicaID string, options MapOptions) (*Map, error) {
+	return NewMapFromClockWithOptions(clock.State{ReplicaID: replicaID}, options)
 }
 
 func NewMapFromClock(state clock.State) (*Map, error) {
+	return NewMapFromClockWithOptions(state, DefaultMapOptions())
+}
+
+// NewMapFromClockWithOptions restores a replica clock with explicit retained
+// state limits. Persist the clock atomically with a complete snapshot before
+// reusing its replica ID.
+func NewMapFromClockWithOptions(state clock.State, options MapOptions) (*Map, error) {
 	if !(crdt.Tag{ReplicaID: state.ReplicaID}).Valid() {
 		return nil, ErrInvalidReplicaID
+	}
+	if !options.valid() {
+		return nil, ErrResourceLimit
 	}
 	hlc, err := clock.NewHLCFromState(state)
 	if err != nil {
 		return nil, err
 	}
-	return &Map{replicaID: state.ReplicaID, clock: hlc, entries: make(map[string]mapEntry)}, nil
+	return &Map{
+		replicaID: state.ReplicaID,
+		clock:     hlc,
+		options:   options,
+		entries:   make(map[string]mapEntry),
+		tags:      make(map[crdt.Tag]string),
+	}, nil
 }
 
 func (m *Map) ClockState() clock.State {
@@ -339,22 +486,30 @@ func (m *Map) writeDelta(key string, value []byte, present bool) (MapDelta, erro
 	if m == nil || m.clock == nil {
 		return MapDelta{}, ErrNilMap
 	}
-	if strings.TrimSpace(key) == "" {
-		return MapDelta{}, ErrInvalidKey
+	if err := validateMapWrite(key, value, present, m.options); err != nil {
+		return MapDelta{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.entries[key]; !exists && len(m.entries) >= m.options.MaxEntries {
+		return MapDelta{}, ErrResourceLimit
 	}
 	tag, err := m.clock.Now()
 	if err != nil {
 		return MapDelta{}, err
 	}
+	if owner, exists := m.tags[tag]; exists && owner != key {
+		return MapDelta{}, ErrTagConflict
+	}
 	incoming := mapEntry{tag: tag, present: present}
 	if present {
 		incoming.value = append([]byte(nil), value...)
 	}
-	m.mu.Lock()
 	if current, exists := m.entries[key]; !exists || current.tag.Compare(tag) < 0 {
+		delete(m.tags, current.tag)
 		m.entries[key] = incoming
+		m.tags[tag] = key
 	}
-	m.mu.Unlock()
 	return MapDelta{entries: map[string]mapEntry{key: incoming}}, nil
 }
 
@@ -437,43 +592,34 @@ func (m *Map) ApplyDelta(delta MapDelta) error {
 	if m == nil || m.clock == nil {
 		return ErrNilMap
 	}
-	if err := validateMapEntries(delta.entries); err != nil {
-		return err
-	}
-	if m.subsumes(delta.entries) {
-		return nil
-	}
 	return m.applyOwnedMapEntries(cloneMapEntries(delta.entries))
-}
-
-// subsumes reports whether every incoming entry is already represented by an
-// equal or newer local entry. A true result keeps duplicate and obsolete delta
-// delivery read-only, including the persisted HLC state.
-func (m *Map) subsumes(entries map[string]mapEntry) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for key, incoming := range entries {
-		current, exists := m.entries[key]
-		if !exists || current.tag.Compare(incoming.tag) < 0 || mapEntriesConflict(current, incoming) {
-			return false
-		}
-	}
-	return true
 }
 
 // applyOwnedMapEntries joins entries that are already owned by the caller.
 // Merge uses it after taking its one source snapshot, avoiding a second full
 // map clone while retaining ApplyDelta's public ownership boundary.
 func (m *Map) applyOwnedMapEntries(entries map[string]mapEntry) error {
-	if m.subsumes(entries) {
-		return nil
+	if err := validateMapEntries(entries); err != nil {
+		return err
+	}
+	if err := validateMapEntriesWithOptions(entries, m.options); err != nil {
+		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := ensureMapTagsCompatible(m.tags, entries); err != nil {
+		return err
+	}
 	for key, incoming := range entries {
 		if current, exists := m.entries[key]; exists && mapEntriesConflict(current, incoming) {
 			return ErrTagConflict
 		}
+	}
+	if mapEntriesSubsumed(m.entries, entries) {
+		return nil
+	}
+	if len(m.entries)+newMapEntries(entries, m.entries) > m.options.MaxEntries {
+		return ErrResourceLimit
 	}
 	if tag, ok := greatestMapTag(entries); ok {
 		if err := m.clock.Witness(tag); err != nil {
@@ -483,7 +629,11 @@ func (m *Map) applyOwnedMapEntries(entries map[string]mapEntry) error {
 	for key, incoming := range entries {
 		current, exists := m.entries[key]
 		if !exists || current.tag.Compare(incoming.tag) < 0 {
+			if exists {
+				delete(m.tags, current.tag)
+			}
 			m.entries[key] = incoming
+			m.tags[incoming.tag] = key
 		}
 	}
 	return nil
@@ -531,6 +681,72 @@ func (m *Map) Frontier() map[string]crdt.Tag {
 	return mapFrontier(m.entries)
 }
 
+// TombstoneTags returns retained delete tags in canonical order. The list is
+// an input to an external exact-acknowledgement epoch; it is not proof that a
+// tombstone may be removed by itself.
+func (m *Map) TombstoneTags() []crdt.Tag {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	tags := make([]crdt.Tag, 0)
+	for _, entry := range m.entries {
+		if !entry.present {
+			tags = append(tags, entry.tag)
+		}
+	}
+	m.mu.RUnlock()
+	sortTags(tags)
+	return tags
+}
+
+// CompactTombstones removes exactly requested deleted entries. Call it only
+// after every active member has acknowledged the exact tags in one
+// authenticated membership epoch, a post-compaction snapshot is durable, and
+// old deltas have been retired. Unknown tags are ignored; attempting to remove
+// a live entry or passing an invalid tag leaves the map unchanged.
+func (m *Map) CompactTombstones(tags []crdt.Tag) (int, error) {
+	if m == nil {
+		return 0, ErrNilMap
+	}
+	for _, tag := range tags {
+		if !tag.Valid() {
+			return 0, ErrUnsafeCompaction
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	byTag := make(map[crdt.Tag]string, len(m.entries))
+	for key, entry := range m.entries {
+		if owner, exists := byTag[entry.tag]; exists && owner != key {
+			return 0, ErrUnsafeCompaction
+		}
+		byTag[entry.tag] = key
+	}
+	compact := make([]string, 0, len(tags))
+	seen := make(map[crdt.Tag]struct{}, len(tags))
+	for _, tag := range tags {
+		if _, duplicate := seen[tag]; duplicate {
+			continue
+		}
+		seen[tag] = struct{}{}
+		key, exists := byTag[tag]
+		if !exists {
+			continue
+		}
+		if m.entries[key].present {
+			return 0, ErrUnsafeCompaction
+		}
+		compact = append(compact, key)
+	}
+	for _, key := range compact {
+		entry := m.entries[key]
+		delete(m.entries, key)
+		delete(m.tags, entry.tag)
+	}
+	return len(compact), nil
+}
+
 // Merge joins two map deltas without modifying either input.
 func (d MapDelta) Merge(other MapDelta) (MapDelta, error) {
 	if err := validateMapEntries(d.entries); err != nil {
@@ -547,6 +763,9 @@ func (d MapDelta) Merge(other MapDelta) (MapDelta, error) {
 		if current, exists := merged[key]; !exists || current.tag.Compare(incoming.tag) < 0 {
 			merged[key] = incoming
 		}
+	}
+	if err := validateMapEntries(merged); err != nil {
+		return MapDelta{}, err
 	}
 	return MapDelta{entries: merged}, nil
 }
@@ -615,12 +834,57 @@ func cloneSetEntries[T comparable](source map[T]setEntry[T]) map[T]setEntry[T] {
 }
 
 func validateSetEntries[T comparable](entries map[T]setEntry[T]) error {
-	for _, entry := range entries {
+	owners := make(map[crdt.Tag]T, len(entries))
+	for value, entry := range entries {
 		if !entry.tag.Valid() {
 			return ErrInvalidSetDelta
 		}
+		if owner, exists := owners[entry.tag]; exists && owner != value {
+			return ErrTagConflict
+		}
+		owners[entry.tag] = value
 	}
 	return nil
+}
+
+func ensureSetTagsCompatible[T comparable](tags map[crdt.Tag]T, entries map[T]setEntry[T]) error {
+	for value, entry := range entries {
+		if owner, exists := tags[entry.tag]; exists && owner != value {
+			return ErrTagConflict
+		}
+	}
+	return nil
+}
+
+func setEntriesSubsumed[T comparable](existing, incoming map[T]setEntry[T]) bool {
+	for value, entry := range incoming {
+		current, exists := existing[value]
+		if !exists || current.tag.Compare(entry.tag) < 0 || setEntriesConflict(current, entry) {
+			return false
+		}
+	}
+	return true
+}
+
+func newSetEntries[T comparable](incoming, existing map[T]setEntry[T]) int {
+	count := 0
+	for value := range incoming {
+		if _, exists := existing[value]; !exists {
+			count++
+		}
+	}
+	return count
+}
+
+func setTagIndex[T comparable](entries map[T]setEntry[T]) (map[crdt.Tag]T, error) {
+	if err := validateSetEntries(entries); err != nil {
+		return nil, err
+	}
+	tags := make(map[crdt.Tag]T, len(entries))
+	for value, entry := range entries {
+		tags[entry.tag] = value
+	}
+	return tags, nil
 }
 
 func setEntriesConflict[T comparable](left, right setEntry[T]) bool {
@@ -647,12 +911,76 @@ func cloneMapEntries(source map[string]mapEntry) map[string]mapEntry {
 }
 
 func validateMapEntries(entries map[string]mapEntry) error {
+	owners := make(map[crdt.Tag]string, len(entries))
 	for key, entry := range entries {
 		if strings.TrimSpace(key) == "" || !entry.tag.Valid() || (!entry.present && len(entry.value) != 0) {
 			return ErrInvalidDelta
 		}
+		if owner, exists := owners[entry.tag]; exists && owner != key {
+			return ErrTagConflict
+		}
+		owners[entry.tag] = key
 	}
 	return nil
+}
+
+func validateMapWrite(key string, value []byte, present bool, options MapOptions) error {
+	if strings.TrimSpace(key) == "" || len(key) > options.MaxKeyBytes {
+		return ErrInvalidKey
+	}
+	if present && len(value) > options.MaxValueBytes {
+		return ErrResourceLimit
+	}
+	return nil
+}
+
+func validateMapEntriesWithOptions(entries map[string]mapEntry, options MapOptions) error {
+	for key, entry := range entries {
+		if err := validateMapWrite(key, entry.value, entry.present, options); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureMapTagsCompatible(tags map[crdt.Tag]string, entries map[string]mapEntry) error {
+	for key, entry := range entries {
+		if owner, exists := tags[entry.tag]; exists && owner != key {
+			return ErrTagConflict
+		}
+	}
+	return nil
+}
+
+func mapEntriesSubsumed(existing, incoming map[string]mapEntry) bool {
+	for key, entry := range incoming {
+		current, exists := existing[key]
+		if !exists || current.tag.Compare(entry.tag) < 0 || mapEntriesConflict(current, entry) {
+			return false
+		}
+	}
+	return true
+}
+
+func newMapEntries(incoming, existing map[string]mapEntry) int {
+	count := 0
+	for key := range incoming {
+		if _, exists := existing[key]; !exists {
+			count++
+		}
+	}
+	return count
+}
+
+func mapTagIndex(entries map[string]mapEntry) (map[crdt.Tag]string, error) {
+	if err := validateMapEntries(entries); err != nil {
+		return nil, err
+	}
+	tags := make(map[crdt.Tag]string, len(entries))
+	for key, entry := range entries {
+		tags[entry.tag] = key
+	}
+	return tags, nil
 }
 
 func mapEntriesConflict(left, right mapEntry) bool {
@@ -687,4 +1015,8 @@ func greatestMapTag(entries map[string]mapEntry) (crdt.Tag, bool) {
 		}
 	}
 	return greatest, ok
+}
+
+func sortTags(tags []crdt.Tag) {
+	sort.Slice(tags, func(i, j int) bool { return tags[i].Compare(tags[j]) < 0 })
 }

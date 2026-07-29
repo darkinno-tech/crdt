@@ -178,9 +178,26 @@ OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧�
 完整流程和限制清单见[附件引用集成文档](attachment.zh-CN.md)及其
 [可运行示例](../../examples/attachment-collaboration)。
 
-如需将可选的 WebSocket 与 HTTP/SSE live relay 挂载到应用自有 mux，见
-[传输扩展指南](extensions.zh-CN.md)及其
-[可运行 provider 示例](../../examples/extensions-provider)。
+### 5.2 浏览器与 JavaScript/WebView RGA 客户端
+
+`clients/typescript` 将跨语言边界保持得很窄：TypeScript 模块只验证有边界的公共
+frame 外层，Go/Wasm RGA runtime 调用规范的 Go 解码器和合并引擎。`make wasm` 构建默认的
+run-v2 artifact（state/delta TypeID 19/20、语义版本 2），与
+`crdt.DefaultRGAFrameType()` 保持一致。`make wasm-test` 验证 Go 到客户端的帧，以及重复/
+乱序投递的三副本会话；`make wasm-v1-test` 则单独验证旧标量 v1 artifact（TypeID 11/12）。
+
+先完成一个精确、经过认证的 Manifest/能力协商（包括 state/delta ID 与语义版本），再按应用
+传输体限制调用 `document.applyDelta`。CRC-32C 只检测意外损坏。必须将返回的
+`{ state, clock, frontier }` 作为一条原子本地记录持久化；只恢复 state 会导致重用的
+replica ID 产生不安全的 HLC 标签。一次编辑事务超过 64 KiB 或 16,384 rune 时必须在本地
+插入前按顺序拆分；长文档应在 Worker 中合并。
+
+一个 Manifest 只绑定一种 RGA wire 格式，不能把旧 v1 artifact 连接到 run-v2 组，反之亦然。
+没有兼容 Wasm runtime 的原生客户端，必须先实现并验证规范的 [RGA run-v2 wire
+协议](../protocol/rga-run-v2.md)，包括其 canonical vector 套件，才能加入 run-v2 复制组。
+
+需要应用自有的 WebSocket 集成参考时，见 [WebSocket Provider 指南](websocket-provider.zh-CN.md)
+及其[可运行示例](../../examples/websocket-provider)。
 
 ## 6. 恢复、反熵与墓碑
 
@@ -209,7 +226,7 @@ make test-integration
 | 分区修复 | 副本经快照引导或状态/Merkle 交换修复后收敛。 |
 | 输入安全 | 解码前已认证；有边界的解码器拒绝损坏、超限、类型或 codec 不匹配帧。 |
 | 业务语义 | 产品方已接受 add-wins、只增长 G-Set、计数器及 MV-Register 并发值语义。 |
-| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 LWW-Set/LWW-Map/RGA/OR-Tree；其 HLC 状态已持久化且墓碑被保留。 |
+| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 LWW-Set/LWW-Map/旧版 RGA v1/OR-Tree；其 HLC 状态已持久化且墓碑被保留。 |
 | 运维归属 | outbox 重试、监控、备份、成员退役和墓碑策略均有明确负责人。 |
 
 `go test` 通过只证明当前修订中的库和示例；它不证明浏览器、移动端、生产网络、

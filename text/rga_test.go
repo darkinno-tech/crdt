@@ -342,6 +342,106 @@ func TestRGACompactsOnlyStableLeafTombstones(t *testing.T) {
 	}
 }
 
+func TestRGACompactEligibleTombstonesCollapsesDeletedChain(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Insert(0, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Delete(0, 3); err != nil {
+		t.Fatal(err)
+	}
+	tags := value.TombstoneTags()
+	if removed, err := value.CompactEligibleTombstones(tags); err != nil || removed != len(tags) {
+		t.Fatalf("CompactEligibleTombstones() = %d, %v; want %d, nil", removed, err, len(tags))
+	}
+	if got := value.String(); got != "" {
+		t.Fatalf("compacted text = %q, want empty", got)
+	}
+	if got := value.TombstoneTags(); len(got) != 0 {
+		t.Fatalf("compacted tombstones = %#v, want none", got)
+	}
+	if _, err := value.MarshalBinary(); err != nil {
+		t.Fatalf("MarshalBinary after eligible compaction: %v", err)
+	}
+}
+
+func TestRGACompactEligibleTombstonesCompactsWideSiblingSet(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const count = 32
+	for index := 0; index < count; index++ {
+		if _, err := value.Insert(0, "a"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := value.Delete(0, count); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := value.CompactEligibleTombstones(value.TombstoneTags()); err != nil || removed != count {
+		t.Fatalf("CompactEligibleTombstones(wide siblings) = %d, %v; want %d, nil", removed, err, count)
+	}
+	if state := value.State(); state.ElementCount != 0 || state.TombstoneCount != 0 {
+		t.Fatalf("compacted wide-sibling state = %#v", state)
+	}
+}
+
+func TestRGACompactEligibleTombstonesSkipsStructuralAnchor(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Insert(0, "ab"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Delete(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := value.CompactEligibleTombstones(value.TombstoneTags()); err != nil || removed != 0 {
+		t.Fatalf("CompactEligibleTombstones(structural anchor) = %d, %v; want 0, nil", removed, err)
+	}
+	if got := len(value.TombstoneTags()); got != 1 {
+		t.Fatalf("structural anchor tombstones = %d, want 1", got)
+	}
+	if _, err := value.Delete(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := value.CompactEligibleTombstones(value.TombstoneTags()); err != nil || removed != 2 {
+		t.Fatalf("CompactEligibleTombstones(after leaf delete) = %d, %v; want 2, nil", removed, err)
+	}
+}
+
+func TestRGACompactEligibleTombstonesRejectsPendingState(t *testing.T) {
+	value, err := New("local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Insert(0, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Delete(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	missing := Position{ReplicaID: "missing", WallTime: 1}
+	pending := Position{ReplicaID: "remote", WallTime: 2}
+	if err := value.ApplyDelta(Delta{
+		nodes:      map[Position]node{pending: {parent: missing, rune: 'x'}},
+		tombstones: map[Position]struct{}{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := value.CompactEligibleTombstones(value.TombstoneTags()); err != ErrUnsafeCompaction || removed != 0 {
+		t.Fatalf("CompactEligibleTombstones(pending) = %d, %v; want 0, %v", removed, err, ErrUnsafeCompaction)
+	}
+	if got := len(value.TombstoneTags()); got != 1 {
+		t.Fatalf("pending rejection changed tombstones to %d", got)
+	}
+}
+
 func parentNodeID(delta Delta) Position {
 	for id := range delta.nodes {
 		return id

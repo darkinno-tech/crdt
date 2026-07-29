@@ -4,12 +4,19 @@ Public library documentation is grouped by purpose. Internal notes belong under
 `docs/internal/` or `docs/fault-reviews/`; both paths are ignored and must not
 be committed.
 
+## Start here
+
+- [Developer getting-started guide](getting-started.md)
+- [开发者入门指南](getting-started.zh-CN.md)
+
 ## Integration
 
 - [End-to-end integration tutorial](integration/overview.md)
 - [端到端集成教程](integration/overview.zh-CN.md)
 - [Durable WebSocket relay reference](integration/durable-provider.md)
 - [可持久化 WebSocket relay 参考实现](integration/durable-provider.zh-CN.md)
+- [WebSocket provider reference](integration/websocket-provider.md)
+- [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
 - [Attachment reference integration](integration/attachment.md)
 - [附件引用集成](integration/attachment.zh-CN.md)
 
@@ -19,6 +26,8 @@ be committed.
 - [Durable transport reference design](design/durable-transport.md)
 - [G-Set and MV-Register design](design/gset-mvregister.md)
 - [Membership protocol](protocol/membership.md)
+- [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
+- [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
 
 ## Operations and architecture
 

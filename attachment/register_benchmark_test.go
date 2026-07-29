@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"testing"
+
+	"github.com/DarkInno/crdt"
 )
 
 func BenchmarkRegisterApplyMetadataDelta(b *testing.B) {
@@ -65,4 +67,41 @@ func BenchmarkReferenceVerifyOneMiB(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// BenchmarkRegisterCompactTombstones1024 measures local metadata retirement
+// after an external coordinator has established exact acknowledgement safety.
+// Setup is intentionally outside the timer; this isolates the compaction work.
+func BenchmarkRegisterCompactTombstones1024(b *testing.B) {
+	b.ReportAllocs()
+	b.StopTimer()
+	for index := 0; index < b.N; index++ {
+		value, tags := benchmarkRegisterTombstones(b, 1024)
+		b.StartTimer()
+		removed, err := value.CompactTombstones(tags)
+		b.StopTimer()
+		if err != nil || removed != len(tags) {
+			b.Fatalf("CompactTombstones() = %d, %v; want %d, nil", removed, err, len(tags))
+		}
+	}
+}
+
+func benchmarkRegisterTombstones(b testing.TB, count int) (*Register, []crdt.Tag) {
+	b.Helper()
+	options := DefaultOptions()
+	options.MaxEntries = count
+	value, err := NewWithOptions("benchmark", options)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := 0; index < count; index++ {
+		key := fmt.Sprintf("asset-%04d", index)
+		if _, err := value.Put(key, testReference(fmt.Sprintf("asset-%d", index), "image/webp", 128<<10)); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := value.Delete(key); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return value, value.TombstoneTags()
 }

@@ -1,28 +1,38 @@
 # CRDT collection extension design
 
 This document defines the collection boundary after the stable v1 core.
-LWW-Map, RGA text (including run-v2), and OR-Tree have framed codecs, bounded
+LWW-Set, LWW-Map, legacy scalar RGA v1, and OR-Tree have framed codecs, bounded
 decoders, HLC snapshots, and fuzz coverage, but remain experimental until their
-exact tombstone-GC lifecycle ships. RGA text v1 now has bounded delayed
+exact tombstone-GC lifecycle ships. New Go RGA groups use compact run-v2 frames
+(TypeIDs 19/20) through `crdt.DefaultRGAFrameType()`. Run-v2 retains scalar
+position semantics but must be bound to its own matching manifest; it cannot
+share a group with a legacy v1 browser client. RGA v1 has bounded delayed
 integration, incremental indexed projection, complete snapshots, and leaf-only
-compaction guarded by an external exact-acknowledgement epoch.
-LWW-Set remains an in-memory collection and its
-reserved frame IDs must not be advertised as a wire protocol.
+compaction guarded by an external exact-acknowledgement epoch. LWW-Set is a
+framed experimental protocol: its TypeIDs 7/8 are advertised only after the
+replication group explicitly enables experimental protocols.
+
+Run-v2 is a documented cross-language contract: [the wire specification](../protocol/rga-run-v2.md)
+defines its canonical outer frame, block encoding, ordering, resource boundary,
+and independently consumable vectors. A Wasm integration is available for
+semantic reuse, while a native client must implement that specification rather
+than infer a format from Go internals.
 
 ## Experimental protocol policy
 
 `crdt.ProtocolPolicy` is the per-replication-group opt-in boundary. Its zero
-value advertises only stable G-Counter, OR-Set, and PN-Counter frames. Setting
-`AllowExperimental` additionally advertises LWW-Map, RGA, and OR-Tree. Peers
-must compare the advertised `FrameTypes` before sending frames; this is capability
-negotiation, not a dynamic plugin registry and not a replacement for
-authentication, authorization, decoder limits, or application-level schema
-validation.
+value advertises G-Counter, OR-Set, PN-Counter, G-Set, MV-Register, and default
+RGA run-v2 frames. Setting `AllowExperimental` additionally advertises LWW-Set,
+LWW-Map, legacy scalar RGA v1, and OR-Tree. Peers must compare the advertised
+`FrameTypes` before sending frames; this is capability negotiation, not a
+dynamic plugin registry and not a replacement for authentication,
+authorization, decoder limits, or application-level schema validation.
 
 The policy does not change frame parsing or make an unknown type acceptable.
 Callers that opt in must persist the associated HLC state and retain all
-LWW-Map, RGA, or OR-Tree tombstones. Exact acknowledgement and compaction for
-those types are a release gate before they become stable.
+LWW-Set, LWW-Map, legacy RGA v1, or OR-Tree tombstones. RGA run-v2 uses the
+same HLC recovery and tombstone-retention discipline. Exact acknowledgement and
+compaction for these HLC-backed types remain application responsibilities.
 
 ## Semantics
 
@@ -31,7 +41,7 @@ those types are a release gate before they become stable.
 | PN-Counter | component-wise maximum | increment/decrement | O(replicas) | two component maps |
 | LWW-Set | largest HLC tag per element | add/remove | O(changed elements) | removed entries |
 | LWW-Map | largest HLC tag per string key | set/delete | O(changed keys) | deleted entries and tags |
-| RGA text v1 | union nodes plus tombstones; sibling IDs sort by descending tag | insert/delete by rune offset | O(log n) offset lookup; O(n) render | deleted structural anchors |
+| RGA text (legacy scalar v1 or run-v2) | union nodes plus tombstones; sibling IDs sort by descending tag | insert/delete by rune offset | O(log n) offset lookup; O(n) render | deleted structural anchors |
 | OR-Tree | union immutable parent links plus tombstones | add/remove node instance | O(changed nodes); O(nodes) projection | deleted structural anchors |
 | Attachment reference | largest HLC tag per application key | put/delete immutable object reference | O(changed keys) | deleted entries and tags; no media bytes |
 
@@ -47,25 +57,26 @@ the tombstone is retained and wins when the node eventually arrives. Unknown
 parents are allowed for reordering; completed cycles and conflicting node IDs
 are rejected.
 
-## LWW protocol completion gate
+## LWW experimental-protocol requirements
 
-LWW-Map meets this gate as an experimental protocol: it has state and delta
-frames, bounded canonical decoders, HLC-bearing snapshots, Delta coalescing
-compatibility, independent golden-vector coverage, and fuzzing. The remaining
-LWW-Set protocol must deliver all of the following before it is exported as a
-network-replicable library primitive:
+LWW-Set and LWW-Map both provide state and delta frames, bounded canonical
+decoders, HLC-bearing snapshots, delta coalescing compatibility, golden-frame
+coverage, and malformed-input fuzz targets. Their remaining lifecycle boundary
+is tombstone retention: neither type may silently discard a delete while an
+offline replica can still hold an older write.
 
-1. Reserve state/delta type IDs, canonical framed codecs, bounded decoders,
-   canonical re-encoding tests, and delta coalescer support.
-2. Add snapshots that include HLC state, plus explicit tombstone-compaction
-   preconditions. LWW cannot silently discard deleted entries while an offline
-   replica may still hold an older write.
-3. Keep all decoded values bounded by application-selected frame limits. Reject
-   malformed UTF-8, non-canonical integers, duplicate IDs, tag conflicts,
-   unresolved parents in complete snapshots, and cycles.
-4. Add independent golden vectors and fuzz targets. A unit test that encodes
-   with the same constructor it decodes is insufficient evidence of wire
-   compatibility.
+An application using either protocol must therefore:
+
+1. Bind the explicit experimental policy, concrete frame IDs, element codec
+   (for LWW-Set), and semantics version in an authenticated manifest.
+2. Persist the HLC-backed snapshot with the application frontier/outbox record
+   before reusing a replica ID.
+3. Apply limits to every transport body, frame, payload, element, tag, string,
+   and retained-entry budget; malformed or conflicting input must not partly
+   mutate the receiver.
+4. Define retention, rejoin, and recovery behavior before an application adds
+   any LWW tombstone compaction. The library does not infer a safe causal prefix
+   or authenticated acknowledgement set for this purpose.
 
 ## Performance and safety constraints
 
@@ -76,7 +87,10 @@ network-replicable library primitive:
   chains on the wire without changing scalar Position semantics.
 - RGA compaction only removes deleted leaves after external authenticated exact
   acknowledgement, durable post-compaction checkpointing, and retirement of
-  old deltas. Descendant anchors remain retained.
+  old deltas. Descendant anchors remain retained. A coordinator may use RGA's
+  `CompactEligibleTombstones` only to process an already proven batch in
+  child-before-parent order; pending state and unacknowledged tags still block
+  collection.
 - OR-Tree has the same lifecycle boundary. `tree.Options` bounds node,
   tombstone, and value retention on both mutation and recovery; its compactor
   removes only requested tombstoned leaves and refuses any retained structural

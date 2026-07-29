@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
@@ -40,9 +40,10 @@ type ElementCodec[T comparable] interface {
 // remove operations tombstone only tags observed by that replica.
 type ORSet[T comparable] struct {
 	mu         sync.RWMutex
+	lockID     uint64
 	replicaID  string
 	clock      *clock.HLC
-	codec      ElementCodec[T]
+	codec      boundElementCodec[T]
 	elements   map[T]map[crdt.Tag]struct{}
 	tombstones map[crdt.Tag]struct{}
 }
@@ -67,6 +68,8 @@ type orSetMarshalPlanEntry[T comparable] struct {
 	tagEnd   int
 }
 
+var nextORSetLockID atomic.Uint64
+
 var _ crdt.CRDT[*ORSet[string]] = (*ORSet[string])(nil)
 var _ crdt.DeltaCapable[*ORSet[string], ORSetDelta[string]] = (*ORSet[string])(nil)
 
@@ -78,8 +81,9 @@ func NewORSet[T comparable](replicaID string, codec ElementCodec[T]) (*ORSet[T],
 // NewORSetFromClock creates an OR-Set using a restored HLC state. Use this
 // constructor when reusing a replica ID after restart.
 func NewORSetFromClock[T comparable](clockState clock.State, codec ElementCodec[T]) (*ORSet[T], error) {
-	if isNilCodec(codec) || strings.TrimSpace(codec.ID()) == "" {
-		return nil, ErrInvalidCodec
+	bound, err := bindElementCodec(codec)
+	if err != nil {
+		return nil, err
 	}
 
 	hlc, err := clock.NewHLCFromState(clockState)
@@ -87,9 +91,10 @@ func NewORSetFromClock[T comparable](clockState clock.State, codec ElementCodec[
 		return nil, err
 	}
 	return &ORSet[T]{
+		lockID:     nextORSetLockID.Add(1),
 		replicaID:  clockState.ReplicaID,
 		clock:      hlc,
-		codec:      codec,
+		codec:      bound,
 		elements:   make(map[T]map[crdt.Tag]struct{}),
 		tombstones: make(map[crdt.Tag]struct{}),
 	}, nil
@@ -278,34 +283,34 @@ func (s *ORSet[T]) Elements() []T {
 	return result
 }
 
-// Merge joins other into s without holding both instance locks at once.
+// Merge joins other into s without cloning the complete source state. It holds
+// a receiver write lock and a source read lock in one per-instance order, so
+// concurrent opposite-direction merges cannot deadlock.
 func (s *ORSet[T]) Merge(other *ORSet[T]) error {
 	if s == nil || other == nil {
 		return ErrNilORSet
 	}
-	if s.codec.ID() != other.codec.ID() {
+	if s.codec.id != other.codec.id {
 		return ErrCodecMismatch
 	}
 	if s == other {
 		return nil
 	}
 
-	other.mu.RLock()
-	adds := cloneAdds(other.elements)
-	tombstones := cloneTags(other.tombstones)
-	other.mu.RUnlock()
-	if err := validateState(adds, tombstones); err != nil {
+	destinationFirst := lockORSetMerge(s, other)
+	defer unlockORSetMerge(s, other, destinationFirst)
+	if err := validateState(other.elements, other.tombstones); err != nil {
 		return err
 	}
-	if tag, ok := greatestStateTag(adds, tombstones); ok {
+	if subsumesState(s.elements, s.tombstones, other.elements, other.tombstones) {
+		return nil
+	}
+	if tag, ok := greatestStateTag(other.elements, other.tombstones); ok {
 		if err := s.clock.Witness(tag); err != nil {
 			return err
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	joinState(s.elements, s.tombstones, adds, tombstones)
+	joinState(s.elements, s.tombstones, other.elements, other.tombstones)
 	return nil
 }
 
@@ -434,9 +439,6 @@ func (s *ORSet[T]) SnapshotCurrentState() (snapshot.Snapshot, error) {
 // MarshalBinary returns a deterministic framed representation of d using
 // codec to identify and serialize its element type.
 func (d ORSetDelta[T]) MarshalBinary(codec ElementCodec[T]) ([]byte, error) {
-	if isNilCodec(codec) || strings.TrimSpace(codec.ID()) == "" {
-		return nil, ErrInvalidCodec
-	}
 	return marshalORSet(crdt.TypeIDORSetDelta, codec, d.adds, d.tombstones)
 }
 
@@ -448,9 +450,6 @@ func UnmarshalORSetDelta[T comparable](data []byte, codec ElementCodec[T]) (ORSe
 // UnmarshalORSetDeltaWithLimits validates and returns one OR-Set delta frame
 // using caller-supplied decoder limits.
 func UnmarshalORSetDeltaWithLimits[T comparable](data []byte, codec ElementCodec[T], limits frame.DecoderLimits) (ORSetDelta[T], error) {
-	if isNilCodec(codec) || strings.TrimSpace(codec.ID()) == "" {
-		return ORSetDelta[T]{}, ErrInvalidCodec
-	}
 	adds, tombstones, err := unmarshalORSet(data, crdt.TypeIDORSetDelta, codec, limits)
 	if err != nil {
 		return ORSetDelta[T]{}, err
@@ -463,11 +462,15 @@ func marshalORSet[T comparable](typeID uint64, codec ElementCodec[T], adds map[T
 }
 
 func marshalORSetWithLimits[T comparable](typeID uint64, codec ElementCodec[T], adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}, limits frame.DecoderLimits) ([]byte, error) {
+	bound, err := bindElementCodec(codec)
+	if err != nil {
+		return nil, err
+	}
 	plan, err := newORSetMarshalPlan(adds, tombstones)
 	if err != nil {
 		return nil, err
 	}
-	return marshalORSetPlanWithLimits(typeID, codec, plan, limits)
+	return marshalORSetPlanWithLimits(typeID, bound, plan, limits)
 }
 
 func newORSetMarshalPlan[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}) (orSetMarshalPlan[T], error) {
@@ -500,12 +503,12 @@ func newORSetMarshalPlan[T comparable](adds map[T]map[crdt.Tag]struct{}, tombsto
 	return plan, nil
 }
 
-func marshalORSetPlan[T comparable](typeID uint64, codec ElementCodec[T], plan orSetMarshalPlan[T]) ([]byte, error) {
+func marshalORSetPlan[T comparable](typeID uint64, codec boundElementCodec[T], plan orSetMarshalPlan[T]) ([]byte, error) {
 	return marshalORSetPlanWithLimits(typeID, codec, plan, frame.DefaultLimits())
 }
 
-func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[T], plan orSetMarshalPlan[T], limits frame.DecoderLimits) ([]byte, error) {
-	codecID := codec.ID()
+func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec boundElementCodec[T], plan orSetMarshalPlan[T], limits frame.DecoderLimits) ([]byte, error) {
+	codecID := codec.id
 	if strings.TrimSpace(codecID) == "" || len(codecID) > limits.MaxCodecID {
 		return nil, ErrInvalidCodec
 	}
@@ -516,7 +519,7 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec ElementCodec[
 	}
 	entries := make([]entry, 0, len(plan.entries))
 	for _, source := range plan.entries {
-		encoded, err := codec.Marshal(source.element)
+		encoded, err := codec.value.Marshal(source.element)
 		if err != nil {
 			return nil, fmt.Errorf("%w: marshal element: %v", ErrInvalidCodec, err)
 		}
@@ -618,7 +621,7 @@ func (s *ORSet[T]) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLi
 	if s == nil {
 		return ErrNilORSet
 	}
-	adds, tombstones, err := unmarshalORSet(data, crdt.TypeIDORSetState, s.codec, limits)
+	adds, tombstones, err := unmarshalORSetWithCodec(data, crdt.TypeIDORSetState, s.codec, limits)
 	if err != nil {
 		return err
 	}
@@ -635,11 +638,19 @@ func (s *ORSet[T]) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLi
 }
 
 func unmarshalORSet[T comparable](data []byte, expectedTypeID uint64, codec ElementCodec[T], limits frame.DecoderLimits) (map[T]map[crdt.Tag]struct{}, map[crdt.Tag]struct{}, error) {
+	bound, err := bindElementCodec(codec)
+	if err != nil {
+		return nil, nil, err
+	}
+	return unmarshalORSetWithCodec(data, expectedTypeID, bound, limits)
+}
+
+func unmarshalORSetWithCodec[T comparable](data []byte, expectedTypeID uint64, codec boundElementCodec[T], limits frame.DecoderLimits) (map[T]map[crdt.Tag]struct{}, map[crdt.Tag]struct{}, error) {
 	decoded, err := frame.UnmarshalFrame(data, limits)
 	if err != nil {
 		return nil, nil, err
 	}
-	if decoded.TypeID != expectedTypeID || decoded.CodecID != codec.ID() {
+	if decoded.TypeID != expectedTypeID || decoded.CodecID != codec.id {
 		return nil, nil, ErrCodecMismatch
 	}
 
@@ -659,11 +670,11 @@ func unmarshalORSet[T comparable](data []byte, expectedTypeID uint64, codec Elem
 			return nil, nil, frame.ErrInvalidFrame
 		}
 		pos = next
-		element, err := codec.Unmarshal(elementBytes)
+		element, err := codec.value.Unmarshal(elementBytes)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: unmarshal element: %v", ErrInvalidCodec, err)
 		}
-		canonical, err := codec.Marshal(element)
+		canonical, err := codec.value.Marshal(element)
 		if err != nil || !bytes.Equal(canonical, elementBytes) {
 			return nil, nil, ErrInvalidCodec
 		}
@@ -757,15 +768,21 @@ func joinState[T comparable](destinationAdds map[T]map[crdt.Tag]struct{}, destin
 func (s *ORSet[T]) subsumes(sourceAdds map[T]map[crdt.Tag]struct{}, sourceTombstones map[crdt.Tag]struct{}) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return subsumesState(s.elements, s.tombstones, sourceAdds, sourceTombstones)
+}
+
+// subsumesState reports whether each source mutation is represented by the
+// destination. The caller must hold a lock that keeps both states stable.
+func subsumesState[T comparable](destinationAdds map[T]map[crdt.Tag]struct{}, destinationTombstones map[crdt.Tag]struct{}, sourceAdds map[T]map[crdt.Tag]struct{}, sourceTombstones map[crdt.Tag]struct{}) bool {
 	for tag := range sourceTombstones {
-		if _, exists := s.tombstones[tag]; !exists {
+		if _, exists := destinationTombstones[tag]; !exists {
 			return false
 		}
 	}
 	for element, tags := range sourceAdds {
-		destinationTags := s.elements[element]
+		destinationTags := destinationAdds[element]
 		for tag := range tags {
-			if _, removed := s.tombstones[tag]; removed {
+			if _, removed := destinationTombstones[tag]; removed {
 				continue
 			}
 			if _, exists := destinationTags[tag]; !exists {
@@ -774,6 +791,31 @@ func (s *ORSet[T]) subsumes(sourceAdds map[T]map[crdt.Tag]struct{}, sourceTombst
 		}
 	}
 	return true
+}
+
+// lockORSetMerge locks destination for mutation and source for reading in a
+// single total order. The lock ID is assigned by the constructor instead of
+// using pointer addresses, which keeps ordering independent of runtime memory
+// movement and avoids relying on unsafe operations.
+func lockORSetMerge[T comparable](destination, source *ORSet[T]) bool {
+	if destination.lockID < source.lockID {
+		destination.mu.Lock()
+		source.mu.RLock()
+		return true
+	}
+	source.mu.RLock()
+	destination.mu.Lock()
+	return false
+}
+
+func unlockORSetMerge[T comparable](destination, source *ORSet[T], destinationFirst bool) {
+	if destinationFirst {
+		source.mu.RUnlock()
+		destination.mu.Unlock()
+		return
+	}
+	destination.mu.Unlock()
+	source.mu.RUnlock()
 }
 
 func validateState[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}) error {
@@ -928,17 +970,4 @@ func appendTag(dst []byte, tag crdt.Tag) []byte { return frame.AppendTag(dst, ta
 
 func readTag(data []byte, pos, maxStringBytes int) (crdt.Tag, int, bool) {
 	return frame.ReadTag(data, pos, maxStringBytes)
-}
-
-func isNilCodec[T comparable](codec ElementCodec[T]) bool {
-	if codec == nil {
-		return true
-	}
-	value := reflect.ValueOf(codec)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }

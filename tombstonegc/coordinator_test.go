@@ -215,6 +215,11 @@ func TestCoordinatorCountsOnlyNewAcknowledgementsAndResetsForNewEpoch(t *testing
 		coordinator.membershipMu.RUnlock()
 		t.Fatalf("source acknowledgement count = %d, want 1", got)
 	}
+	if got := coordinator.acknowledgementEntries; got != 1 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("source acknowledgement entries = %d, want 1", got)
+	}
 	if stable := coordinator.stableTombstonesLocked([]crdt.Tag{tag}); len(stable) != 0 {
 		coordinator.acknowledgementMu.Unlock()
 		coordinator.membershipMu.RUnlock()
@@ -233,6 +238,11 @@ func TestCoordinatorCountsOnlyNewAcknowledgementsAndResetsForNewEpoch(t *testing
 		coordinator.membershipMu.RUnlock()
 		t.Fatalf("all-member acknowledgement count = %d, want 2", got)
 	}
+	if got := coordinator.acknowledgementEntries; got != 2 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("all-member acknowledgement entries = %d, want 2", got)
+	}
 	if stable := coordinator.stableTombstonesLocked([]crdt.Tag{tag}); len(stable) != 1 || stable[0] != tag {
 		coordinator.acknowledgementMu.Unlock()
 		coordinator.membershipMu.RUnlock()
@@ -250,6 +260,11 @@ func TestCoordinatorCountsOnlyNewAcknowledgementsAndResetsForNewEpoch(t *testing
 		coordinator.acknowledgementMu.Unlock()
 		coordinator.membershipMu.RUnlock()
 		t.Fatalf("acknowledgement counts after membership replacement = %d, want 0", got)
+	}
+	if got := coordinator.acknowledgementEntries; got != 0 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("acknowledgement entries after membership replacement = %d, want 0", got)
 	}
 	coordinator.acknowledgementMu.Unlock()
 	coordinator.membershipMu.RUnlock()
@@ -286,6 +301,15 @@ func TestCoordinatorPrunesAcknowledgementsFailClosed(t *testing.T) {
 	if stats := coordinator.AcknowledgementStats(); stats.Tags != 0 || stats.Entries != 0 {
 		t.Fatalf("acknowledgement stats after prune = %#v", stats)
 	}
+	coordinator.membershipMu.RLock()
+	coordinator.acknowledgementMu.Lock()
+	if got := len(coordinator.acknowledgements); got != 0 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("full prune retained %d member acknowledgement maps", got)
+	}
+	coordinator.acknowledgementMu.Unlock()
+	coordinator.membershipMu.RUnlock()
 
 	if removed, err := coordinator.AcknowledgeAndCompact(groupID, "source", membership.Epoch, tags, target); err != nil || removed != 0 {
 		t.Fatalf("first post-prune acknowledgement = %d, %v; want 0, nil", removed, err)
@@ -303,6 +327,43 @@ func TestCoordinatorPrunesAcknowledgementsFailClosed(t *testing.T) {
 	if _, err := coordinator.PruneAcknowledgements(groupID, membership.Epoch, []crdt.Tag{{}}); !errors.Is(err, ErrInvalidTag) {
 		t.Fatalf("invalid-tag prune error = %v, want %v", err, ErrInvalidTag)
 	}
+}
+
+func TestCoordinatorPartialPruneRetainsOtherAcknowledgements(t *testing.T) {
+	t.Parallel()
+	const groupID = "orders/v1"
+	first := crdt.Tag{ReplicaID: "source", WallTime: 1}
+	second := crdt.Tag{ReplicaID: "source", WallTime: 2}
+	coordinator, err := NewCoordinator[string](groupID, []string{"source", "remote"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	membership := coordinator.Membership()
+	for _, member := range membership.Members {
+		if err := coordinator.Acknowledge(groupID, member, membership.Epoch, []crdt.Tag{first, second}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if removed, err := coordinator.PruneAcknowledgements(groupID, membership.Epoch, []crdt.Tag{first}); err != nil || removed != 2 {
+		t.Fatalf("PruneAcknowledgements(first) = %d, %v; want 2, nil", removed, err)
+	}
+	if stats := coordinator.AcknowledgementStats(); stats.Tags != 1 || stats.Entries != 2 {
+		t.Fatalf("stats after partial prune = %#v", stats)
+	}
+	coordinator.membershipMu.RLock()
+	coordinator.acknowledgementMu.Lock()
+	if stable := coordinator.stableTombstonesLocked([]crdt.Tag{first}); len(stable) != 0 {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("pruned tag remained stable: %#v", stable)
+	}
+	if stable := coordinator.stableTombstonesLocked([]crdt.Tag{second}); len(stable) != 1 || stable[0] != second {
+		coordinator.acknowledgementMu.Unlock()
+		coordinator.membershipMu.RUnlock()
+		t.Fatalf("unrelated tag lost acknowledgement: %#v", stable)
+	}
+	coordinator.acknowledgementMu.Unlock()
+	coordinator.membershipMu.RUnlock()
 }
 
 func TestCoordinatorRejectsInvalidReplacementAndEpochOverflow(t *testing.T) {

@@ -1,0 +1,63 @@
+{
+  "protocol": "rga-run-v2",
+  "semantics_version": 2,
+  "frame_types": {
+    "state": 19,
+    "delta": 20
+  },
+  "vectors": [
+    {
+      "name": "linear_delta",
+      "frame_type": 20,
+      "complete_state": false,
+      "hex": "435244540114001201010205616c696365000100410101b20700c1d69811",
+      "nodes": [
+        {
+          "id": { "replica_id": "alice", "wall_time": "1", "logical": "0" },
+          "parent": null,
+          "rune": "A"
+        },
+        {
+          "id": { "replica_id": "alice", "wall_time": "1", "logical": "1" },
+          "parent": { "replica_id": "alice", "wall_time": "1", "logical": "0" },
+          "rune": "β"
+        }
+      ],
+      "tombstones": [],
+      "visible_text_after_apply_to_empty": "Aβ"
+    },
+    {
+      "name": "concurrent_state_tombstone",
+      "frame_type": 19,
+      "complete_state": true,
+      "hex": "435244540113001e020005616c696365010000410003626f62010000420105616c6963650100c789cc70",
+      "nodes": [
+        {
+          "id": { "replica_id": "alice", "wall_time": "1", "logical": "0" },
+          "parent": null,
+          "rune": "A"
+        },
+        {
+          "id": { "replica_id": "bob", "wall_time": "1", "logical": "0" },
+          "parent": null,
+          "rune": "B"
+        }
+      ],
+      "tombstones": [
+        { "replica_id": "alice", "wall_time": "1", "logical": "0" }
+      ],
+      "visible_text_after_apply_to_empty": "B"
+    },
+    {
+      "name": "delete_before_insert_delta",
+      "frame_type": 20,
+      "complete_state": false,
+      "hex": "435244540114000a000105616c696365090121bc6d28",
+      "nodes": [],
+      "tombstones": [
+        { "replica_id": "alice", "wall_time": "9", "logical": "1" }
+      ],
+      "visible_text_after_apply_to_empty": ""
+    }
+  ]
+}

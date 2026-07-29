@@ -40,10 +40,10 @@ feature-parity, or performance claim.
   disabled unless an application explicitly enables them.
 - A single-writer durable WebSocket relay reference with a bbolt operation log,
   exact-dot binding, bounded replay, and reconnect support.
-- Experimental framed LWW-Set, LWW-Map, RGA text, and OR-Tree collections, enabled
-  only by an explicit per-replication-group protocol policy. RGA v1 now has
-  bounded delayed integration and incremental visible indexing, but its
-  tombstone lifecycle remains experimental.
+- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, and OR-Tree
+  collections, enabled only by an explicit per-replication-group protocol
+  policy. New Go RGA groups use compact run-v2 frames; the RGA tombstone
+  lifecycle still requires careful retention and exact-acknowledgement handling.
 
 ## Scope
 
@@ -53,6 +53,10 @@ or retry policy. The optional [`extensions`](docs/integration/extensions.md) pac
 explicitly enabled WebSocket and HTTP/SSE live-relay reference surfaces, but it
 does not start a listener or provide durability, replay, reconnect, TLS,
 anti-entropy, or identity/session management. Those remain application-owned.
+The optional [WebSocket provider reference](docs/integration/websocket-provider.md)
+is likewise a bounded, manifest-bound integration adapter; it does not provide
+durable delivery, recovery, TLS, membership, authorization policy, or
+production operations.
 The separate [`durable`](docs/integration/durable-provider.md) reference adds
 one persistent operation log and reconnect/replay flow for a single process and
 one protected storage volume. It still does not provide clustered storage,
@@ -63,7 +67,7 @@ application supplies an authoritative, authenticated active-membership view.
 It does not discover, authenticate, or persist that view. A checksum detects
 accidental frame corruption; it is not an authenticity or encryption mechanism.
 
-## Experimental LWW-Set, LWW-Map, RGA, and OR-Tree protocols
+## Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree protocols
 
 LWW-Set (`lww.Set`, TypeIDs 7/8) encodes generic elements through an
 application-supplied canonical `lww.ElementCodec`. It retains remove metadata,
@@ -77,11 +81,19 @@ incremental indexed sequence rather than rebuilding the full visible projection
 after each edit. It remains experimental while its full tombstone lifecycle is
 validated. Persist its HLC-backed snapshot atomically.
 
+New Go RGA groups select compact run-v2 frames (TypeIDs 19/20) through
+`crdt.DefaultRGAFrameType()`. A run-v2 group must encode with
+`Delta.MarshalRunBinary`, use `RGA.MarshalRunBinary` and
+`RGA.SnapshotRunCurrentState` for complete state, and bind those same IDs in
+its manifest. The run encoding preserves scalar RGA position semantics, but a
+manifest still represents exactly one wire protocol: do not mix it with a
+legacy v1 client or frame stream.
+
 `CompactTombstones` is intentionally conservative: it can collect only deleted
 leaves after an authenticated exact-acknowledgement epoch has durably saved a
 post-compaction snapshot and retired old deltas. Nodes with descendants remain
-structural anchors. LWW-Set, LWW-Map, RGA run-v2 (TypeIDs 19/20), and OR-Tree remain
-experimental and require explicit opt-in:
+structural anchors. LWW-Set, LWW-Map, legacy scalar RGA v1 (TypeIDs 11/12),
+and OR-Tree remain experimental and require explicit opt-in:
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -93,16 +105,44 @@ for _, kind := range policy.FrameTypes() {
 
 Before an experimental frame is accepted, bind it to a `replica.Manifest` in
 the authenticated handshake. The manifest includes the group, schema, epoch,
-codec, and semantics version; pass the same explicit policy to each replica
-boundary through `NewChangeWithPolicy`, `NewInboxWithPolicy`,
-`NewCheckpointWithPolicy`, and `NewSessionWithPolicy`. Frame type IDs alone do
-not establish wire-semantic compatibility.
+codec, and semantics version. To keep one explicit opt-in while constructing a
+group's local replica objects, create a
+`replica.NewSessionBuilder(..., policy)` and use its `NewChange`, `NewInbox`,
+`NewCheckpoint`, and `NewSession` methods. The builder remains a local helper,
+not a handshake: the zero policy still rejects experimental manifests, and
+frame type IDs alone do not establish wire-semantic compatibility. The
+individual `*WithPolicy` constructors remain available for isolated use.
 
-The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
-MV-Register, and PN-Counter protocols. The policy is neither a global switch
-nor a plugin registry: unknown and reserved frame types remain unsupported.
-Experimental LWW-Set, LWW-Map, RGA, and OR-Tree replicas must persist HLC state with
-snapshots and retain their tombstones.
+The zero-value policy advertises G-Counter, G-Set, OR-Set, MV-Register,
+PN-Counter, and default RGA run-v2 protocols. The policy is neither a global
+switch nor a plugin registry: unknown and reserved frame types remain
+unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree replicas
+must persist HLC state with snapshots and retain their tombstones.
+
+## Browser and JavaScript mobile clients
+
+The repository includes a bounded TypeScript frame-envelope decoder and a Go/
+Wasm RGA client runtime under [`clients/typescript`](clients/typescript/README.md).
+The default artifact uses run-v2 TypeIDs 19/20 and semantics version 2, matching
+`crdt.DefaultRGAFrameType()`. The Wasm layer reuses the Go RGA merge,
+out-of-order, tombstone, and HLC implementation so a browser/WebView can merge
+locally instead of waiting for server arbitration.
+
+Build and exercise the client boundary with:
+
+```sh
+make wasm
+make typescript-test
+make wasm-test
+```
+
+Authenticate the exact manifest (including protocol IDs and semantic version)
+before passing a received frame to the runtime; CRC-32C does not authenticate a
+peer. Persist the client snapshot's state, clock, and frontier atomically.
+Native mobile apps without a compatible WebAssembly runtime must follow the
+[RGA run-v2 wire protocol](docs/protocol/rga-run-v2.md) and its vectors before
+joining a run-v2 group. Split a local editor transaction above 64 KiB or 16,384
+runes before insertion.
 
 ## Experimental attachment references
 
