@@ -321,3 +321,87 @@ func TestStoreConcurrentMutationsKeepVersionsMonotonic(t *testing.T) {
 		t.Fatalf("final snapshot = %+v", snapshot)
 	}
 }
+
+func TestStoreValidationAndLifecycleEdges(t *testing.T) {
+	for origin, want := range map[Origin]string{
+		Initial:     "initial",
+		Local:       "local",
+		Remote:      "remote",
+		Merge:       "merge",
+		Restore:     "restore",
+		Maintenance: "maintenance",
+		Origin(99):  "invalid",
+	} {
+		if got := origin.String(); got != want {
+			t.Errorf("Origin(%d).String() = %q, want %q", origin, got, want)
+		}
+	}
+	if _, err := New[*testModel, int](&testModel{}, nil); !errors.Is(err, ErrNilView) {
+		t.Fatalf("New(nil view) error = %v, want %v", err, ErrNilView)
+	}
+
+	var nilStore *Store[*testModel, int]
+	if err := nilStore.Mutate(Local, func(*testModel) error { return nil }); !errors.Is(err, ErrNilStore) {
+		t.Fatalf("nil Store Mutate() error = %v, want %v", err, ErrNilStore)
+	}
+	if _, err := nilStore.Snapshot(); !errors.Is(err, ErrNilStore) {
+		t.Fatalf("nil Store Snapshot() error = %v, want %v", err, ErrNilStore)
+	}
+	if _, err := nilStore.Subscribe(func(Event[int]) {}); !errors.Is(err, ErrNilStore) {
+		t.Fatalf("nil Store Subscribe() error = %v, want %v", err, ErrNilStore)
+	}
+	var nilSubscription *Subscription[int]
+	nilSubscription.Unsubscribe()
+	awaitDone(t, nilSubscription.Done())
+	if info, ok := nilSubscription.Panic(); ok || info != (Panic{}) {
+		t.Fatalf("nil Subscription Panic() = %+v, %v", info, ok)
+	}
+
+	store := newTestStore(t)
+	if err := store.Mutate(Initial, func(*testModel) error { return nil }); !errors.Is(err, ErrInvalidOrigin) {
+		t.Fatalf("Mutate(Initial) error = %v, want %v", err, ErrInvalidOrigin)
+	}
+	if err := store.Mutate(Origin(99), func(*testModel) error { return nil }); !errors.Is(err, ErrInvalidOrigin) {
+		t.Fatalf("Mutate(invalid) error = %v, want %v", err, ErrInvalidOrigin)
+	}
+	if err := store.Mutate(Local, nil); !errors.Is(err, ErrNilMutation) {
+		t.Fatalf("Mutate(nil) error = %v, want %v", err, ErrNilMutation)
+	}
+	if _, err := store.Subscribe(nil); !errors.Is(err, ErrNilCallback) {
+		t.Fatalf("Subscribe(nil) error = %v, want %v", err, ErrNilCallback)
+	}
+
+	subscription, err := store.Subscribe(func(Event[int]) {})
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	if info, ok := subscription.Panic(); ok || info != (Panic{}) {
+		t.Fatalf("healthy Subscription Panic() = %+v, %v", info, ok)
+	}
+	subscription.Unsubscribe()
+	subscription.Unsubscribe()
+	// A publication racing with cancellation is ignored after cancellation;
+	// exercise the same stopped-mailbox path directly.
+	subscription.subscriber.enqueue(Event[int]{Version: 1, Origin: Local, Value: 1})
+	awaitDone(t, subscription.Done())
+
+	store.Close()
+	store.Close()
+}
+
+func TestStoreContainsPanicHandlerPanic(t *testing.T) {
+	store, err := NewWithOptions(&testModel{}, func(model *testModel) int { return model.value }, Options{
+		OnPanic: func(Panic) { panic("diagnostic handler panic") },
+	})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	subscription, err := store.Subscribe(func(Event[int]) { panic("observer panic") })
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	awaitDone(t, subscription.Done())
+	if info, ok := subscription.Panic(); !ok || info.Value != "observer panic" {
+		t.Fatalf("Subscription.Panic() = %+v, %v", info, ok)
+	}
+}
