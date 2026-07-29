@@ -246,10 +246,22 @@ type ApplyDelta func([]byte) error
 // Delivery describes the result of receiving one change. Buffered reports an
 // out-of-order change retained for its missing per-actor prefix; Applied lists
 // every dot installed by this call, including any now-unblocked buffered
-// changes.
+// changes. Duplicate reports that this call did not retain or install its
+// change because the same dot was already known.
 type Delivery struct {
-	Buffered bool
-	Applied  []Dot
+	Buffered  bool
+	Duplicate bool
+	Applied   []Dot
+}
+
+// Accepted reports whether this call added a change to the receiver's pending
+// queue or installed at least one dot. Relays should forward only accepted
+// changes: once a dot is already installed, an Inbox no longer retains its
+// payload bytes and therefore cannot prove a later same-dot payload is
+// identical. Durable relays must additionally bind actor/counter to payload
+// identity in their application-owned operation store.
+func (d Delivery) Accepted() bool {
+	return !d.Duplicate && (d.Buffered || len(d.Applied) > 0)
 }
 
 // Inbox is a bounded, transport-independent receiver for one manifest. It
@@ -310,7 +322,7 @@ func (i *Inbox) Receive(change Change) (Delivery, error) {
 	defer i.mu.Unlock()
 	current := i.frontier.Counter(change.Dot.Actor)
 	if change.Dot.Counter <= current {
-		return Delivery{}, nil
+		return Delivery{Duplicate: true}, nil
 	}
 	if change.Dot.Counter > current+1 {
 		return i.buffer(change)
@@ -363,7 +375,7 @@ func (i *Inbox) buffer(change Change) (Delivery, error) {
 		if string(existing.delta) != string(change.delta) {
 			return Delivery{}, ErrDotConflict
 		}
-		return Delivery{Buffered: true}, nil
+		return Delivery{Buffered: true, Duplicate: true}, nil
 	}
 	if i.pendingCount >= i.maxPending || len(change.delta) > i.maxBytes-i.pendingSize {
 		return Delivery{}, ErrPendingLimit
