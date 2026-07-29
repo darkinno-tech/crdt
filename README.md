@@ -28,6 +28,13 @@ feature-parity, or performance claim.
   bounded metadata only, backed by an authenticated application object store.
 - Causally replicated **MV-Register** that preserves concurrent opaque-byte
   writes instead of resolving them by wall clock.
+- Experimental generic **RGA list** values with caller-defined canonical
+  codecs, bounded framed state/deltas, and stable element positions.
+- Experimental strict **XML fragments** backed by immutable XML-node list
+  values; XML subtree replacement is explicit rather than a hidden attribute
+  conflict rule.
+- Local, compensating **text Undo/Redo** that emits ordinary RGA deltas and
+  never rolls back remote state.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
