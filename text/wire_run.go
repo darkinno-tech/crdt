@@ -2,7 +2,6 @@ package text
 
 import (
 	"bytes"
-	"sort"
 
 	"github.com/DarkInno/crdt"
 	frame "github.com/DarkInno/crdt/encoding"
@@ -17,6 +16,19 @@ const (
 type runNode struct {
 	id   Position
 	item node
+}
+
+// runChildKey groups potential run successors by their parent and replica. A
+// summary avoids allocating one slice per parent while preserving the exact
+// "one unused same-replica child" rule used by canonical run construction.
+type runChildKey struct {
+	parent    Position
+	replicaID string
+}
+
+type runChild struct {
+	id    Position
+	count int
 }
 
 // MarshalRunBinary encodes complete RGA state using the separately negotiated
@@ -157,39 +169,69 @@ func runPayloadSize(blocks [][]runNode, tombstones map[Position]struct{}, limits
 }
 
 func makeRunBlocks(nodes map[Position]node) [][]runNode {
-	children := make(map[Position][]Position, len(nodes))
-	for id, item := range nodes {
-		children[item.parent] = append(children[item.parent], id)
-	}
-	for parent := range children {
-		sort.Slice(children[parent], func(i, j int) bool { return children[parent][i].Compare(children[parent][j]) < 0 })
-	}
 	ids := sortedNodeIDs(nodes)
+	if len(ids) == 0 {
+		return nil
+	}
+	if block, ok := singleRunBlock(ids, nodes); ok {
+		return [][]runNode{block}
+	}
+	return makeRunBlocksFromSortedIDs(ids, nodes)
+}
+
+// singleRunBlock recognizes the common local-insert shape without building a
+// parent index: canonical tag order is also the parent chain and every node
+// belongs to one replica. Partial deltas may begin at an external parent, so
+// only later links are required to point inside the block.
+func singleRunBlock(ids []Position, nodes map[Position]node) ([]runNode, bool) {
+	replicaID := ids[0].ReplicaID
+	for index, id := range ids {
+		item := nodes[id]
+		if id.ReplicaID != replicaID || (index > 0 && item.parent != ids[index-1]) {
+			return nil, false
+		}
+	}
+	block := make([]runNode, len(ids))
+	for index, id := range ids {
+		block[index] = runNode{id: id, item: nodes[id]}
+	}
+	return block, true
+}
+
+func makeRunBlocksFromSortedIDs(ids []Position, nodes map[Position]node) [][]runNode {
+	children := make(map[runChildKey]runChild, len(nodes))
+	for id, item := range nodes {
+		key := runChildKey{parent: item.parent, replicaID: id.ReplicaID}
+		child := children[key]
+		child.count++
+		if child.count == 1 {
+			child.id = id
+		}
+		children[key] = child
+	}
 	used := make(map[Position]struct{}, len(nodes))
-	blocks := make([][]runNode, 0, len(nodes))
+	blocks := make([][]runNode, 0)
+	items := make([]runNode, 0, len(nodes))
 	for _, id := range ids {
 		if _, exists := used[id]; exists {
 			continue
 		}
-		block := []runNode{{id: id, item: nodes[id]}}
+		start := len(items)
+		items = append(items, runNode{id: id, item: nodes[id]})
 		used[id] = struct{}{}
 		for {
-			current := block[len(block)-1]
-			var next Position
-			matches := 0
-			for _, candidate := range children[current.id] {
-				if _, exists := used[candidate]; exists || candidate.ReplicaID != id.ReplicaID {
-					continue
-				}
-				next, matches = candidate, matches+1
-			}
-			if matches != 1 {
+			current := items[len(items)-1]
+			next, ok := children[runChildKey{parent: current.id, replicaID: id.ReplicaID}]
+			if !ok || next.count != 1 {
 				break
 			}
-			block = append(block, runNode{id: next, item: nodes[next]})
-			used[next] = struct{}{}
+			if _, exists := used[next.id]; exists {
+				break
+			}
+			items = append(items, runNode{id: next.id, item: nodes[next.id]})
+			used[next.id] = struct{}{}
 		}
-		blocks = append(blocks, block)
+		blocks = append(blocks, items[start:])
 	}
 	return blocks
 }

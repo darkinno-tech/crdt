@@ -27,8 +27,9 @@ const (
 	TypeIDORTreeState     uint64 = 17
 	TypeIDORTreeDelta     uint64 = 18
 	// RGA run frames retain scalar Position semantics while compacting linear
-	// same-replica insertion chains. They are separately negotiated v2 wire
-	// shapes; TypeIDRGAState and TypeIDRGADelta remain immutable v1 contracts.
+	// same-replica insertion chains. They are the default protocol for new RGA
+	// replication groups; TypeIDRGAState and TypeIDRGADelta remain immutable v1
+	// contracts for explicitly negotiated legacy groups.
 	TypeIDRGARunState uint64 = 19
 	TypeIDRGARunDelta uint64 = 20
 )
@@ -55,6 +56,13 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
 }
 
+// DefaultRGAFrameType returns the compact run-v2 protocol for new RGA
+// replication groups. Legacy scalar RGA v1 frames remain available only when
+// a group explicitly enables experimental protocols for migration.
+func DefaultRGAFrameType() FrameType {
+	return FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true}
+}
+
 // experimentalFrameTypes are fully framed protocols whose public API and
 // tombstone-lifecycle guidance are still evolving. They are never enabled by
 // ProtocolPolicy's zero value, so an application must opt in per replication
@@ -68,8 +76,6 @@ var experimentalFrameTypes = map[uint64]struct{}{
 	TypeIDRGADelta:    {},
 	TypeIDORTreeState: {},
 	TypeIDORTreeDelta: {},
-	TypeIDRGARunState: {},
-	TypeIDRGARunDelta: {},
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group
@@ -81,9 +87,9 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // TypeID remains necessary but is not sufficient: applications still own
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
-	// AllowExperimental includes framed LWW-Set, LWW-Map, RGA, and OR-Tree protocols.
-	// Keep it false until the replication group has accepted their experimental
-	// API and tombstone-retention lifecycle.
+	// AllowExperimental includes framed LWW-Set, LWW-Map, legacy scalar RGA v1,
+	// and OR-Tree protocols. Keep it false until the replication group has
+	// accepted their experimental API and tombstone-retention lifecycle.
 	AllowExperimental bool
 }
 
