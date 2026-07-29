@@ -220,6 +220,19 @@ func TestMapWireRejectsMalformedInputWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestMapWireRejectsImpossibleEntryCount(t *testing.T) {
+	payload := frame.AppendUvarint(nil, uint64(frame.DefaultLimits().MaxElements))
+	for _, typeID := range []uint64{crdt.TypeIDLWWMapState, crdt.TypeIDLWWMapDelta} {
+		encoded, err := frame.MarshalFrame(frame.Frame{TypeID: typeID, Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := unmarshalMap(encoded, typeID, frame.DefaultLimits()); !errors.Is(err, frame.ErrInvalidFrame) {
+			t.Fatalf("type %d impossible entry count = %v", typeID, err)
+		}
+	}
+}
+
 func TestMapDeltaCoalescerAndErrorPaths(t *testing.T) {
 	value, err := NewMap("source")
 	if err != nil {
@@ -441,8 +454,16 @@ func FuzzMapUnmarshal(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	impossibleCount, err := frame.MarshalFrame(frame.Frame{
+		TypeID:  crdt.TypeIDLWWMapState,
+		Payload: frame.AppendUvarint(nil, uint64(frame.DefaultLimits().MaxElements)),
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Add(state)
 	f.Add(encodedDelta)
+	f.Add(impossibleCount)
 	f.Fuzz(func(t *testing.T, data []byte) {
 		target, err := NewMap("target")
 		if err != nil {

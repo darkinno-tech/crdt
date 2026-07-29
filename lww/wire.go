@@ -239,6 +239,8 @@ func unmarshalMap(data []byte, expectedType uint64, limits frame.Limits) (map[st
 	return unmarshalMapWithOptions(data, expectedType, limits, nil)
 }
 
+const minMapEntryBytes = 7
+
 func unmarshalMapWithOptions(data []byte, expectedType uint64, limits frame.Limits, options *MapOptions) (map[string]mapEntry, error) {
 	if options != nil && !options.valid() {
 		return nil, ErrResourceLimit
@@ -259,6 +261,9 @@ func unmarshalMapWithOptions(data []byte, expectedType uint64, limits frame.Limi
 		return nil, ErrResourceLimit
 	}
 	position = next
+	if count > uint64((len(decoded.Payload)-position)/minMapEntryBytes) {
+		return nil, frame.ErrInvalidFrame
+	}
 	entries := make(map[string]mapEntry, int(count))
 	previous := ""
 	keyLimit := 0
