@@ -207,6 +207,10 @@ The [attachment integration guide](attachment.md) and its
 [runnable example](../../examples/attachment-collaboration) provide the complete
 flow and limits checklist.
 
+For an application-owned opt-in WebSocket and HTTP/SSE live relay, see the
+[transport extension guide](extensions.md) and its
+[runnable provider example](../../examples/extensions-provider).
+
 ## 6. Recovery, anti-entropy, and tombstones
 
 Bootstrap a new or recovering replica from a complete state snapshot. For an

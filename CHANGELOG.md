@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added disabled-by-default, manifest-bound WebSocket and HTTP/SSE live relay
+  reference surfaces in `extensions`, plus runnable provider, race, fuzz,
+  duplicate/reorder, concurrency, and loopback benchmark coverage.
+
 ## [1.0.4-beta.1] - 2026-07-28
 
 ### Fixed

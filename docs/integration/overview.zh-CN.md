@@ -178,6 +178,10 @@ OR-Tree delta 使用 `tree.UnmarshalDeltaWithLimits`。不能仅因不可信帧�
 完整流程和限制清单见[附件引用集成文档](attachment.zh-CN.md)及其
 [可运行示例](../../examples/attachment-collaboration)。
 
+如需将可选的 WebSocket 与 HTTP/SSE live relay 挂载到应用自有 mux，见
+[传输扩展指南](extensions.zh-CN.md)及其
+[可运行 provider 示例](../../examples/extensions-provider)。
+
 ## 6. 恢复、反熵与墓碑
 
 新副本或恢复副本应从完整状态快照启动。OR-Set 绝不能只从 `MarshalBinary()` 字节

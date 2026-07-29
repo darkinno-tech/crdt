@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`crdt` is a small, dependency-free Go library for composable state-based CRDTs.
+`crdt` is a small Go library for composable state-based CRDTs.
 It provides deterministic binary state and delta frames so replicas can converge
 despite duplicate delivery, reordering, and temporary partitions.
 
@@ -36,6 +36,8 @@ feature-parity, or performance claim.
   anti-entropy workflows.
 - Optional exact-acknowledgement tombstone collection with membership epochs.
 - Safe concurrent access for the provided CRDT implementations.
+- Opt-in manifest-bound WebSocket and HTTP/SSE live-relay reference surfaces;
+  disabled unless an application explicitly enables them.
 - Experimental framed LWW-Set, LWW-Map, RGA text, and OR-Tree collections, enabled
   only by an explicit per-replication-group protocol policy. RGA v1 now has
   bounded delayed integration and incremental visible indexing, but its
@@ -43,14 +45,16 @@ feature-parity, or performance claim.
 
 ## Scope
 
-This library provides CRDT data types and wire primitives. It deliberately does
-not choose a network transport, membership protocol, authentication scheme,
-storage backend, or retry policy. `tombstonegc.Coordinator` performs safe
-automatic collection only after the application supplies an authoritative,
-authenticated active-membership view. It does not discover, authenticate, or
-persist that view. A checksum
-detects accidental frame corruption; it is not an authenticity or encryption
-mechanism.
+The core library provides CRDT data types and wire primitives. It deliberately
+does not choose a membership protocol, authentication scheme, storage backend,
+or retry policy. The optional [`extensions`](docs/integration/extensions.md) package adds
+explicitly enabled WebSocket and HTTP/SSE live-relay reference surfaces, but it
+does not start a listener or provide durability, replay, reconnect, TLS,
+anti-entropy, or identity/session management. Those remain application-owned.
+`tombstonegc.Coordinator` performs safe automatic collection only after the
+application supplies an authoritative, authenticated active-membership view.
+It does not discover, authenticate, or persist that view. A checksum detects
+accidental frame corruption; it is not an authenticity or encryption mechanism.
 
 ## Experimental LWW-Set, LWW-Map, RGA, and OR-Tree protocols
 
@@ -295,6 +299,17 @@ download through `Reference.Verify` before accepting it:
 go run ./examples/attachment-collaboration
 ```
 
+The [opt-in transport extension guide](docs/integration/extensions.md) and its
+[runnable provider example](examples/extensions-provider) show one
+application-owned mux exposing both WebSocket and HTTP/SSE surfaces. The
+example demonstrates a WebSocket-to-HTTP delivery followed by an HTTP-to-
+WebSocket delivery; it is a bounded live relay, not a durable replication
+service:
+
+```sh
+go run ./examples/extensions-provider
+```
+
 See [attachment reference integration](docs/integration/attachment.md) for the
 manifest fields, limits, storage boundary, deletion retention, and verification
 requirements.
@@ -302,7 +317,8 @@ requirements.
 For the Chinese versions, see [集成教程](docs/integration/overview.zh-CN.md) and
 [协作任务示例](examples/collaborative-board) and
 [仓库复制示例](examples/warehouse-replication) and
-[实验协作示例](examples/experimental-collaboration).
+[实验协作示例](examples/experimental-collaboration) and
+[可选传输扩展](docs/integration/extensions.zh-CN.md).
 
 ## Correct use in a distributed system
 
