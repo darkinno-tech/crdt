@@ -92,6 +92,12 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --force --tags origin
+          git fetch --force origin refs/heads/beta:refs/remotes/origin/beta
+          if [[ "$(git rev-parse origin/beta)" != "${GITHUB_SHA}" ]]; then
+            echo "Skipping stale beta run for ${GITHUB_SHA}; beta now points to $(git rev-parse origin/beta)"
+            echo "tag=skipped-stale" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
 
           stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
           if [[ -z "${stable_tag}" ]]; then
@@ -130,7 +136,7 @@ jobs:
           git push origin "${tag}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report pre-release tag
-        run: echo "Created pre-release tag ${{ steps.tag.outputs.tag }}"
+        run: 'echo "Pre-release tag result: ${{ steps.tag.outputs.tag }}"'
 
   release-tag:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -153,6 +159,12 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --force --tags origin
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
+          if [[ "$(git rev-parse origin/main)" != "${GITHUB_SHA}" ]]; then
+            echo "Skipping stale main run for ${GITHUB_SHA}; main now points to $(git rev-parse origin/main)"
+            echo "tag=skipped-stale" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
 
           stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
           if [[ -z "${stable_tag}" ]]; then
@@ -190,4 +202,4 @@ jobs:
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report release tag
-        run: echo "Created release tag ${{ steps.tag.outputs.tag }}"
+        run: 'echo "Release tag result: ${{ steps.tag.outputs.tag }}"'
