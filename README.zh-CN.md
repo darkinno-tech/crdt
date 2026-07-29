@@ -214,6 +214,20 @@ func main() {
 go run ./examples/collaborative-board
 ```
 
+[仓库复制示例](examples/warehouse-replication)演示 G-Set 和 MV-Register 的帧化增量、
+重复投递、Register 并发值，以及在复用副本 ID 前安全恢复 MV-Register：
+
+```sh
+go run ./examples/warehouse-replication
+```
+
+[实验协作示例](examples/experimental-collaboration)为 LWW-Map、RGA 和 OR-Tree 使用
+明确且较小的接收帧/RGA 留存上限。仅在复制组已完成上文所述的、经过认证的实验协议握手后运行：
+
+```sh
+go run ./examples/experimental-collaboration
+```
+
 英文版本见 [integration tutorial](INTEGRATION.md)。
 
 ## 在分布式系统中的正确使用方式
