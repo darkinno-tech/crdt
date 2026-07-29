@@ -19,6 +19,8 @@ be committed.
 - [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
 - [Attachment reference integration](integration/attachment.md)
 - [附件引用集成](integration/attachment.zh-CN.md)
+- [Application change observation](integration/observe.md)
+- [应用层变更观察](integration/observe.zh-CN.md)
 
 ## Design and protocol
 
