@@ -86,10 +86,13 @@ for _, kind := range policy.FrameTypes() {
 
 Before an experimental frame is accepted, bind it to a `replica.Manifest` in
 the authenticated handshake. The manifest includes the group, schema, epoch,
-codec, and semantics version; pass the same explicit policy to each replica
-boundary through `NewChangeWithPolicy`, `NewInboxWithPolicy`,
-`NewCheckpointWithPolicy`, and `NewSessionWithPolicy`. Frame type IDs alone do
-not establish wire-semantic compatibility.
+codec, and semantics version. To keep one explicit opt-in while constructing a
+group's local replica objects, create a
+`replica.NewSessionBuilder(..., policy)` and use its `NewChange`, `NewInbox`,
+`NewCheckpoint`, and `NewSession` methods. The builder remains a local helper,
+not a handshake: the zero policy still rejects experimental manifests, and
+frame type IDs alone do not establish wire-semantic compatibility. The
+individual `*WithPolicy` constructors remain available for isolated use.
 
 The zero-value policy advertises only the stable G-Counter, G-Set, OR-Set,
 MV-Register, and PN-Counter protocols. The policy is neither a global switch
