@@ -227,19 +227,19 @@ func (r *RGA) installState(nodes map[Position]node, tombstones map[Position]stru
 	if err != nil {
 		return err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if tag, ok := greatestTag(Delta{nodes: nodes, tombstones: tombstones}); ok {
 		if err := r.clock.Witness(tag); err != nil {
 			return err
 		}
 	}
-	r.mu.Lock()
 	r.nodes, r.tombstones = nodes, tombstones
 	r.pending = make(map[Position]node)
 	r.waitingByParent = make(map[Position]map[Position]struct{})
 	r.pendingBytes = 0
 	r.sequence, r.children = sequence, children
 	r.version++
-	r.mu.Unlock()
 	return nil
 }
 

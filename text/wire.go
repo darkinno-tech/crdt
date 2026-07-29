@@ -133,20 +133,20 @@ func (r *RGA) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimits)
 	if err != nil {
 		return err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	delta := Delta{nodes: nodes, tombstones: tombstones}
 	if tag, ok := greatestTag(delta); ok {
 		if err := r.clock.Witness(tag); err != nil {
 			return err
 		}
 	}
-	r.mu.Lock()
 	r.nodes, r.tombstones = nodes, tombstones
 	r.pending = make(map[Position]node)
 	r.waitingByParent = make(map[Position]map[Position]struct{})
 	r.pendingBytes = 0
 	r.sequence, r.children = sequence, children
 	r.version++
-	r.mu.Unlock()
 	return nil
 }
 
@@ -220,7 +220,23 @@ func NewFromSnapshot(saved snapshot.Snapshot) (*RGA, error) {
 	if err := unmarshal(saved.Bytes()); err != nil {
 		return nil, err
 	}
+	if tag, ok := greatestRGAFrontierTag(saved.Frontier()); ok {
+		if err := r.clock.Witness(tag); err != nil {
+			return nil, err
+		}
+	}
 	return r, nil
+}
+
+func greatestRGAFrontierTag(frontier map[string]crdt.Tag) (crdt.Tag, bool) {
+	var greatest crdt.Tag
+	found := false
+	for _, tag := range frontier {
+		if !found || greatest.Compare(tag) < 0 {
+			greatest, found = tag, true
+		}
+	}
+	return greatest, found
 }
 
 func unmarshalRGA(data []byte, expectedType uint64, limits frame.DecoderLimits, complete bool) (map[Position]node, map[Position]struct{}, error) {
