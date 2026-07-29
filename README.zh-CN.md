@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`crdt` 是一个小巧、无第三方依赖、可组合的 Go 状态型 CRDT 库。
+`crdt` 是一个小巧、可组合的 Go 状态型 CRDT 库。
 它提供确定性的二进制状态帧与增量帧，使副本能在重复投递、乱序和暂时
 网络分区的情况下收敛。
 
@@ -28,15 +28,18 @@
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
+- 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
 - 实验性 LWW-Set、LWW-Map、RGA 文本与 OR-Tree 集合；仅能通过每个复制组的显式协议策略启用。
   RGA v1 现具备有边界的延迟集成与增量可见索引，但其墓碑生命周期仍为实验性。
 
 ## 范围
 
-本库提供 CRDT 数据类型和线协议基础组件。它不负责选择网络传输、成员协议、
-认证、存储后端或重试策略。只有当应用提供权威且经过认证的活跃成员视图后，
-`tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该
-成员视图。校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
+核心库提供 CRDT 数据类型和线协议基础组件，不负责选择成员协议、认证方案、存储后端或
+重试策略。可选的 [`extensions`](EXTENSIONS.zh-CN.md) 包提供显式启用的 WebSocket 与
+HTTP/SSE live relay 参考端点，但它不启动 listener，也不提供持久化、重放、重连、TLS、
+反熵或身份/session 管理；这些仍由应用负责。只有当应用提供权威且经过认证的活跃成员视图后，
+`tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该成员视图。
+校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
 
 ## 实验性 LWW-Set、LWW-Map、RGA 与 OR-Tree 协议
 
@@ -257,6 +260,15 @@ RGA 文本组和附件引用组，使用快照恢复两个接收状态，并在�
 
 ```sh
 go run ./examples/attachment-collaboration
+```
+
+[可选传输扩展指南](EXTENSIONS.zh-CN.md)及其[可运行 provider 示例]
+(examples/extensions-provider)展示将 WebSocket 与 HTTP/SSE 同时挂载到应用自有 mux 的方式。
+示例先演示 WebSocket 到 HTTP 的投递，再演示 HTTP 到 WebSocket 的投递；它是有边界的
+live relay，不是持久化复制服务：
+
+```sh
+go run ./examples/extensions-provider
 ```
 
 Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](ATTACHMENT_INTEGRATION.zh-CN.md)。
