@@ -74,6 +74,26 @@ for _, kind := range policy.FrameTypes() {
 策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
 RGA 和 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
 
+## 浏览器与 JavaScript 移动端客户端
+
+仓库在 [`clients/typescript`](clients/typescript/README.md) 中提供了有边界的
+TypeScript v1 frame 外层解码器，以及 RGA v1 Wasm 客户端运行时。TypeScript 层检查
+公共二进制信封；Wasm 层直接复用 Go 的 RGA 合并、乱序、墓碑和 HLC 语义，因此浏览器或
+兼容 WebView 可以本地合并，而不是等待服务端仲裁。
+
+构建和验证命令：
+
+```sh
+make wasm
+make typescript-test
+make wasm-test
+```
+
+这仅是实验性的 RGA v1 客户端。收到帧之前必须认证 Manifest 并协商
+`AllowExperimental`；CRC-32C 不能认证对端。客户端快照的 state、clock 与 frontier
+必须原子持久化。没有兼容 WebAssembly 运行时的原生移动端，仍需要经过独立验证的绑定或
+语义实现。单次本地编辑超过 64 KiB 或 16,384 rune 时应先按顺序拆分。
+
 ## 实验性附件引用
 
 `attachment.Register` 将文档中的图片、音频、视频或其他二进制数据表示为一个有边界的

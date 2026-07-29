@@ -17,10 +17,17 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Run tests
         run: go test ./...
+      - name: Run TypeScript and Go Wasm compatibility tests
+        run: make wasm-test
       - name: Run race detector
         run: go test -race ./...
       - name: Run vet

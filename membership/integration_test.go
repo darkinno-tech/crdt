@@ -135,13 +135,14 @@ func mustORSet(t testing.TB, replicaID string) *set.ORSet[string] {
 func signedReceipt(t testing.TB, setup fixture, view View, memberID string, sequence uint64, tags []crdt.Tag) Receipt {
 	t.Helper()
 	receipt, err := SignReceipt(Receipt{
-		GroupID:     view.GroupID,
-		Epoch:       view.Epoch,
-		ViewHash:    view.Hash(),
-		MemberID:    memberID,
-		Incarnation: 1,
-		Sequence:    sequence,
-		Tags:        tags,
+		GroupID:      view.GroupID,
+		Epoch:        view.Epoch,
+		ViewHash:     view.Hash(),
+		MemberID:     memberID,
+		Incarnation:  1,
+		Sequence:     sequence,
+		CheckpointID: testCheckpointID(memberID, sequence),
+		Tags:         tags,
 	}, setup.members[memberID])
 	if err != nil {
 		t.Fatal(err)

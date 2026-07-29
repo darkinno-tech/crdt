@@ -21,9 +21,9 @@ var (
 )
 
 // Receipt is an authenticated assertion by one crash-fault-trusted member
-// that it has durably installed the listed tombstones in a checkpoint. A
-// signature establishes origin and replay scope; it cannot prove honesty or
-// durable storage against a Byzantine signer.
+// that it has durably installed the listed tombstones in a non-zero checkpoint
+// ID. A signature establishes origin and replay scope; it cannot prove
+// honesty or durable storage against a Byzantine signer.
 type Receipt struct {
 	GroupID      string
 	Epoch        uint64
@@ -66,7 +66,7 @@ func verifyReceipt(receipt Receipt, publicKey ed25519.PublicKey) error {
 }
 
 func (r Receipt) validUnsigned() bool {
-	if strings.TrimSpace(r.GroupID) == "" || r.Epoch == 0 || strings.TrimSpace(r.MemberID) == "" || r.Incarnation == 0 || r.Sequence == 0 || isZeroHash(r.ViewHash) || len(r.Tags) > maxReceiptTags {
+	if strings.TrimSpace(r.GroupID) == "" || r.Epoch == 0 || strings.TrimSpace(r.MemberID) == "" || r.Incarnation == 0 || r.Sequence == 0 || isZeroHash(r.ViewHash) || isZeroHash(r.CheckpointID) || len(r.Tags) > maxReceiptTags {
 		return false
 	}
 	for index, tag := range r.Tags {

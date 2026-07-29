@@ -76,7 +76,10 @@ network-replicable library primitive:
   chains on the wire without changing scalar Position semantics.
 - RGA compaction only removes deleted leaves after external authenticated exact
   acknowledgement, durable post-compaction checkpointing, and retirement of
-  old deltas. Descendant anchors remain retained.
+  old deltas. Descendant anchors remain retained. A coordinator may use RGA's
+  `CompactEligibleTombstones` only to process an already proven batch in
+  child-before-parent order; pending state and unacknowledged tags still block
+  collection.
 - OR-Tree has the same lifecycle boundary. `tree.Options` bounds node,
   tombstone, and value retention on both mutation and recovery; its compactor
   removes only requested tombstoned leaves and refuses any retained structural

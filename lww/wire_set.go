@@ -69,14 +69,23 @@ func (s *Set[T]) SnapshotCurrentState(codec ElementCodec[T]) (snapshot.Snapshot,
 // Snapshots without clock state are rejected because they cannot safely reuse
 // a logical replica ID.
 func NewSetFromSnapshot[T comparable](saved snapshot.Snapshot, codec ElementCodec[T]) (*Set[T], error) {
+	return NewSetFromSnapshotWithOptions(saved, codec, DefaultSetOptions())
+}
+
+// NewSetFromSnapshotWithOptions restores a set and its persisted HLC state
+// while retaining the receiving replication group's local entry limit.
+func NewSetFromSnapshotWithOptions[T comparable](saved snapshot.Snapshot, codec ElementCodec[T], options SetOptions) (*Set[T], error) {
 	if saved.TypeID != crdt.TypeIDLWWSetState {
 		return nil, ErrInvalidSetSnap
+	}
+	if !options.valid() {
+		return nil, ErrResourceLimit
 	}
 	clockState, ok := saved.ClockState()
 	if !ok {
 		return nil, ErrInvalidSetSnap
 	}
-	restored, err := NewSetFromClock[T](clockState)
+	restored, err := NewSetFromClockWithOptions[T](clockState, options)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +135,13 @@ func (s *Set[T]) UnmarshalBinaryWithLimits(data []byte, codec ElementCodec[T], l
 	if err != nil {
 		return err
 	}
+	if len(entries) > s.options.MaxEntries {
+		return ErrResourceLimit
+	}
+	tags, err := setTagIndex(entries)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if tag, ok := greatestSetTag(entries); ok {
@@ -134,6 +150,7 @@ func (s *Set[T]) UnmarshalBinaryWithLimits(data []byte, codec ElementCodec[T], l
 		}
 	}
 	s.entries = entries
+	s.tags = tags
 	return nil
 }
 

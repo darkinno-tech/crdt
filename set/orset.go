@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
@@ -40,6 +41,7 @@ type ElementCodec[T comparable] interface {
 // remove operations tombstone only tags observed by that replica.
 type ORSet[T comparable] struct {
 	mu         sync.RWMutex
+	lockID     uint64
 	replicaID  string
 	clock      *clock.HLC
 	codec      ElementCodec[T]
@@ -67,6 +69,8 @@ type orSetMarshalPlanEntry[T comparable] struct {
 	tagEnd   int
 }
 
+var nextORSetLockID atomic.Uint64
+
 var _ crdt.CRDT[*ORSet[string]] = (*ORSet[string])(nil)
 var _ crdt.DeltaCapable[*ORSet[string], ORSetDelta[string]] = (*ORSet[string])(nil)
 
@@ -87,6 +91,7 @@ func NewORSetFromClock[T comparable](clockState clock.State, codec ElementCodec[
 		return nil, err
 	}
 	return &ORSet[T]{
+		lockID:     nextORSetLockID.Add(1),
 		replicaID:  clockState.ReplicaID,
 		clock:      hlc,
 		codec:      codec,
@@ -278,7 +283,9 @@ func (s *ORSet[T]) Elements() []T {
 	return result
 }
 
-// Merge joins other into s without holding both instance locks at once.
+// Merge joins other into s without cloning the complete source state. It holds
+// a receiver write lock and a source read lock in one per-instance order, so
+// concurrent opposite-direction merges cannot deadlock.
 func (s *ORSet[T]) Merge(other *ORSet[T]) error {
 	if s == nil || other == nil {
 		return ErrNilORSet
@@ -290,22 +297,20 @@ func (s *ORSet[T]) Merge(other *ORSet[T]) error {
 		return nil
 	}
 
-	other.mu.RLock()
-	adds := cloneAdds(other.elements)
-	tombstones := cloneTags(other.tombstones)
-	other.mu.RUnlock()
-	if err := validateState(adds, tombstones); err != nil {
+	destinationFirst := lockORSetMerge(s, other)
+	defer unlockORSetMerge(s, other, destinationFirst)
+	if err := validateState(other.elements, other.tombstones); err != nil {
 		return err
 	}
-	if tag, ok := greatestStateTag(adds, tombstones); ok {
+	if subsumesState(s.elements, s.tombstones, other.elements, other.tombstones) {
+		return nil
+	}
+	if tag, ok := greatestStateTag(other.elements, other.tombstones); ok {
 		if err := s.clock.Witness(tag); err != nil {
 			return err
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	joinState(s.elements, s.tombstones, adds, tombstones)
+	joinState(s.elements, s.tombstones, other.elements, other.tombstones)
 	return nil
 }
 
@@ -757,15 +762,21 @@ func joinState[T comparable](destinationAdds map[T]map[crdt.Tag]struct{}, destin
 func (s *ORSet[T]) subsumes(sourceAdds map[T]map[crdt.Tag]struct{}, sourceTombstones map[crdt.Tag]struct{}) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return subsumesState(s.elements, s.tombstones, sourceAdds, sourceTombstones)
+}
+
+// subsumesState reports whether each source mutation is represented by the
+// destination. The caller must hold a lock that keeps both states stable.
+func subsumesState[T comparable](destinationAdds map[T]map[crdt.Tag]struct{}, destinationTombstones map[crdt.Tag]struct{}, sourceAdds map[T]map[crdt.Tag]struct{}, sourceTombstones map[crdt.Tag]struct{}) bool {
 	for tag := range sourceTombstones {
-		if _, exists := s.tombstones[tag]; !exists {
+		if _, exists := destinationTombstones[tag]; !exists {
 			return false
 		}
 	}
 	for element, tags := range sourceAdds {
-		destinationTags := s.elements[element]
+		destinationTags := destinationAdds[element]
 		for tag := range tags {
-			if _, removed := s.tombstones[tag]; removed {
+			if _, removed := destinationTombstones[tag]; removed {
 				continue
 			}
 			if _, exists := destinationTags[tag]; !exists {
@@ -774,6 +785,31 @@ func (s *ORSet[T]) subsumes(sourceAdds map[T]map[crdt.Tag]struct{}, sourceTombst
 		}
 	}
 	return true
+}
+
+// lockORSetMerge locks destination for mutation and source for reading in a
+// single total order. The lock ID is assigned by the constructor instead of
+// using pointer addresses, which keeps ordering independent of runtime memory
+// movement and avoids relying on unsafe operations.
+func lockORSetMerge[T comparable](destination, source *ORSet[T]) bool {
+	if destination.lockID < source.lockID {
+		destination.mu.Lock()
+		source.mu.RLock()
+		return true
+	}
+	source.mu.RLock()
+	destination.mu.Lock()
+	return false
+}
+
+func unlockORSetMerge[T comparable](destination, source *ORSet[T], destinationFirst bool) {
+	if destinationFirst {
+		source.mu.RUnlock()
+		destination.mu.Unlock()
+		return
+	}
+	destination.mu.Unlock()
+	source.mu.RUnlock()
 }
 
 func validateState[T comparable](adds map[T]map[crdt.Tag]struct{}, tombstones map[crdt.Tag]struct{}) error {

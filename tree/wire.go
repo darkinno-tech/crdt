@@ -242,15 +242,15 @@ func (t *ORTree) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimi
 			}
 		}
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if tag, ok := greatest(delta); ok {
 		if err := t.clock.Witness(tag); err != nil {
 			return err
 		}
 	}
-	t.mu.Lock()
 	t.nodes, t.tombstones = delta.nodes, delta.tombstones
 	t.version++
-	t.mu.Unlock()
 	return nil
 }
 

@@ -2,6 +2,7 @@
 package tree
 
 import (
+	"bytes"
 	"errors"
 	"sort"
 	"sync"
@@ -126,11 +127,6 @@ func (t *ORTree) Add(parent NodeID, value []byte) (NodeID, Delta, error) {
 	if len(value) > t.options.MaxValueBytes {
 		return NodeID{}, Delta{}, ErrResourceLimit
 	}
-	id, err := t.clock.Now()
-	if err != nil {
-		return NodeID{}, Delta{}, err
-	}
-	node := storedNode{parent: parent, value: append([]byte(nil), value...)}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if len(t.nodes) >= t.options.MaxNodes {
@@ -139,6 +135,11 @@ func (t *ORTree) Add(parent NodeID, value []byte) (NodeID, Delta, error) {
 	if parent.Valid() && !liveReachable(parent, t.nodes, t.tombstones) {
 		return NodeID{}, Delta{}, ErrUnknownParent
 	}
+	id, err := t.clock.Now()
+	if err != nil {
+		return NodeID{}, Delta{}, err
+	}
+	node := storedNode{parent: parent, value: append([]byte(nil), value...)}
 	t.nodes[id] = node
 	t.version++
 	delta := Delta{nodes: map[NodeID]storedNode{id: node}, tombstones: map[NodeID]struct{}{}}
@@ -175,17 +176,20 @@ func (t *ORTree) ApplyDelta(delta Delta) error {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if !acyclic(delta.nodes, t.nodes) {
-		return ErrInvalidDelta
-	}
 	for id, incoming := range delta.nodes {
-		if current, exists := t.nodes[id]; exists && (current.parent != incoming.parent || string(current.value) != string(incoming.value)) {
+		if current, exists := t.nodes[id]; exists && !sameTreeNode(current, incoming) {
 			return ErrNodeConflict
 		}
+	}
+	if treeDeltaSubsumed(t.nodes, t.tombstones, delta) {
+		return nil
 	}
 	if len(t.nodes)+newTreeNodes(delta.nodes, t.nodes) > t.options.MaxNodes ||
 		len(t.tombstones)+newTreeTombstones(delta.tombstones, t.tombstones) > t.options.MaxTombstones {
 		return ErrResourceLimit
+	}
+	if !acyclic(delta.nodes, t.nodes) {
+		return ErrInvalidDelta
 	}
 	if tag, ok := greatest(delta); ok {
 		if err := t.clock.Witness(tag); err != nil {
@@ -232,7 +236,7 @@ func (d Delta) Merge(other Delta) (Delta, error) {
 	}
 	merged := Delta{nodes: cloneNodes(d.nodes), tombstones: cloneTombstones(d.tombstones)}
 	for id, node := range other.nodes {
-		if current, exists := merged.nodes[id]; exists && (current.parent != node.parent || string(current.value) != string(node.value)) {
+		if current, exists := merged.nodes[id]; exists && !sameTreeNode(current, node) {
 			return Delta{}, ErrNodeConflict
 		}
 		merged.nodes[id] = node
@@ -362,6 +366,29 @@ func validate(delta Delta) error {
 	}
 	return nil
 }
+
+func sameTreeNode(left, right storedNode) bool {
+	return left.parent == right.parent && bytes.Equal(left.value, right.value)
+}
+
+// treeDeltaSubsumed reports whether every node and tombstone in delta is
+// already retained by the receiver. The caller must hold t.mu for writing so a
+// concurrent compaction cannot retire one of the identifiers mid-check.
+func treeDeltaSubsumed(nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}, delta Delta) bool {
+	for id, incoming := range delta.nodes {
+		current, exists := nodes[id]
+		if !exists || !sameTreeNode(current, incoming) {
+			return false
+		}
+	}
+	for id := range delta.tombstones {
+		if _, exists := tombstones[id]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
 func acyclic(incoming, existing map[NodeID]storedNode) bool {
 	lookup := func(id NodeID) (storedNode, bool) {
 		if node, ok := incoming[id]; ok {
@@ -370,19 +397,37 @@ func acyclic(incoming, existing map[NodeID]storedNode) bool {
 		node, ok := existing[id]
 		return node, ok
 	}
-	for id, node := range incoming {
-		seen := map[NodeID]struct{}{id: {}}
-		parent := node.parent
-		for parent.Valid() {
-			if _, repeated := seen[parent]; repeated {
+	const (
+		visiting uint8 = 1
+		complete uint8 = 2
+	)
+	// One state map is shared across every incoming root. In particular, a
+	// long parent chain is traversed once rather than once per descendant.
+	state := make(map[NodeID]uint8, len(incoming))
+	path := make([]NodeID, 0)
+	for id := range incoming {
+		if state[id] == complete {
+			continue
+		}
+		path = path[:0]
+		for current := id; current.Valid(); {
+			switch state[current] {
+			case visiting:
 				return false
+			case complete:
+				current = NodeID{}
+				continue
 			}
-			seen[parent] = struct{}{}
-			next, ok := lookup(parent)
-			if !ok {
+			next, known := lookup(current)
+			if !known {
 				break
 			}
-			parent = next.parent
+			state[current] = visiting
+			path = append(path, current)
+			current = next.parent
+		}
+		for _, visited := range path {
+			state[visited] = complete
 		}
 	}
 	return true
