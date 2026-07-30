@@ -81,8 +81,10 @@ mux.Handle("/crdt/durable/", http.StripPrefix("/crdt/durable", handler))
 The server exposes `GET /ws` with the `crdt-durable-v1` subprotocol. Its
 `bbolt` file is opened with an exclusive lock, but deployment must still ensure
 that one active pod/process owns the persistent volume. Do not mount the same
-file into multiple replicas. A highly available deployment needs a different
-store implementation with the same transaction contract. `MaxEvents` and
+file into multiple replicas. `durable.Config.Store` is a `durable.Log`, so a
+highly available deployment can use the Redis or PostgreSQL implementations in
+[the provider architecture guide](provider-architecture.md), provided it keeps
+the same transaction contract. `MaxEvents` and
 `MaxBytes` apply per configured replication group; put a fixed per-tenant
 group quota in front of a multi-tenant service.
 

@@ -61,7 +61,7 @@ go test ./...
 - Bounded canonical state/delta frames, deterministic snapshots, recovery plans, and persisted HLC state for reusable replica identities.
 - RGA collaborative text with stable run-v2 frames by default; stable bounded rich-text and observed-remove tree protocols; plus list and XML-fragment layers.
 - Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
-- A bounded live WebSocket provider, a separate bbolt-backed durable relay, and a local bbolt checkpoint reference.
+- A bounded live WebSocket provider, a separate bbolt-backed durable relay, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and a local bbolt checkpoint reference.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
 - [RGA diagnostic obfuscation](docs/integration/debug-obfuscation.md) that replaces text content while retaining an isolated debug timeline structure.
 
@@ -75,6 +75,7 @@ Experimental protocols—LWW-Set, LWW-Map, legacy scalar RGA v1, and list RGA—
 | Build a complete client flow | [End-to-end integration](docs/integration/overview.md) |
 | Survive local restarts safely | [Local bbolt checkpoint reference](docs/integration/local-checkpoint.md) and `go run ./examples/persistent-replica` |
 | Add replay and reconnect | [Durable relay reference](docs/integration/durable-provider.md) |
+| Choose browser, WebRTC, Redis, or PostgreSQL boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
 | Use a bounded live relay | [WebSocket provider reference](docs/integration/websocket-provider.md) |
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
 | Implement run-v2 outside Go/Wasm | [RGA run-v2 protocol and vectors](docs/protocol/rga-run-v2.md) |
