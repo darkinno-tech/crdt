@@ -140,3 +140,38 @@ func TestLoaderCoversAbsentAndUnsafeTypedSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestLoaderRequiredIntAndEnum(t *testing.T) {
+	loader, err := New(NewMap(map[string]string{
+		"LIMIT": "16",
+		"MODE":  "safe",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, err := loader.RequiredInt("LIMIT", 1, 32); err != nil || value != 16 {
+		t.Fatalf("RequiredInt() = %d, %v", value, err)
+	}
+	if value, err := loader.Enum("MODE", "safe", "safe", "strict"); err != nil || value != "safe" {
+		t.Fatalf("Enum() = %q, %v", value, err)
+	}
+	if _, err := loader.RequiredInt("MISSING", 1, 32); !errors.Is(err, ErrRequired) {
+		t.Fatalf("missing RequiredInt() error = %v", err)
+	}
+	if _, err := loader.RequiredInt("LIMIT", 32, 1); !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("invalid RequiredInt range error = %v", err)
+	}
+	if _, err := loader.Enum("MODE", "unsafe", "safe", "strict"); !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("unsafe enum fallback error = %v", err)
+	}
+	unsafe, err := New(NewMap(map[string]string{"MODE": "unsafe", "LIMIT": "0"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unsafe.Enum("MODE", "safe", "safe", "strict"); !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("invalid enum error = %v", err)
+	}
+	if _, err := unsafe.RequiredInt("LIMIT", 1, 32); !errors.Is(err, ErrInvalidValue) {
+		t.Fatalf("invalid required int error = %v", err)
+	}
+}
