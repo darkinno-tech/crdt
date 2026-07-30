@@ -7,28 +7,7 @@
 
 export const FORMAT_VERSION = 1n;
 
-export const FrameType = {
-  GCounterState: 1n,
-  ORSetState: 2n,
-  GCounterDelta: 3n,
-  ORSetDelta: 4n,
-  PNCounterState: 5n,
-  PNCounterDelta: 6n,
-  LWWSetState: 7n,
-  LWWSetDelta: 8n,
-  LWWMapState: 9n,
-  LWWMapDelta: 10n,
-  RGAState: 11n,
-  RGADelta: 12n,
-  GSetState: 13n,
-  GSetDelta: 14n,
-  MVRegisterState: 15n,
-  MVRegisterDelta: 16n,
-  ORTreeState: 17n,
-  ORTreeDelta: 18n,
-  RGARunState: 19n,
-  RGARunDelta: 20n,
-} as const;
+export { FrameType } from "./type_ids.generated.js";
 
 export interface FrameDecoderLimits {
   /** Maximum total bytes accepted before copying a payload. */

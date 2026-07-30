@@ -5,48 +5,6 @@ import (
 	"strings"
 )
 
-// Stable frame type assignments. Values are part of the v1 wire contract and
-// must never be reused for a different payload shape.
-const (
-	TypeIDGCounterState   uint64 = 1
-	TypeIDORSetState      uint64 = 2
-	TypeIDGCounterDelta   uint64 = 3
-	TypeIDORSetDelta      uint64 = 4
-	TypeIDPNCounterState  uint64 = 5
-	TypeIDPNCounterDelta  uint64 = 6
-	TypeIDLWWSetState     uint64 = 7
-	TypeIDLWWSetDelta     uint64 = 8
-	TypeIDLWWMapState     uint64 = 9
-	TypeIDLWWMapDelta     uint64 = 10
-	TypeIDRGAState        uint64 = 11
-	TypeIDRGADelta        uint64 = 12
-	TypeIDGSetState       uint64 = 13
-	TypeIDGSetDelta       uint64 = 14
-	TypeIDMVRegisterState uint64 = 15
-	TypeIDMVRegisterDelta uint64 = 16
-	// Observed-remove tree v1 carries immutable parent links with add/remove
-	// semantics. A move-capable tree requires a new independently negotiated
-	// frame pair; TypeIDs 17/18 must never be repurposed for it.
-	TypeIDORTreeState uint64 = 17
-	TypeIDORTreeDelta uint64 = 18
-	// RGA run frames retain scalar Position semantics while compacting linear
-	// same-replica insertion chains. They are the default protocol for new RGA
-	// replication groups; TypeIDRGAState and TypeIDRGADelta remain immutable v1
-	// contracts for explicitly negotiated legacy groups.
-	TypeIDRGARunState uint64 = 19
-	TypeIDRGARunDelta uint64 = 20
-	// List RGA frames carry one canonical caller-coded value per position.
-	// They are intentionally distinct from text RGA frames: a text position is
-	// one Unicode scalar while a list position is one opaque application value.
-	TypeIDListRGAState uint64 = 21
-	TypeIDListRGADelta uint64 = 22
-	// Rich text nests a run-v2 RGA frame with bounded inline formatting
-	// registers. Its renderer schema is bound by replica.Manifest.SchemaID;
-	// TypeIDs 23/24 and semantics version 1 are immutable.
-	TypeIDRichTextState uint64 = 23
-	TypeIDRichTextDelta uint64 = 24
-)
-
 // FrameType describes one fully implemented framed CRDT protocol. The type
 // table is deliberately closed: reserving an ID alone must not make a payload
 // eligible for batching or recovery before its concrete codec is available.
@@ -54,21 +12,6 @@ type FrameType struct {
 	StateID uint64
 	DeltaID uint64
 	UsesHLC bool
-}
-
-var frameTypes = [...]FrameType{
-	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta},
-	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, UsesHLC: true},
-	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
-	{StateID: TypeIDLWWSetState, DeltaID: TypeIDLWWSetDelta, UsesHLC: true},
-	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, UsesHLC: true},
-	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
-	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
-	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
-	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
-	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
-	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, UsesHLC: true},
-	{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, UsesHLC: true},
 }
 
 // DefaultRGAFrameType returns the compact run-v2 protocol for new RGA

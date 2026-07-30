@@ -29,6 +29,8 @@ jobs:
           node-version: "24.x"
           cache: npm
           cache-dependency-path: clients/typescript/package-lock.json
+      - name: Verify generated protocol registry
+        run: go generate ./... && git diff --exit-code -- type_ids_generated.go clients/typescript/src/type_ids.generated.ts
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Run tests

@@ -1,0 +1,28 @@
+// Generated from docs/protocol/type-ids.json by internal/cmd/typeidgen; DO NOT EDIT.
+
+export const FrameType = {
+  GCounterState: 1n,
+  GCounterDelta: 3n,
+  ORSetState: 2n,
+  ORSetDelta: 4n,
+  PNCounterState: 5n,
+  PNCounterDelta: 6n,
+  LWWSetState: 7n,
+  LWWSetDelta: 8n,
+  LWWMapState: 9n,
+  LWWMapDelta: 10n,
+  RGAState: 11n,
+  RGADelta: 12n,
+  GSetState: 13n,
+  GSetDelta: 14n,
+  MVRegisterState: 15n,
+  MVRegisterDelta: 16n,
+  ORTreeState: 17n,
+  ORTreeDelta: 18n,
+  RGARunState: 19n,
+  RGARunDelta: 20n,
+  ListRGAState: 21n,
+  ListRGADelta: 22n,
+  RichTextState: 23n,
+  RichTextDelta: 24n,
+} as const;
