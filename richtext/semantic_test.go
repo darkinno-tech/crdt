@@ -175,6 +175,9 @@ func TestSemanticBoundaryAndParsingPaths(t *testing.T) {
 	if start, end := paragraphBounds([]rune("a\nb"), 2, 3); start != 2 || end != 3 {
 		t.Fatalf("final paragraph bounds = %d, %d; want 2, 3", start, end)
 	}
+	if start, end := paragraphBounds([]rune("a\nb"), 2, 2); start != 2 || end != 3 {
+		t.Fatalf("collapsed paragraph bounds = %d, %d; want 2, 3", start, end)
+	}
 }
 
 func TestSemanticFormatConvergesAfterShuffledDelivery(t *testing.T) {
@@ -211,5 +214,82 @@ func TestSemanticFormatConvergesAfterShuffledDelivery(t *testing.T) {
 	}
 	if string(left) != string(right) {
 		t.Fatal("semantic replicas did not produce equal canonical state")
+	}
+}
+
+func TestSemanticBlocksProjectClearAndDetectConflicts(t *testing.T) {
+	document := mustDocument(t, "semantic-blocks")
+	if _, err := document.Insert(0, "Title\n\nbody"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.FormatBlocks(0, 0, BlockFormat{Kind: "heading", Level: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.FormatBlocks(7, 0, BlockFormat{Kind: "quote"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []Block{
+		{Text: "Title", Format: BlockFormat{Kind: "heading", Level: 1}, Formatted: true},
+		{Text: ""},
+		{Text: "body", Format: BlockFormat{Kind: "quote"}, Formatted: true},
+	}
+	if got := document.Blocks(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Blocks() = %#v, want %#v", got, want)
+	}
+	if _, err := document.ClearBlocks(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Blocks()[0]; got.Formatted {
+		t.Fatalf("cleared title block = %#v", got)
+	}
+	if _, err := document.Format(7, 1, []AttributeChange{{Key: AttributeBlock, Value: "code"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Blocks()[2]; got.Formatted {
+		t.Fatalf("mixed block conflict was hidden: %#v", got)
+	}
+
+	empty := mustDocument(t, "semantic-empty-blocks")
+	if got := empty.Blocks(); got != nil {
+		t.Fatalf("empty Blocks() = %#v, want nil", got)
+	}
+}
+
+func TestSemanticAnchoredBlocksAndExplicitInsertion(t *testing.T) {
+	document := mustDocument(t, "semantic-anchored-blocks")
+	if _, err := document.Insert(0, "one\ntwo"); err != nil {
+		t.Fatal(err)
+	}
+	start, err := document.AnchorAt(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := document.AnchorAt(document.Len())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Insert(0, "X"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.FormatBlocksAnchored(start, end, BlockFormat{Kind: "code"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := document.Blocks()[1], (Block{Text: "two", Format: BlockFormat{Kind: "code"}, Formatted: true}); got != want {
+		t.Fatalf("anchored block = %#v, want %#v", got, want)
+	}
+	if _, err := document.ClearBlocksAnchored(start, end); err != nil {
+		t.Fatal(err)
+	}
+	if got := document.Blocks()[1]; got.Formatted {
+		t.Fatalf("anchored clear block = %#v", got)
+	}
+	if _, err := document.InsertWithBlockFormat(document.Len(), "!", Attributes{AttributeBold: "true"}, BlockFormat{Kind: "paragraph"}); err != nil {
+		t.Fatal(err)
+	}
+	if attributes, ok := document.AttributesAt(document.Len() - 1); !ok || attributes[AttributeBlock] != "paragraph" || attributes[AttributeBold] != "true" {
+		t.Fatalf("explicit block insertion attributes = %#v, %t", attributes, ok)
+	}
+	if _, err := document.InsertWithBlockFormat(0, "x", Attributes{AttributeBlock: "quote"}, BlockFormat{Kind: "paragraph"}); !errors.Is(err, ErrInvalidSemantic) {
+		t.Fatalf("reserved block override = %v, want %v", err, ErrInvalidSemantic)
 	}
 }

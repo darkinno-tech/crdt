@@ -102,6 +102,23 @@ func BenchmarkRichTextSemanticBlockFormatTenThousandRunes(b *testing.B) {
 	}
 }
 
+func BenchmarkRichTextBlocksOneThousandParagraphs(b *testing.B) {
+	document := mustDocument(b, "semantic-block-projection")
+	if _, err := document.Insert(0, strings.Repeat("paragraph\n", 1_000)); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := document.FormatBlocks(0, document.Len(), BlockFormat{Kind: "quote"}); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		if blocks := document.Blocks(); len(blocks) != 1_000 {
+			b.Fatalf("Blocks() = %d blocks, want 1000", len(blocks))
+		}
+	}
+}
+
 func benchmarkRichTextSeed(b testing.TB, runes int) Delta {
 	b.Helper()
 	document := mustDocument(b, "seed")
