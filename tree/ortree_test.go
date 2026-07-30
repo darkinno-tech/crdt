@@ -597,6 +597,70 @@ func TestORTreeUnmarshalBinaryHonorsLocalDecodeBounds(t *testing.T) {
 	}
 }
 
+func TestORTreeUnmarshalBinaryDoesNotRetainFrameInput(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _, err := source.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, _, err := source.Add(root, []byte("child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := source.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.UnmarshalBinary(state); err != nil {
+		t.Fatal(err)
+	}
+	for index := range state {
+		state[index] = 0
+	}
+	if got := target.Nodes(); len(got) != 2 || got[0].ID != root || string(got[0].Value) != "root" || got[1].ID != child || got[1].Parent != root || string(got[1].Value) != "child" {
+		t.Fatalf("nodes retained mutated frame input: %#v", got)
+	}
+}
+
+func TestORTreeUnmarshalDeltaDoesNotRetainFrameInput(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, delta, err := source.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range encoded {
+		encoded[index] = 0
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.Nodes(); len(got) != 1 || got[0].ID != root || string(got[0].Value) != "root" {
+		t.Fatalf("delta retained mutated frame input: %#v", got)
+	}
+}
+
 func TestORTreeDeltaWireAndErrorPaths(t *testing.T) {
 	if _, err := NewFromClock(clock.State{}); !errors.Is(err, ErrInvalidReplicaID) {
 		t.Fatalf("NewFromClock() = %v", err)

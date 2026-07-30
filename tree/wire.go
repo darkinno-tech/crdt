@@ -145,7 +145,10 @@ func UnmarshalDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, e
 // map or value allocation. Delta decoders have no receiver-owned state budget
 // and therefore pass nil.
 func unmarshalTree(data []byte, typeID uint64, limits frame.DecoderLimits, options *Options) (Delta, error) {
-	f, err := frame.UnmarshalFrame(data, limits)
+	// The tree parser copies every retained field, so a validated borrowed frame
+	// view avoids cloning an untrusted payload before receiver-local limits can
+	// reject it.
+	f, err := frame.UnmarshalFrameView(data, limits)
 	if err != nil {
 		return Delta{}, err
 	}
