@@ -8,11 +8,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/counter"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/replica"
+	"github.com/DarkInno/crdt/telemetry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -67,6 +69,101 @@ func TestGRPCRelayReplicatesManifestBoundChange(t *testing.T) {
 		t.Fatalf("received gRPC envelope dot=%#v delta=%x err=%v", dot, delta, err)
 	}
 	eventually(t, func() bool { return counterValue(t, relayState) == 7 && group.Frontier().Counter("writer") == 1 })
+}
+
+func TestGRPCRelayReportsRealHandshakeAndAppend(t *testing.T) {
+	events := make(chan telemetry.Event, 8)
+	reporter, err := telemetry.New(telemetry.Options{QueueSize: 8, Sink: func(event telemetry.Event) { events <- event }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reporter.Close()
+
+	group, manifest, _ := newGRPCCounterGroup(t)
+	server, _, err := NewGRPCServer(GRPCConfig{
+		Groups:                []*Group{group},
+		Authenticate:          func(context.Context) (Peer, error) { return Peer{ID: "writer"}, nil },
+		Authorize:             func(Peer, replica.Manifest, replica.Dot) error { return nil },
+		AuthorizeSubscription: func(Peer, replica.Manifest) error { return nil },
+		Telemetry:             reporter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := grpcBufconn(t, server)
+	writer := grpcSync(t, connection, manifest, "writer")
+	writerState, _ := newCounterInbox(t, manifest, "writer")
+	change := incrementChange(t, writerState, manifest, "writer", 1, 1)
+	encoded, err := marshalChange(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Send(&SyncMessage{Payload: &SyncMessage_Change{Change: encoded}}); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]struct{}{"handshake": {}, "append": {}}
+	deadline := time.After(time.Second)
+	for len(want) > 0 {
+		select {
+		case event := <-events:
+			if event.Component != "extensions" || event.Outcome != telemetry.OutcomeSuccess {
+				t.Fatalf("event = %+v, want successful extensions event", event)
+			}
+			delete(want, event.Operation)
+		case <-deadline:
+			t.Fatalf("missing gRPC telemetry operations: %v", want)
+		}
+	}
+}
+
+func TestGRPCRelayReportsRejectedHandshake(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		authenticate    GRPCAuthenticate
+		authorizeReader AuthorizeSubscription
+		sendHello       bool
+	}{
+		{name: "authentication", authenticate: func(context.Context) (Peer, error) { return Peer{}, ErrUnauthorized }, authorizeReader: func(Peer, replica.Manifest) error { return nil }},
+		{name: "subscription", authenticate: func(context.Context) (Peer, error) { return Peer{ID: "reader"}, nil }, authorizeReader: func(Peer, replica.Manifest) error { return ErrUnauthorized }, sendHello: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			events := make(chan telemetry.Event, 1)
+			reporter, err := telemetry.New(telemetry.Options{QueueSize: 1, Sink: func(event telemetry.Event) { events <- event }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reporter.Close()
+			group, manifest, _ := newGRPCCounterGroup(t)
+			server, _, err := NewGRPCServer(GRPCConfig{Groups: []*Group{group}, Authenticate: test.authenticate, Authorize: func(Peer, replica.Manifest, replica.Dot) error { return nil }, AuthorizeSubscription: test.authorizeReader, Telemetry: reporter})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := NewRelayClient(grpcBufconn(t, server)).Sync(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.sendHello {
+				hello, err := marshalHello(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := stream.Send(&SyncMessage{Payload: &SyncMessage_Hello{Hello: hello}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := stream.Recv(); status.Code(err) != codes.Unauthenticated && status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("handshake error = %v", err)
+			}
+			select {
+			case event := <-events:
+				if event.Operation != "handshake" || event.Outcome != telemetry.OutcomeRejected || event.ErrorCode != crdt.ErrorCodeUnauthorized {
+					t.Fatalf("event = %+v", event)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("rejected handshake telemetry was not delivered")
+			}
+		})
+	}
 }
 
 func TestGRPCClientReplicatesAndFailsClosed(t *testing.T) {

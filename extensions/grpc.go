@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
+	"github.com/DarkInno/crdt/telemetry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,6 +31,9 @@ type GRPCConfig struct {
 	MaxActorBytes         int
 	MaxQueuedMessages     int
 	MaxQueuedBytes        int
+	// Telemetry receives bounded, payload-free handshake and publication
+	// outcomes. A nil Reporter is the default and leaves relay paths unchanged.
+	Telemetry *telemetry.Reporter
 }
 
 // GRPCRelay implements Relay over one bidirectional gRPC stream per live
@@ -50,6 +55,7 @@ type GRPCRelay struct {
 	maxActorBytes         int
 	maxQueuedMessages     int
 	maxQueuedBytes        int
+	telemetry             *telemetry.Reporter
 }
 
 // NewGRPCRelay validates and constructs a disabled-by-default gRPC transport
@@ -58,23 +64,23 @@ type GRPCRelay struct {
 // CRDT group permissions.
 func NewGRPCRelay(config GRPCConfig) (*GRPCRelay, error) {
 	if config.Authenticate == nil || config.Authorize == nil || config.AuthorizeSubscription == nil || len(config.Groups) == 0 {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("extensions.new_grpc_relay", ErrInvalidConfig)
 	}
 	limits, err := normalizeLimits(config.MaxMessageBytes, config.MaxActorBytes, config.MaxQueuedMessages, config.MaxQueuedBytes, 1, 1)
 	if err != nil {
-		return nil, err
+		return nil, invalidConfig("extensions.new_grpc_relay", err)
 	}
 	groups := make(map[string]*Group, len(config.Groups))
 	for _, group := range config.Groups {
 		if group == nil || strings.TrimSpace(group.manifest.GroupID) == "" {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("extensions.new_grpc_relay", ErrInvalidConfig)
 		}
 		if _, exists := groups[group.manifest.GroupID]; exists {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("extensions.new_grpc_relay", ErrInvalidConfig)
 		}
 		hello, err := marshalHello(group.manifest)
 		if err != nil || len(hello) > controlLimit(limits.maxMessageBytes) {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("extensions.new_grpc_relay", ErrInvalidConfig)
 		}
 		groups[group.manifest.GroupID] = group
 	}
@@ -87,6 +93,7 @@ func NewGRPCRelay(config GRPCConfig) (*GRPCRelay, error) {
 		maxActorBytes:         limits.maxActorBytes,
 		maxQueuedMessages:     limits.maxQueuedMessages,
 		maxQueuedBytes:        limits.maxQueuedBytes,
+		telemetry:             config.Telemetry,
 	}, nil
 }
 
@@ -122,34 +129,42 @@ func NewGRPCServer(config GRPCConfig) (*grpc.Server, *GRPCRelay, error) {
 // boundary: a slow stream is disconnected rather than retaining arbitrary
 // application state in memory.
 func (relay *GRPCRelay) Sync(stream grpc.BidiStreamingServer[SyncMessage, SyncMessage]) error {
+	handshakeStarted := relay.started()
 	if relay == nil {
 		return status.Error(codes.Unavailable, "CRDT relay unavailable")
 	}
 	peer, err := relay.authenticate(stream.Context())
 	if err != nil || strings.TrimSpace(peer.ID) == "" {
+		relay.record("handshake", handshakeStarted, ErrUnauthorized)
 		return status.Error(codes.Unauthenticated, "unauthorized")
 	}
 	first, err := stream.Recv()
 	if err != nil {
+		relay.record("handshake", handshakeStarted, err)
 		return grpcReceiveStatus(err)
 	}
 	hello := first.GetHello()
 	if len(hello) == 0 || first.GetChange() != nil {
+		relay.record("handshake", handshakeStarted, errInvalidWireMessage)
 		return status.Error(codes.InvalidArgument, "first gRPC relay message must be a manifest")
 	}
 	remote, err := unmarshalHello(hello)
 	if err != nil {
+		relay.record("handshake", handshakeStarted, err)
 		return status.Error(codes.InvalidArgument, "invalid manifest")
 	}
 	group, exists := relay.groups[remote.GroupID]
 	if !exists || group.manifest.Compatible(remote) != nil {
+		relay.record("handshake", handshakeStarted, ErrUnauthorized)
 		return status.Error(codes.PermissionDenied, "incompatible manifest")
 	}
 	if err := relay.authorizeSubscription(peer, group.manifest); err != nil {
+		relay.record("handshake", handshakeStarted, ErrUnauthorized)
 		return status.Error(codes.PermissionDenied, "unauthorized")
 	}
 	response, err := marshalHello(group.manifest)
 	if err != nil {
+		relay.record("handshake", handshakeStarted, err)
 		return status.Error(codes.Internal, "invalid relay manifest")
 	}
 	subscriber := newGRPCSubscriber(relay.maxQueuedMessages, relay.maxQueuedBytes)
@@ -160,8 +175,10 @@ func (relay *GRPCRelay) Sync(stream grpc.BidiStreamingServer[SyncMessage, SyncMe
 	// a returned client handshake is therefore the live-subscription
 	// linearization point.
 	if err := stream.Send(&SyncMessage{Payload: &SyncMessage_Hello{Hello: response}}); err != nil {
+		relay.record("handshake", handshakeStarted, err)
 		return grpcSendStatus(err)
 	}
+	relay.record("handshake", handshakeStarted, nil)
 
 	receiveResult := make(chan error, 1)
 	go func() {
@@ -190,15 +207,32 @@ func (relay *GRPCRelay) receiveGRPCChanges(stream grpc.BidiStreamingServer[SyncM
 			return grpcReceiveStatus(err)
 		}
 		change := message.GetChange()
+		started := relay.started()
 		if len(change) == 0 || message.GetHello() != nil {
+			relay.record("append", started, errInvalidWireMessage)
 			return status.Error(codes.InvalidArgument, "expected CRDT change")
 		}
 		if _, err := group.receive(peer, relay.authorize, change, relay.maxMessageBytes, relay.maxActorBytes); err != nil {
+			relay.record("append", started, err)
 			if errors.Is(err, ErrUnauthorized) {
 				return status.Error(codes.PermissionDenied, "unauthorized")
 			}
 			return status.Error(codes.InvalidArgument, "invalid change")
 		}
+		relay.record("append", started, nil)
+	}
+}
+
+func (relay *GRPCRelay) started() time.Time {
+	if relay == nil || relay.telemetry == nil {
+		return time.Time{}
+	}
+	return time.Now()
+}
+
+func (relay *GRPCRelay) record(operation string, started time.Time, err error) {
+	if relay != nil {
+		recordExtensionsEvent(relay.telemetry, operation, started, err)
 	}
 }
 

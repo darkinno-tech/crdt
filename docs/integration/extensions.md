@@ -180,6 +180,7 @@ server, relay, err := extensions.NewGRPCServer(extensions.GRPCConfig{
 	},
 	Authorize:             authorizeWrite,
 	AuthorizeSubscription: authorizeRead,
+	Telemetry:             reporter, // Optional bounded, payload-free local events.
 })
 _ = relay
 _ = server // Serve with the application's listener and TLS credentials.
@@ -229,6 +230,11 @@ validation, authorisation, bounded duplicate/out-of-order `Inbox` processing,
 and accepted-dot-only fan-out. Per-stream application queues remain bounded;
 gRPC HTTP/2 flow control is helpful transport backpressure but is not a memory
 retention policy. A full queue disconnects the slow stream.
+
+`GRPCConfig.Telemetry` uses the same bounded reporter as the HTTP/WebSocket
+handler. It records only `handshake` and `append` outcome, duration, and stable
+error code; it never includes manifests, peer identities, metadata, or CRDT
+payloads.
 
 Use explicit, realistic RPC deadlines and stop work when the stream context is
 cancelled. A successful `Send` only means gRPC accepted the message for its

@@ -144,6 +144,7 @@ server, relay, err := extensions.NewGRPCServer(extensions.GRPCConfig{
 	Authenticate:          authenticateGRPC, // mTLS、可信 interceptor 或已验证 metadata。
 	Authorize:             authorizeWrite,
 	AuthorizeSubscription: authorizeRead,
+	Telemetry:             reporter, // 可选的有界、无载荷本地事件。
 })
 _ = relay
 _ = server // 由宿主以自己的 listener、TLS 与 graceful shutdown 提供服务。
@@ -184,6 +185,10 @@ relay 在注册订阅后才发回 manifest 确认，因此客户端成功握手�
 线性化点。它复用 `Group` 的 Manifest/policy 校验、读写授权、有界 Inbox、重复/乱序收敛和
 仅首次接受 dot 的 fan-out。HTTP/2 的 gRPC flow control 不等于应用内存上限；每 stream 仍有
 有界 queue，慢消费者会被断开。
+
+`GRPCConfig.Telemetry` 与 HTTP/WebSocket handler 使用同一种有界 reporter，只记录
+`handshake` 和 `append` 的结果、耗时与稳定错误码；不会包含 Manifest、peer 身份、metadata
+或 CRDT 载荷。
 
 客户端必须设置现实的 deadline，并在 stream context 取消时停止自己的工作。`Send` 成功仅表示
 gRPC transport 接收了消息，不能证明对端已持久化。持久 outbox、snapshot/frontier 恢复及重连后

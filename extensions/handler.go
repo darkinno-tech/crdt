@@ -363,7 +363,13 @@ func (h *Handler) started() time.Time {
 }
 
 func (h *Handler) record(operation string, started time.Time, err error) {
-	if h == nil || h.telemetry == nil {
+	if h != nil {
+		recordExtensionsEvent(h.telemetry, operation, started, err)
+	}
+}
+
+func recordExtensionsEvent(reporter *telemetry.Reporter, operation string, started time.Time, err error) {
+	if reporter == nil {
 		return
 	}
 	outcome := telemetry.OutcomeSuccess
@@ -389,7 +395,7 @@ func (h *Handler) record(operation string, started time.Time, err error) {
 	if !started.IsZero() {
 		duration = time.Since(started)
 	}
-	h.telemetry.Record(telemetry.Event{
+	reporter.Record(telemetry.Event{
 		Component: "extensions",
 		Operation: operation,
 		Outcome:   outcome,

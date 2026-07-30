@@ -92,7 +92,8 @@ handler, err := durable.NewHandler(durable.Config{
 
 The durable relay reports only these fixed operations: `handshake`, `replay`,
 and `append`. The opt-in extensions relay reports `handshake`, `append`, and
-`append_batch` on its server-side WebSocket/HTTP publication paths. Events contain a timestamp, duration, outcome, and low-cardinality
+`append_batch` on its server-side WebSocket/HTTP publication paths, and
+`handshake` plus `append` on its native gRPC stream. Events contain a timestamp, duration, outcome, and low-cardinality
 error code; they do not contain IDs, payloads, endpoint URLs, headers, raw
 errors, or state summaries. A nil `durable.Config.Telemetry` retains the normal
 no-reporter path.
@@ -110,6 +111,14 @@ live, err := extensions.NewHandler(extensions.Config{
     Features: extensions.FeatureWebSocket | extensions.FeatureHTTP,
     Groups: groups,
     Authenticate: authenticate,
+    Authorize: authorize,
+    AuthorizeSubscription: authorizeSubscription,
+    Telemetry: reporter,
+})
+
+grpcRelay, err := extensions.NewGRPCRelay(extensions.GRPCConfig{
+    Groups: groups,
+    Authenticate: authenticateGRPC,
     Authorize: authorize,
     AuthorizeSubscription: authorizeSubscription,
     Telemetry: reporter,
