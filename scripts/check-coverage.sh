@@ -6,12 +6,12 @@ threshold=${COVERAGE_THRESHOLD:-90}
 failed=0
 
 for package in $(go list ./...); do
-	# Example and controlled benchmark commands are compiled and exercised by go
-	# test, but are not library packages and intentionally contain process/exit
-	# wiring that cannot be meaningfully covered in-process. Keep the 90% gate
-	# focused on importable CRDT and utility packages.
+	# Examples and generator/benchmark commands are compiled and exercised by
+	# go test, but their process/exit wiring cannot be meaningfully covered
+	# in-process. Keep the 90% gate focused on importable CRDT and utility
+	# packages.
 	case "$package" in
-		*/examples/*|*/cmd/crdt-compare) continue ;;
+		*/examples/*|*/cmd/crdt-compare|*/internal/cmd/*) continue ;;
 	esac
 	output=$(go test -cover "$package")
 	printf '%s\n' "$output"
