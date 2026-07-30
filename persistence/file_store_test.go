@@ -91,6 +91,267 @@ func TestFileStoreRejectsCorruptionAndUnsafePaths(t *testing.T) {
 	}
 }
 
+func TestFileStoreValidatesConfigurationAndOperationBoundaries(t *testing.T) {
+	root := t.TempDir()
+	valid := testFileConfig()
+	if !valid.valid() {
+		t.Fatal("valid FileConfig was rejected")
+	}
+	for _, config := range []FileConfig{
+		{Config: valid.Config},
+		{Config: Config{MaxRecordBytes: valid.MaxRecordBytes}, MaxStoreBytes: valid.MaxStoreBytes},
+	} {
+		if config.valid() {
+			t.Fatalf("invalid FileConfig was accepted: %+v", config)
+		}
+	}
+	if _, err := OpenFile("", valid); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile(empty path) error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := OpenFile(root+"/checkpoint.store", FileConfig{Config: valid.Config}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile(invalid config) error = %v, want %v", err, ErrInvalidConfig)
+	}
+	parentFile := root + "/parent-file"
+	if err := os.WriteFile(parentFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenFile(parentFile+"/checkpoint.store", valid); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile(file parent) error = %v, want %v", err, ErrInvalidConfig)
+	}
+
+	store := testFileStore(t, root+"/checkpoint.store", valid)
+	if checkpoint, found, err := store.Load("missing"); err != nil || found || checkpoint.Cursor != 0 || len(checkpoint.Outbox) != 0 {
+		t.Fatalf("Load(missing) = %+v, found=%t, err=%v", checkpoint, found, err)
+	}
+	for _, operation := range []struct {
+		name string
+		err  error
+	}{
+		{name: "save", err: store.Save("invalid/name", Checkpoint{Snapshot: testSnapshot(t)})},
+		{name: "load", err: func() error { _, _, err := store.Load("invalid/name"); return err }()},
+		{name: "delete", err: func() error { _, err := store.Delete("invalid/name"); return err }()},
+	} {
+		if !errors.Is(operation.err, ErrInvalidCheckpoint) {
+			t.Errorf("%s invalid name error = %v, want %v", operation.name, operation.err, ErrInvalidCheckpoint)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("second Close() error = %v, want %v", err, ErrClosed)
+	}
+	if err := store.Save("active", Checkpoint{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Save() after Close error = %v, want %v", err, ErrClosed)
+	}
+	if _, _, err := store.Load("active"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Load() after Close error = %v, want %v", err, ErrClosed)
+	}
+	if _, err := store.Delete("active"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Delete() after Close error = %v, want %v", err, ErrClosed)
+	}
+}
+
+func TestFileRecordEncodingRejectsMalformedAndOversizedRecords(t *testing.T) {
+	config := testFileConfig()
+	checkpoint := Checkpoint{Snapshot: testSnapshot(t), Cursor: 7, Outbox: []byte("outbox")}
+	record, err := marshalCheckpoint(checkpoint, config.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := marshalFileRecords(map[string][]byte{"active": record}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := unmarshalFileRecords(encoded, config)
+	if err != nil || string(decoded["active"]) != string(record) {
+		t.Fatalf("unmarshalFileRecords() records=%v err=%v", decoded, err)
+	}
+	for _, records := range []map[string][]byte{
+		{"invalid/name": record},
+		{"active": []byte("not-a-checkpoint")},
+	} {
+		if _, err := marshalFileRecords(records, config); !errors.Is(err, ErrInvalidCheckpoint) && !errors.Is(err, ErrCorruptStore) {
+			t.Fatalf("marshalFileRecords(%v) error = %v", records, err)
+		}
+	}
+	small := config
+	small.MaxStoreBytes = len(encoded) - 1
+	if _, err := marshalFileRecords(map[string][]byte{"active": record}, small); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("marshalFileRecords(over budget) error = %v, want %v", err, ErrInvalidCheckpoint)
+	}
+	if _, err := unmarshalFileRecords(nil, config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("unmarshalFileRecords(short) error = %v, want %v", err, ErrCorruptStore)
+	}
+	tampered := append([]byte(nil), encoded...)
+	tampered[len(tampered)-1] ^= 1
+	if _, err := unmarshalFileRecords(tampered, config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("unmarshalFileRecords(tampered) error = %v, want %v", err, ErrCorruptStore)
+	}
+	trailing := append([]byte(nil), encoded[:len(encoded)-sha256.Size]...)
+	trailing = append(trailing, 0)
+	digest := sha256.Sum256(trailing)
+	trailing = append(trailing, digest[:]...)
+	if _, err := unmarshalFileRecords(trailing, config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("unmarshalFileRecords(trailing data) error = %v, want %v", err, ErrCorruptStore)
+	}
+	if _, err := replaceFile(t.TempDir()+"/missing/checkpoint.store", []byte("value")); err == nil {
+		t.Fatal("replaceFile() accepted a missing parent directory")
+	}
+}
+
+func TestFileRecordDecoderRejectsNonCanonicalEntries(t *testing.T) {
+	config := testFileConfig()
+	checkpoint, err := marshalCheckpoint(Checkpoint{Snapshot: testSnapshot(t)}, config.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encode := func(count uint64, entries ...[]byte) []byte {
+		payload := append([]byte(nil), fileMagic[:]...)
+		payload = append(payload, fileVersion)
+		payload = frame.AppendUvarint(payload, count)
+		for _, entry := range entries {
+			payload = appendBytes(payload, entry)
+		}
+		digest := sha256.Sum256(payload)
+		return append(payload, digest[:]...)
+	}
+	for _, data := range [][]byte{
+		encode(1),
+		encode(2),
+		encode(1, []byte("invalid/name"), checkpoint),
+		encode(1, []byte("active"), nil),
+		encode(1, []byte("active"), []byte("not-a-checkpoint")),
+		encode(2, []byte("same"), checkpoint, []byte("same"), checkpoint),
+	} {
+		if _, err := unmarshalFileRecords(data, config); !errors.Is(err, ErrCorruptStore) {
+			t.Fatalf("unmarshalFileRecords(non-canonical entry) error = %v, want %v", err, ErrCorruptStore)
+		}
+	}
+	for _, mutate := range []func([]byte){
+		func(data []byte) { data[0] ^= 1 },
+		func(data []byte) { data[len(fileMagic)]++ },
+	} {
+		data := encode(0)
+		mutate(data)
+		payloadEnd := len(data) - sha256.Size
+		digest := sha256.Sum256(data[:payloadEnd])
+		copy(data[payloadEnd:], digest[:])
+		if _, err := unmarshalFileRecords(data, config); !errors.Is(err, ErrCorruptStore) {
+			t.Fatalf("unmarshalFileRecords(bad header) error = %v, want %v", err, ErrCorruptStore)
+		}
+	}
+}
+
+func TestFileStoreCoversMigrationAndFileBoundaryFailures(t *testing.T) {
+	path := t.TempDir() + "/checkpoint.store"
+	config := testFileConfig()
+	config.Format.MigrateOnLoad = true
+	store := testFileStore(t, path, config)
+	if checkpoint, found, err := store.migrateAndLoad("missing"); err != nil || found || checkpoint.Cursor != 0 {
+		t.Fatalf("migrateAndLoad(missing) = %+v, found=%t, err=%v", checkpoint, found, err)
+	}
+	store.records["corrupt"] = []byte("not-a-checkpoint")
+	if _, _, err := store.migrateAndLoad("corrupt"); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("migrateAndLoad(corrupt) error = %v, want %v", err, ErrCorruptStore)
+	}
+	if err := store.Save("empty", Checkpoint{}); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Save(empty checkpoint) error = %v, want %v", err, ErrInvalidCheckpoint)
+	}
+	store.config.Format.Version = 99
+	if err := store.Save("invalid-format", Checkpoint{Snapshot: testSnapshot(t)}); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Save(invalid format) error = %v, want %v", err, ErrInvalidCheckpoint)
+	}
+	store.config.Format = config.Config.Format
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.migrateAndLoad("missing"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("migrateAndLoad() after Close error = %v, want %v", err, ErrClosed)
+	}
+
+	root := t.TempDir()
+	if _, err := loadFileRecords(root, testFileConfig()); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("loadFileRecords(directory) error = %v, want %v", err, ErrInvalidConfig)
+	}
+	parentFile := root + "/parent-file"
+	if err := os.WriteFile(parentFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFileRecords(parentFile+"/checkpoint.store", config); err == nil {
+		t.Fatal("loadFileRecords() accepted a child of a regular file")
+	}
+	oversized := root + "/oversized.store"
+	if err := os.WriteFile(oversized, make([]byte, config.MaxStoreBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFileRecords(oversized, config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("loadFileRecords(oversized) error = %v, want %v", err, ErrCorruptStore)
+	}
+	link := root + "/checkpoint.link"
+	if err := os.Symlink(oversized, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFileRecords(link, config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("loadFileRecords(symlink) error = %v, want %v", err, ErrInvalidConfig)
+	}
+}
+
+func TestFileStoreCoversCurrentAndRejectedMigrationPaths(t *testing.T) {
+	path := t.TempDir() + "/checkpoint.store"
+	currentConfig := testFileConfig()
+	currentConfig.Format.MigrateOnLoad = true
+	store := testFileStore(t, path, currentConfig)
+	checkpoint := Checkpoint{Snapshot: testSnapshot(t)}
+	if err := store.Save("active", checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, found, err := store.migrateAndLoad("active"); err != nil || !found || loaded.Snapshot.TypeID != checkpoint.Snapshot.TypeID {
+		t.Fatalf("migrateAndLoad(current) = %+v, found=%t, err=%v", loaded, found, err)
+	}
+	store.records["corrupt"] = []byte("not-a-checkpoint")
+	if _, err := store.Delete("active"); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("Delete() with corrupt sibling error = %v, want %v", err, ErrCorruptStore)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	failingConfig := testFileConfig()
+	failingConfig.Format = FormatConfig{
+		MigrateOnLoad: true,
+		Migrations: []Migration{{
+			FromVersion: RecordFormatV1,
+			Transform: func(Checkpoint) (Checkpoint, error) {
+				return Checkpoint{}, errors.New("transform rejected")
+			},
+		}},
+	}
+	legacy := marshalLegacyCheckpoint(t, checkpoint)
+	encoded, err := marshalFileRecords(map[string][]byte{"legacy": legacy}, failingConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store = testFileStore(t, path, failingConfig)
+	defer func() { _ = store.Close() }()
+	if _, _, err := store.Load("legacy"); !errors.Is(err, ErrMigration) {
+		t.Fatalf("Load(legacy migration failure) error = %v, want %v", err, ErrMigration)
+	}
+	if _, err := replaceFile(t.TempDir(), []byte("value")); err == nil {
+		t.Fatal("replaceFile() replaced a directory")
+	}
+	replacedPath := t.TempDir() + "/replaced.store"
+	if replaced, err := replaceFile(replacedPath, []byte("durable")); err != nil || !replaced {
+		t.Fatalf("replaceFile() replaced=%t err=%v", replaced, err)
+	}
+	if contents, err := os.ReadFile(replacedPath); err != nil || string(contents) != "durable" {
+		t.Fatalf("replaceFile() contents=%q err=%v", contents, err)
+	}
+}
+
 func TestFileStoreRejectsOverBudgetSaveWithoutReplacingCheckpoint(t *testing.T) {
 	path := t.TempDir() + "/checkpoint.store"
 	baseConfig := testFileConfig()
