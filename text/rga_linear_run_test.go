@@ -72,10 +72,50 @@ func TestRGAResolvedLinearRunRejectsBranchingAndEnforcesLimitsAtomically(t *test
 	}
 }
 
+func TestRGAResolvedLinearRunBatchIndexPreservesSiblingOrder(t *testing.T) {
+	parent := Position{ReplicaID: "parent", WallTime: 1}
+	existingLeft := Position{ReplicaID: "existing-left", WallTime: 1}
+	existingRight := Position{ReplicaID: "existing-right", WallTime: 1}
+	base := Delta{nodes: map[Position]node{
+		parent:        {rune: 'p'},
+		existingLeft:  {parent: parent, rune: 'l'},
+		existingRight: {parent: parent, rune: 'r'},
+	}, tombstones: map[Position]struct{}{}}
+	target := mustRGA(t, "target")
+	if err := target.ApplyDelta(base); err != nil {
+		t.Fatal(err)
+	}
+
+	linear, ids := linearRunDeltaFromParentForTest(resolvedRunFastPathMinNodes, parent)
+	linear.tombstones[ids[3]] = struct{}{}
+	if err := target.ApplyDelta(linear); err != nil {
+		t.Fatal(err)
+	}
+	allNodes := cloneNodes(base.nodes)
+	for id, item := range linear.nodes {
+		allNodes[id] = item
+	}
+	allTombstones := cloneTombstones(linear.tombstones)
+	assertRGASequenceMatchesBuild(t, target, allNodes, allTombstones)
+
+	// A later concurrent sibling verifies the child index was updated for the
+	// batch just as it is for one-node generic integration.
+	later := Position{ReplicaID: "later", WallTime: 1}
+	laterDelta := Delta{nodes: map[Position]node{later: {parent: parent, rune: 'x'}}, tombstones: map[Position]struct{}{}}
+	if err := target.ApplyDelta(laterDelta); err != nil {
+		t.Fatal(err)
+	}
+	allNodes[later] = laterDelta.nodes[later]
+	assertRGASequenceMatchesBuild(t, target, allNodes, allTombstones)
+}
+
 func linearRunDeltaForTest(count int) (Delta, []Position) {
+	return linearRunDeltaFromParentForTest(count, Position{})
+}
+
+func linearRunDeltaFromParentForTest(count int, parent Position) (Delta, []Position) {
 	nodes := make(map[Position]node, count)
 	ids := make([]Position, 0, count)
-	parent := Position{}
 	for index := 0; index < count; index++ {
 		id := Position{ReplicaID: "linear", WallTime: uint64(index + 1)}
 		nodes[id] = node{parent: parent, rune: 'a'}
@@ -83,6 +123,26 @@ func linearRunDeltaForTest(count int) (Delta, []Position) {
 		parent = id
 	}
 	return Delta{nodes: nodes, tombstones: make(map[Position]struct{})}, ids
+}
+
+func assertRGASequenceMatchesBuild(t *testing.T, value *RGA, nodes map[Position]node, tombstones map[Position]struct{}) {
+	t.Helper()
+	want, _, err := buildSequence(nodes, tombstones)
+	if err != nil {
+		t.Fatalf("build expected sequence: %v", err)
+	}
+	gotPositions, wantPositions := value.sequence.visiblePositions(), want.visiblePositions()
+	if len(gotPositions) != len(wantPositions) {
+		t.Fatalf("visible positions = %d, want %d", len(gotPositions), len(wantPositions))
+	}
+	for index := range wantPositions {
+		if gotPositions[index] != wantPositions[index] {
+			t.Fatalf("visible position %d = %#v, want %#v", index, gotPositions[index], wantPositions[index])
+		}
+	}
+	if markerCount(value.sequence.root) != markerCount(want.root) || visibleCount(value.sequence.root) != visibleCount(want.root) {
+		t.Fatalf("sequence counts = markers:%d visible:%d, want markers:%d visible:%d", markerCount(value.sequence.root), visibleCount(value.sequence.root), markerCount(want.root), visibleCount(want.root))
+	}
 }
 
 func mustRGAWithOptions(t testing.TB, replicaID string, options Options) *RGA {

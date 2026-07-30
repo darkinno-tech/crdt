@@ -829,11 +829,34 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 			return err
 		}
 	}
+	markers := make([]*sequenceMarker, 0, len(ids)*2)
 	for _, id := range ids {
+		_, deleted := r.tombstones[id]
+		markers = append(markers, &newSequencePair(id, !deleted).entry)
+	}
+	for index := len(ids) - 1; index >= 0; index-- {
+		markers = append(markers, &markers[index].pair.exit)
+	}
+	var anchor *sequenceMarker
+	for index, id := range ids {
 		item := delta.nodes[id]
 		r.nodes[id] = item
-		r.integrateNode(id, item)
+		parent := r.sequence.pair(item.parent)
+		if index > 0 {
+			parent = markers[index-1].pair
+		}
+		if parent == nil {
+			panic("text: integrating resolved linear run without integrated parent")
+		}
+		previous, hasPrevious := r.children.insert(parent, markers[index].pair)
+		if index == 0 {
+			anchor = &parent.entry
+			if hasPrevious {
+				anchor = &previous.exit
+			}
+		}
 	}
+	r.sequence.insertLinearMarkersAfter(anchor, markers, len(ids))
 	changed := len(ids) > 0
 	if r.integrateReady() {
 		changed = true

@@ -205,17 +205,84 @@ func (index *sequenceIndex) has(position Position) bool {
 }
 
 func (index *sequenceIndex) insertPairAfter(anchor *sequenceMarker, pair *sequencePair) {
-	entry, exit := &pair.entry, &pair.exit
+	index.insertLinearMarkersAfter(anchor, []*sequenceMarker{&pair.entry, &pair.exit}, 1)
+}
+
+// insertLinearMarkersAfter inserts one parent-before-child RGA chain in a
+// single index splice. Its marker order is the chain's deterministic depth
+// first order: every entry in forward order followed by every exit in reverse
+// order. The caller has already established that every pair after the first
+// is the sole child of its predecessor.
+func (index *sequenceIndex) insertLinearMarkersAfter(anchor *sequenceMarker, markers []*sequenceMarker, pairCount int) {
+	if anchor == nil || pairCount == 0 || len(markers) != pairCount*2 {
+		return
+	}
+	for markerIndex := 1; markerIndex < len(markers); markerIndex++ {
+		previous, current := markers[markerIndex-1], markers[markerIndex]
+		previous.next, current.prev = current, previous
+	}
+
+	first, last := markers[0], markers[len(markers)-1]
 	next := anchor.next
-	anchor.next, entry.prev = entry, anchor
-	entry.next, exit.prev = exit, entry
-	exit.next = next
+	anchor.next, first.prev = first, anchor
+	last.next = next
 	if next != nil {
-		next.prev = exit
+		next.prev = last
 	}
 	left, right := splitMarkers(index.root, markerRank(anchor)+1)
-	index.root = mergeMarkers(mergeMarkers(mergeMarkers(left, entry), exit), right)
-	index.pairs[pair.position] = pair
+	for pairIndex := 0; pairIndex < pairCount; pairIndex++ {
+		pair := markers[pairIndex].pair
+		index.pairs[pair.position] = pair
+	}
+	index.root = mergeMarkers(mergeMarkers(left, markerTree(markers)), right)
+}
+
+// markerTree builds the max-priority Cartesian tree for an already ordered
+// marker sequence in linear time. mergeMarkers would build the same tree, but
+// repeatedly merging a long resolved run would retrace the existing index for
+// every pair. Markers are newly allocated, so clearing their links cannot
+// disturb an installed tree.
+func markerTree(markers []*sequenceMarker) *sequenceMarker {
+	if len(markers) == 0 {
+		return nil
+	}
+	stack := markers[:0]
+	for _, marker := range markers {
+		marker.left, marker.right, marker.parent = nil, nil, nil
+		var left *sequenceMarker
+		for len(stack) > 0 && stack[len(stack)-1].priority < marker.priority {
+			left = stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+		}
+		marker.left = left
+		if left != nil {
+			left.parent = marker
+		}
+		if len(stack) > 0 {
+			parent := stack[len(stack)-1]
+			parent.right = marker
+			marker.parent = parent
+		}
+		stack = append(stack, marker)
+	}
+	root := stack[0]
+	ordered := markers[:0]
+	pending := []*sequenceMarker{root}
+	for len(pending) > 0 {
+		marker := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		ordered = append(ordered, marker)
+		if marker.left != nil {
+			pending = append(pending, marker.left)
+		}
+		if marker.right != nil {
+			pending = append(pending, marker.right)
+		}
+	}
+	for markerIndex := len(ordered) - 1; markerIndex >= 0; markerIndex-- {
+		refreshMarker(ordered[markerIndex])
+	}
+	return root
 }
 
 func (index *sequenceIndex) setVisible(position Position, visible bool) {
