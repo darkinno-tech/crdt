@@ -63,6 +63,97 @@ test("NativeMap copies values, batches transaction observers, and resolves concu
   assert.equal(aliceMap.get("title"), "bob wins same counter by actor tie-break");
 });
 
+test("native map size and array projections stay correct across cached reads and structural changes", () => {
+  const document = new NativeDocument("local");
+  const metadata = document.getMap("metadata");
+  metadata.set("draft", true);
+  assert.equal(metadata.size, 1);
+  metadata.set("draft", false);
+  assert.equal(metadata.size, 1);
+  assert.equal(metadata.delete("draft"), true);
+  assert.equal(metadata.size, 0);
+  assert.equal(metadata.delete("draft"), false);
+  assert.equal(metadata.size, 0);
+  metadata.set("published", true);
+  assert.equal(metadata.size, 1);
+
+  document.applyUpdate({
+    version: 1,
+    actor: "remote",
+    operations: [{ kind: "map-set", target: "metadata", key: "draft", id: { actor: "remote", counter: 10 }, value: true }],
+  });
+  document.applyUpdate({
+    version: 1,
+    actor: "remote",
+    operations: [{ kind: "map-delete", target: "metadata", key: "published", id: { actor: "remote", counter: 11 } }],
+  });
+  assert.equal(metadata.size, 1);
+  assert.deepEqual(metadata.toJSON(), { draft: true });
+
+  const cards = document.getArray("cards");
+  cards.push(["a", "b", "c"]);
+  assert.equal(cards.length, 3);
+  assert.equal(cards.length, 3);
+  assert.equal(cards.get(1), "b");
+  cards.insert(1, ["between"]);
+  assert.deepEqual(cards.toArray(), ["a", "between", "b", "c"]);
+  cards.delete(2);
+  assert.equal(cards.length, 3);
+  assert.deepEqual(cards.toArray(), ["a", "between", "c"]);
+});
+
+test("native UTF-8 byte limits and actor ordering match canonical wire rules", () => {
+  assert.doesNotThrow(() => new NativeDocument("€", { maxReplicaIDBytes: 3 }));
+  assertCode(() => new NativeDocument("€", { maxReplicaIDBytes: 2 }), "resource_limit");
+  const document = new NativeDocument("local", { maxRootNameBytes: 4, maxMapKeyBytes: 4 });
+  const map = document.getMap("🙂");
+  map.set("🙂", "within four UTF-8 bytes");
+  assertCode(() => document.getMap("€€"), "resource_limit");
+  assertCode(() => map.set("€€", "over four UTF-8 bytes"), "resource_limit");
+  const unicodeUpdate = {
+    version: 1,
+    actor: "源",
+    operations: [{ kind: "map-set", target: "🙂", key: "€", id: { actor: "源", counter: 1 }, value: "\u{10000}" }],
+  };
+  assert.deepEqual(decodeNativeUpdate(encodeNativeUpdate(unicodeUpdate)), unicodeUpdate);
+
+  const stateLimits = { maxUpdateBytes: 320, maxValueBytes: 64 };
+  const chunked = new NativeDocument("源", stateLimits);
+  const chunkedCards = chunked.getArray("cards");
+  for (let index = 0; index < 8; index += 1) {
+    chunkedCards.push(["🙂"]);
+  }
+  const state = chunked.encodeStateAsUpdates();
+  assert.ok(state.length > 1);
+  for (const update of state) {
+    assert.ok(encodeNativeUpdate(update, stateLimits).byteLength <= stateLimits.maxUpdateBytes);
+  }
+
+  const receiver = new NativeDocument("receiver");
+  const receiverMap = receiver.getMap("ordering");
+  const actors = ["\u007F", "\u0080", "\u07FF", "\u0800", "\uD7FF", "\uE000", "\u{10000}", "\u{10FFFF}"];
+  const compareUTF8 = (left, right) => {
+    const leftBytes = new TextEncoder().encode(left);
+    const rightBytes = new TextEncoder().encode(right);
+    for (let index = 0; index < Math.min(leftBytes.length, rightBytes.length); index += 1) {
+      const difference = leftBytes[index] - rightBytes[index];
+      if (difference !== 0) {
+        return difference;
+      }
+    }
+    return leftBytes.length - rightBytes.length;
+  };
+  const expectedWinner = [...actors].sort(compareUTF8).at(-1);
+  for (const actor of [...actors].sort(compareUTF8).reverse()) {
+    receiver.applyUpdate({
+      version: 1,
+      actor,
+      operations: [{ kind: "map-set", target: "ordering", key: "winner", id: { actor, counter: 1 }, value: actor }],
+    });
+  }
+  assert.equal(receiverMap.get("winner"), expectedWinner);
+});
+
 test("NativeArray keeps tombstones and resolves a reversed parent chain", () => {
   const source = new NativeDocument("source");
   const updates = recordUpdates(source);
@@ -81,6 +172,21 @@ test("NativeArray keeps tombstones and resolves a reversed parent chain", () => 
   target.applyUpdate(reversed);
   assert.equal(tasks.pendingCount, 0);
   assert.deepEqual(tasks.toArray(), ["a", "b", "c"]);
+
+  const cacheTarget = new NativeDocument("cache-target");
+  const cacheTasks = cacheTarget.getArray("tasks");
+  cacheTarget.applyUpdate({
+    version: 1,
+    actor: "relay",
+    operations: [{ ...original, entries: [original.entries[1]] }],
+  });
+  assert.equal(cacheTasks.length, 0);
+  cacheTarget.applyUpdate({
+    version: 1,
+    actor: "relay",
+    operations: [{ ...original, entries: [original.entries[0]] }],
+  });
+  assert.deepEqual(cacheTasks.toArray(), ["a", "b"]);
 
   const deleteUpdates = recordUpdates(source);
   source.getArray("tasks").delete(1, 1);

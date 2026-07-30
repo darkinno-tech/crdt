@@ -182,6 +182,7 @@ export class NativeMap<T extends NativeValue = NativeValue> {
   /** Current-tag ownership prevents one immutable ID from naming two keys. */
   readonly #tagOwners = new Map<string, string>();
   readonly #listeners = new Set<NativeTypeListener>();
+  #visibleSize = 0;
 
   constructor(
     private readonly document: NativeDocument,
@@ -190,13 +191,7 @@ export class NativeMap<T extends NativeValue = NativeValue> {
 
   get size(): number {
     this.document._assertOpen();
-    let size = 0;
-    for (const entry of this.#entries.values()) {
-      if (entry.present) {
-        size += 1;
-      }
-    }
-    return size;
+    return this.#visibleSize;
   }
 
   has(key: string): boolean {
@@ -316,11 +311,17 @@ export class NativeMap<T extends NativeValue = NativeValue> {
         this.#tagOwners.delete(idKey(current.id));
       }
       this.#entries.set(operation.key, { id: copyID(operation.id), present: true, value: cloneValue(operation.value) });
+      if (current?.present !== true) {
+        this.#visibleSize += 1;
+      }
     } else {
       if (current !== undefined && this.#tagOwners.get(idKey(current.id)) === operation.key) {
         this.#tagOwners.delete(idKey(current.id));
       }
       this.#entries.set(operation.key, { id: copyID(operation.id), present: false });
+      if (current?.present === true) {
+        this.#visibleSize -= 1;
+      }
     }
     this.#tagOwners.set(idKey(operation.id), operation.key);
     return true;
@@ -357,6 +358,8 @@ export class NativeArray<T extends NativeValue = NativeValue> {
   readonly #children = new Map<string, ArrayNode[]>();
   readonly #listeners = new Set<NativeTypeListener>();
   #childrenDirty = false;
+  /** Nodes are immutable after admission; retain the private visible projection between writes. */
+  #visibleCache: ArrayNode[] | undefined;
 
   constructor(
     private readonly document: NativeDocument,
@@ -374,21 +377,22 @@ export class NativeArray<T extends NativeValue = NativeValue> {
 
   get(index: number): T | undefined {
     this.document._assertOpen();
-    assertArrayIndex(index, this.length, false);
-    const node = this.#visibleNodes()[index];
+    const visible = this.#visibleNodes();
+    assertArrayIndex(index, visible.length, false);
+    const node = visible[index];
     return node === undefined ? undefined : (cloneValue(node.value) as T);
   }
 
   insert(index: number, values: readonly T[]): void {
     this.document._assertOpen();
-    assertArrayIndex(index, this.length, true);
+    const visible = this.#visibleNodes();
+    assertArrayIndex(index, visible.length, true);
     if (values.length === 0) {
       return;
     }
     if (this.#nodes.size + this.#pending.size + values.length > this.document.limits.maxArrayItems) {
       throw resourceLimit();
     }
-    const visible = this.#visibleNodes();
     let after = index === 0 ? null : copyID(visible[index - 1]!.id);
     const entries: NativeArrayEntry[] = [];
     for (const value of values) {
@@ -406,14 +410,15 @@ export class NativeArray<T extends NativeValue = NativeValue> {
   /** Tombstones a visible range. A delete is idempotent and may be delivered before its insert. */
   delete(index: number, count = 1): void {
     this.document._assertOpen();
-    assertArrayIndex(index, this.length, false);
-    if (!Number.isSafeInteger(count) || count < 0 || index + count > this.length) {
+    const visible = this.#visibleNodes();
+    assertArrayIndex(index, visible.length, false);
+    if (!Number.isSafeInteger(count) || count < 0 || index + count > visible.length) {
       throw invalidUpdate();
     }
     if (count === 0) {
       return;
     }
-    const ids = this.#visibleNodes()
+    const ids = visible
       .slice(index, index + count)
       .map((node) => copyID(node.id));
     this.document._applyLocal({ kind: "array-delete", target: this.name, ids });
@@ -506,6 +511,9 @@ export class NativeArray<T extends NativeValue = NativeValue> {
         changed = true;
       }
     }
+    if (changed) {
+      this.#visibleCache = undefined;
+    }
     return changed;
   }
 
@@ -568,10 +576,14 @@ export class NativeArray<T extends NativeValue = NativeValue> {
     children.push(node);
     this.#children.set(parentKey, children);
     this.#childrenDirty = true;
+    this.#visibleCache = undefined;
   }
 
   #visibleNodes(): ArrayNode[] {
     this.document._assertOpen();
+    if (this.#visibleCache !== undefined) {
+      return this.#visibleCache;
+    }
     if (this.#childrenDirty) {
       for (const children of this.#children.values()) {
         children.sort((left, right) => compareID(right.id, left.id));
@@ -588,6 +600,7 @@ export class NativeArray<T extends NativeValue = NativeValue> {
       }
       pushChildren(stack, this.#children.get(idKey(node.id)));
     }
+    this.#visibleCache = visible;
     return visible;
   }
 }
@@ -944,7 +957,7 @@ export function decodeNativeUpdate(
     throw invalidUpdate();
   }
   const normalized = normalizeUpdate(parsed, resolved);
-  if (!bytesEqual(encoded, TEXT_ENCODER.encode(canonicalJSON(normalized)))) {
+  if (!matchesUTF8(canonicalJSON(normalized), encoded)) {
     throw invalidUpdate();
   }
   return normalized;
@@ -962,7 +975,7 @@ function normalizeUpdate(value: unknown, limits: Readonly<NativeDocumentLimits>)
   }
   const operations = record.operations.map((operation) => normalizeOperation(operation, limits));
   const update: NativeUpdate = { version: NATIVE_UPDATE_VERSION, actor: record.actor, operations };
-  if (TEXT_ENCODER.encode(canonicalJSON(update)).length > limits.maxUpdateBytes) {
+  if (utf8ByteLength(canonicalJSON(update)) > limits.maxUpdateBytes) {
     throw resourceLimit();
   }
   return update;
@@ -1079,7 +1092,7 @@ function assertBoundedText(value: unknown, maxBytes: number, rejectWhitespace: b
   ) {
     throw invalidUpdate();
   }
-  if (TEXT_ENCODER.encode(value).length > maxBytes) {
+  if (utf8ByteLength(value) > maxBytes) {
     throw resourceLimit();
   }
 }
@@ -1112,7 +1125,7 @@ function normalizeID(value: unknown, limits: Readonly<NativeDocumentLimits>): Na
 
 function copyAndValidateValue(value: unknown, limits: Readonly<NativeDocumentLimits>): NativeValue {
   const copied = copyValue(value, limits, 0, { count: 0 }, new Set<object>());
-  if (TEXT_ENCODER.encode(canonicalJSON(copied)).length > limits.maxValueBytes) {
+  if (utf8ByteLength(canonicalJSON(copied)) > limits.maxValueBytes) {
     throw resourceLimit();
   }
   return copied;
@@ -1389,16 +1402,18 @@ function compareID(left: NativeID, right: NativeID): number {
 
 /** UTF-8 bytewise order is stable across browser locale settings. */
 function compareText(left: string, right: string): number {
-  const leftBytes = TEXT_ENCODER.encode(left);
-  const rightBytes = TEXT_ENCODER.encode(right);
-  const shared = Math.min(leftBytes.length, rightBytes.length);
-  for (let index = 0; index < shared; index += 1) {
-    const difference = leftBytes[index]! - rightBytes[index]!;
-    if (difference !== 0) {
-      return difference;
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (leftIndex < left.length && rightIndex < right.length) {
+    const leftCodePoint = utf8CodePointAt(left, leftIndex);
+    const rightCodePoint = utf8CodePointAt(right, rightIndex);
+    if (leftCodePoint !== rightCodePoint) {
+      return leftCodePoint - rightCodePoint;
     }
+    leftIndex += utf8CodePointWidth(left, leftIndex);
+    rightIndex += utf8CodePointWidth(right, rightIndex);
   }
-  return leftBytes.length - rightBytes.length;
+  return leftIndex === left.length ? (rightIndex === right.length ? 0 : -1) : 1;
 }
 
 function idKey(id: NativeID): string {
@@ -1441,7 +1456,7 @@ function canonicalJSON(value: unknown): string {
       }
       if (isRecord(value)) {
         return `{${Object.keys(value)
-        .sort(compareText)
+          .sort(compareText)
           .map((key) => `${JSON.stringify(key)}:${canonicalJSON(value[key])}`)
           .join(",")}}`;
       }
@@ -1473,20 +1488,92 @@ function assertExactKeys(value: Record<string, unknown>, keys: readonly string[]
   }
 }
 
-function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-  return true;
+function encodedLength(value: string): number {
+  return utf8ByteLength(value);
 }
 
-function encodedLength(value: string): number {
-  return TEXT_ENCODER.encode(value).length;
+/** Matches TextEncoder's replacement behaviour without allocating a byte array. */
+function utf8ByteLength(value: string): number {
+  let length = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) {
+      length += 1;
+    } else if (code <= 0x7ff) {
+      length += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && isLowSurrogate(value.charCodeAt(index + 1))) {
+      length += 4;
+      index += 1;
+    } else {
+      // An unpaired surrogate becomes the three-byte U+FFFD replacement.
+      length += 3;
+    }
+  }
+  return length;
+}
+
+/** Compares canonical text to wire bytes without allocating another encoded update. */
+function matchesUTF8(value: string, encoded: Uint8Array): boolean {
+  let byteIndex = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = utf8CodePointAt(value, index);
+    index += utf8CodePointWidth(value, index) - 1;
+    if (codePoint <= 0x7f) {
+      if (byteIndex >= encoded.length || encoded[byteIndex] !== codePoint) {
+        return false;
+      }
+      byteIndex += 1;
+    } else if (codePoint <= 0x7ff) {
+      if (
+        byteIndex + 2 > encoded.length ||
+        encoded[byteIndex] !== (0xc0 | (codePoint >> 6)) ||
+        encoded[byteIndex + 1] !== (0x80 | (codePoint & 0x3f))
+      ) {
+        return false;
+      }
+      byteIndex += 2;
+    } else if (codePoint <= 0xffff) {
+      if (
+        byteIndex + 3 > encoded.length ||
+        encoded[byteIndex] !== (0xe0 | (codePoint >> 12)) ||
+        encoded[byteIndex + 1] !== (0x80 | ((codePoint >> 6) & 0x3f)) ||
+        encoded[byteIndex + 2] !== (0x80 | (codePoint & 0x3f))
+      ) {
+        return false;
+      }
+      byteIndex += 3;
+    } else {
+      if (
+        byteIndex + 4 > encoded.length ||
+        encoded[byteIndex] !== (0xf0 | (codePoint >> 18)) ||
+        encoded[byteIndex + 1] !== (0x80 | ((codePoint >> 12) & 0x3f)) ||
+        encoded[byteIndex + 2] !== (0x80 | ((codePoint >> 6) & 0x3f)) ||
+        encoded[byteIndex + 3] !== (0x80 | (codePoint & 0x3f))
+      ) {
+        return false;
+      }
+      byteIndex += 4;
+    }
+  }
+  return byteIndex === encoded.length;
+}
+
+/** Returns the scalar TextEncoder would emit at an UTF-16 offset. */
+function utf8CodePointAt(value: string, index: number): number {
+  const code = value.charCodeAt(index);
+  if (code >= 0xd800 && code <= 0xdbff && isLowSurrogate(value.charCodeAt(index + 1))) {
+    return ((code - 0xd800) << 10) + value.charCodeAt(index + 1) - 0xdc00 + 0x10000;
+  }
+  return code >= 0xd800 && code <= 0xdfff ? 0xfffd : code;
+}
+
+function utf8CodePointWidth(value: string, index: number): number {
+  const code = value.charCodeAt(index);
+  return code >= 0xd800 && code <= 0xdbff && isLowSurrogate(value.charCodeAt(index + 1)) ? 2 : 1;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
 }
 
 function defineOwnValue(target: Record<string, unknown>, key: string, value: unknown): void {
