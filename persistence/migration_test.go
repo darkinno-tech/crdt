@@ -274,7 +274,7 @@ func marshalLegacyCheckpoint(t testing.TB, checkpoint Checkpoint) []byte {
 	return encoded
 }
 
-func putRawCheckpoint(t testing.TB, store *Store, name string, encoded []byte) {
+func putRawCheckpoint(t testing.TB, store *BoltStore, name string, encoded []byte) {
 	t.Helper()
 	if err := store.db.Update(func(transaction *bolt.Tx) error {
 		bucket := transaction.Bucket(checkpointBucket)
@@ -287,7 +287,7 @@ func putRawCheckpoint(t testing.TB, store *Store, name string, encoded []byte) {
 	}
 }
 
-func storedCheckpoint(t *testing.T, store *Store, name string) []byte {
+func storedCheckpoint(t *testing.T, store *BoltStore, name string) []byte {
 	t.Helper()
 	var encoded []byte
 	if err := store.db.View(func(transaction *bolt.Tx) error {

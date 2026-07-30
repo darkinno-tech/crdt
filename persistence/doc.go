@@ -1,11 +1,12 @@
-// Package persistence provides a bounded bbolt reference for local CRDT
+// Package persistence provides bounded local Store references for CRDT
 // checkpoints.
 //
 // A checkpoint saves one complete CRDT snapshot, its frontier and HLC state,
 // a durable-transport cursor, and an application-owned opaque outbox in one
-// bbolt transaction. It is intended for one process owning one protected
-// database file. It is neither a clustered database nor an authenticated
-// replication protocol.
+// local durability boundary. BoltStore uses one bbolt transaction; FileStore
+// uses a private file replacement. Both are intended for one process owning a
+// protected local path. They are neither clustered databases nor authenticated
+// replication protocols.
 //
 // Each Store has one concrete StateValidator. The validator runs before a
 // checkpoint is committed and whenever one is loaded, so a damaged file or a

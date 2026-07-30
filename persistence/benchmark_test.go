@@ -70,9 +70,62 @@ func BenchmarkStoreLoadLegacyMigration(b *testing.B) {
 	}
 }
 
+func BenchmarkFileStoreSave(b *testing.B) {
+	store := benchmarkFileStore(b)
+	defer func() { _ = store.Close() }()
+	checkpoint := benchmarkCheckpoint(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := store.Save("maintenance", checkpoint); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkFileStoreLoad(b *testing.B) {
+	store := benchmarkFileStore(b)
+	defer func() { _ = store.Close() }()
+	checkpoint := benchmarkCheckpoint(b)
+	if err := store.Save("maintenance", checkpoint); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if _, found, err := store.Load("maintenance"); err != nil || !found {
+			b.Fatalf("Load() found=%t err=%v", found, err)
+		}
+	}
+}
+
+func BenchmarkFileStoreSaveParallel(b *testing.B) {
+	store := benchmarkFileStore(b)
+	defer func() { _ = store.Close() }()
+	checkpoint := benchmarkCheckpoint(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(parallel *testing.PB) {
+		for parallel.Next() {
+			if err := store.Save("maintenance", checkpoint); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}
 func benchmarkStore(b *testing.B) *BoltStore {
 	b.Helper()
 	store, err := Open(b.TempDir()+"/checkpoint.db", testConfig())
+	if err != nil {
+		b.Fatal(err)
+	}
+	return store
+}
+
+func benchmarkFileStore(b *testing.B) *FileStore {
+	b.Helper()
+	store, err := OpenFile(b.TempDir()+"/checkpoint.store", FileConfig{Config: testConfig(), MaxStoreBytes: 1 << 20})
 	if err != nil {
 		b.Fatal(err)
 	}

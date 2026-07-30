@@ -61,7 +61,7 @@ go test ./...
 - 有界规范化 state/delta 帧、确定性 snapshot、恢复计划，以及可复用 replica ID 所需的 HLC 状态。
 - 默认使用稳定 run-v2 帧的 RGA 协作文本、稳定有界 rich-text 和 observed-remove tree 协议，以及 list、XML fragment 层。
 - Delta 批处理、Merkle 反熵、精确确认的 tombstone-GC 协调，以及 Manifest 绑定的 replica/inbox 恢复辅助能力。
-- 有界 live WebSocket provider、独立的 bbolt durable relay，以及本地 bbolt 检查点参考实现。
+- 有界 live WebSocket provider、独立的 bbolt durable relay，以及本地 bbolt/文件 checkpoint Store 参考实现。
 - 可选、由 Manifest 协商的[压缩感知外层帧 v2](docs/protocol/frame-v2.md)，提供显式 v1 转换，但不改变 CRDT TypeID 或语义。
 - [RGA 诊断混淆](docs/integration/debug-obfuscation.zh-CN.md)：替换文本内容，同时保留隔离调试时间线的结构。
 
@@ -73,7 +73,7 @@ go test ./...
 | --- | --- |
 | 学习基础 API | [入门指南](docs/getting-started.zh-CN.md) 与[可运行示例](examples) |
 | 构建完整客户端流程 | [端到端集成](docs/integration/overview.zh-CN.md) |
-| 安全跨越本地重启 | [本地 bbolt 检查点](docs/integration/local-checkpoint.zh-CN.md) 与 `go run ./examples/persistent-replica` |
+| 安全跨越本地重启 | [本地 checkpoint Store](docs/integration/local-checkpoint.zh-CN.md) 与 `go run ./examples/persistent-replica` |
 | 增加重放与重连 | [durable relay 参考](docs/integration/durable-provider.zh-CN.md) |
 | 使用有界 live relay | [WebSocket provider 参考](docs/integration/websocket-provider.zh-CN.md) |
 | 在不复制媒体字节的前提下附加媒体 | [附件集成](docs/integration/attachment.zh-CN.md) |
@@ -84,7 +84,7 @@ go test ./...
 
 ## 持久化与恢复
 
-对于 HLC CRDT，只保存状态字节不足以恢复 replica。复用 replica ID 前，必须原子保存 state frame、HLC 状态和应用的投递 frontier/outbox。`persistence` 为一种有类型的 CRDT schema 和一个 active process 提供本地 bbolt 参考：保存前和每次加载时都会校验具体状态。
+对于 HLC CRDT，只保存状态字节不足以恢复 replica。复用 replica ID 前，必须原子保存 state frame、HLC 状态和应用的投递 frontier/outbox。`persistence.Store` 为一种有类型的 CRDT schema 和一个 active process 提供 bbolt 与无额外依赖的文件参考实现：保存前和每次加载时都会校验具体状态。
 
 ```sh
 go run ./examples/persistent-replica
@@ -103,7 +103,7 @@ go run ./examples/persistent-replica
 | `lww`、`tree`、`text`、`list`、`xml`、`richtext` | 基于 HLC 的有序协作结构。 |
 | `encoding`、`delta`、`snapshot`、`clock` | 帧、受限批次、snapshot 与 HLC 状态。 |
 | `replica`、`membership`、`tombstonegc`、`merkle` | 投递连续性、成员关系、安全 GC 协调与反熵。 |
-| `persistence` | 本地有界 bbolt CRDT checkpoint 参考。 |
+| `persistence` | 本地有界 bbolt 和文件 CRDT checkpoint Store 参考。 |
 | `durable`、`extensions`、`observe` | Durable relay、有界 live relay、进程内观察。 |
 | `attachment` | 不可变媒体引用元数据，绝不保存原始媒体字节。 |
 
@@ -115,7 +115,8 @@ go run ./examples/persistent-replica
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='BenchmarkStore(Save|Load|SaveParallel)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
+go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
 ```
 
 仓库门禁：
@@ -134,7 +135,7 @@ make verify
 
 - CRC-32C、SHA-256 和帧类型只能发现格式损坏，不能认证 peer。请在认证握手中绑定精确 Manifest 和协议策略。
 - 最大已观察 tag 不是连续投递的证明，也不是删除 tombstone 的许可。请使用对应的 frontier、inbox 和 membership 契约。
-- bbolt 只有一个 writer 且持有本地文件独占锁。不要让 active pod 共享其文件，也不要把本地 checkpoint 当作 HA 存储。
+- 两个 checkpoint 后端都要求单一 active process，且都不是 HA 存储。bbolt 持有本地独占文件锁；文件参考实现没有进程间锁，绝不能由多个 active pod 共享。
 - 库不会强制业务不变量。身份、租户、值权限、限流、保留策略和备份访问都必须由宿主校验。
 
 ## 贡献与发布

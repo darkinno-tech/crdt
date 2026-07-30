@@ -61,7 +61,7 @@ go test ./...
 - Bounded canonical state/delta frames, deterministic snapshots, recovery plans, and persisted HLC state for reusable replica identities.
 - RGA collaborative text with stable run-v2 frames by default; stable bounded rich-text and observed-remove tree protocols; plus list and XML-fragment layers.
 - Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
-- A bounded live WebSocket provider, a separate bbolt-backed durable relay, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and a local bbolt checkpoint reference.
+- A bounded live WebSocket provider, a separate bbolt-backed durable relay, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
 - [RGA diagnostic obfuscation](docs/integration/debug-obfuscation.md) that replaces text content while retaining an isolated debug timeline structure.
 
@@ -73,7 +73,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | --- | --- |
 | Learn the basic APIs | [Getting started](docs/getting-started.md) and [runnable examples](examples) |
 | Build a complete client flow | [End-to-end integration](docs/integration/overview.md) |
-| Survive local restarts safely | [Local bbolt checkpoint reference](docs/integration/local-checkpoint.md) and `go run ./examples/persistent-replica` |
+| Survive local restarts safely | [Local checkpoint Store references](docs/integration/local-checkpoint.md) and `go run ./examples/persistent-replica` |
 | Add replay and reconnect | [Durable relay reference](docs/integration/durable-provider.md) |
 | Choose browser, WebRTC, Redis, or PostgreSQL boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
 | Use a bounded live relay | [WebSocket provider reference](docs/integration/websocket-provider.md) |
@@ -85,7 +85,7 @@ The [documentation index](docs/README.md) separates getting-started, integration
 
 ## Persistence and recovery
 
-State bytes alone are not a recoverable replica for HLC-backed CRDTs. Persist the state frame, HLC state, and application delivery frontier/outbox atomically before reusing a replica ID. The `persistence` package is a local bbolt reference for one typed CRDT schema and one active process; it validates the concrete state before saving and on every load.
+State bytes alone are not a recoverable replica for HLC-backed CRDTs. Persist the state frame, HLC state, and application delivery frontier/outbox atomically before reusing a replica ID. The `persistence.Store` contract has bbolt and dependency-free file references for one typed CRDT schema and one active process; both validate concrete state before saving and on every load.
 
 ```sh
 go run ./examples/persistent-replica
@@ -104,7 +104,7 @@ The `durable` package intentionally persists a relay operation log and replay cu
 | `lww`, `tree`, `text`, `list`, `xml`, `richtext` | HLC-backed and ordered collaborative structures. |
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
-| `persistence` | Local bounded bbolt CRDT checkpoint reference. |
+| `persistence` | Local bounded bbolt and file CRDT checkpoint Store references. |
 | `config`, `telemetry` | Explicit layered host configuration and bounded payload-free operational telemetry. |
 | `durable`, `extensions`, `awareness`, `observe` | Durable relay, bounded live relay, ephemeral presence, and process-local observation. |
 | `attachment` | Immutable media-reference metadata; never raw media bytes. |
@@ -117,7 +117,8 @@ Run focused checks while changing one package:
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='BenchmarkStore(Save|Load|SaveParallel|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
+go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
 ```
 
 Repository gates:
@@ -138,7 +139,7 @@ For host wiring of layered configuration, structured error codes, and bounded du
 
 - CRC-32C, SHA-256, and a frame type detect format damage; they do not authenticate a peer. Bind exact manifests and protocol policies during an authenticated handshake.
 - A greatest observed tag is not proof of contiguous delivery or permission to retire tombstones. Use the relevant frontier, inbox, and membership contracts.
-- bbolt uses one writer and an exclusive local file lock. Do not share its file between active pods or treat a local checkpoint as HA storage.
+- Both checkpoint backends require one active process and are not HA storage. bbolt has an exclusive file lock; the file reference has no inter-process lock and must never be shared by active pods.
 - The library does not enforce business invariants. Validate identity, tenant, value permissions, rate limits, retention, and backup access in the host.
 
 ## Contributing and releases
