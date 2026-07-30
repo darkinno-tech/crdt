@@ -66,6 +66,24 @@ func TestAwarenessRequiresV3AuthorizationAndSyncsLiveSnapshot(t *testing.T) {
 	if err := legacy.client.PublishAwareness(context.Background(), update); !errors.Is(err, ErrAwarenessUnsupported) {
 		t.Fatalf("v1 PublishAwareness = %v, want %v", err, ErrAwarenessUnsupported)
 	}
+	// Awareness is a v3-only envelope. A v1 peer must neither receive it nor
+	// disconnect; it must still be able to publish ordinary CRDT changes.
+	select {
+	case <-legacy.client.Done():
+		t.Fatal("v1 client disconnected after a v3 awareness broadcast")
+	case <-time.After(100 * time.Millisecond):
+	}
+	legacyDelta, err := legacy.state.Increment(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyChange := newCounterChange(t, manifest, "legacy", 1, legacyDelta)
+	if err := legacy.client.Publish(context.Background(), legacyChange); err != nil {
+		t.Fatalf("v1 publish after awareness = %v", err)
+	}
+	eventually(t, func() bool {
+		return group.Frontier().Counter("legacy") == 1
+	})
 
 	attackerStore := mustAwarenessStore(t)
 	attacker := newAwarenessClient(t, endpoint, manifest, "eve", attackerStore, nil)
