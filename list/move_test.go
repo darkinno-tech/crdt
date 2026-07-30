@@ -274,6 +274,37 @@ func TestMoveRGAWireLimitsAndSnapshotValidation(t *testing.T) {
 	}
 }
 
+func TestMoveRGADecoderRejectsCombinedNodeAndMoveTagBudget(t *testing.T) {
+	value := mustMoveList(t, "writer")
+	nodeID := Position{ReplicaID: "node", WallTime: 1}
+	moveTag := Position{ReplicaID: "move", WallTime: 1}
+	payload := frame.AppendUvarint(nil, 1)
+	payload = frame.AppendTag(payload, nodeID)
+	payload = frame.AppendUvarint(payload, 0)
+	payload = frame.AppendUvarint(payload, 1)
+	payload = append(payload, 'x')
+	payload = frame.AppendUvarint(payload, 0)
+	payload = frame.AppendUvarint(payload, 1)
+	payload = frame.AppendTag(payload, nodeID)
+	payload = frame.AppendTag(payload, moveTag)
+	payload = frame.AppendUvarint(payload, 0)
+	payload = frame.AppendUvarint(payload, 0)
+	encoded, err := frame.MarshalFrame(frame.Frame{
+		TypeID:  crdt.TypeIDMoveRGADelta,
+		CodecID: value.codecID,
+		Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := frame.DefaultLimits()
+	limits.MaxElements = 1
+	limits.MaxTags = 1
+	if _, err := unmarshalMoveRGA(encoded, crdt.TypeIDMoveRGADelta, value.codecID, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("combined node and move tags error = %v, want %v", err, frame.ErrInvalidFrame)
+	}
+}
+
 func TestMoveRGAInternalSafetyBoundaries(t *testing.T) {
 	var nilList *MoveRGA[string]
 	if _, err := nilList.Insert(0, nil); err == nil {
@@ -542,6 +573,30 @@ func BenchmarkMoveRGAValuesThousand(b *testing.B) {
 		values, err := value.Values()
 		if err != nil || len(values) != len(seed) {
 			b.Fatalf("values len=%d err=%v", len(values), err)
+		}
+	}
+}
+
+func BenchmarkMoveRGAUnmarshalThousand(b *testing.B) {
+	value := mustMoveList(b, "writer")
+	seed := make([]string, 1000)
+	for index := range seed {
+		seed[index] = "item"
+	}
+	delta, err := value.Append(seed)
+	if err != nil {
+		b.Fatal(err)
+	}
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		decoded, err := UnmarshalMoveDelta(encoded, stringCodec{})
+		if err != nil || len(decoded.nodes) != len(seed) {
+			b.Fatalf("decoded nodes=%d err=%v", len(decoded.nodes), err)
 		}
 	}
 }
