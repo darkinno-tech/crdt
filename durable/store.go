@@ -100,31 +100,32 @@ func (store *Store) Close() error {
 	return nil
 }
 
-type appendResult struct {
-	Event     Event
-	Duplicate bool
+// Closed reports whether Close has completed or is in progress. It allows a
+// Handler to fail closed without taking ownership of the store's lifetime.
+func (store *Store) Closed() bool {
+	return store == nil || store.db == nil || store.closed.Load()
 }
 
 // Append transactionally binds a Dot to its canonical envelope and allocates
 // the next group-local sequence for new data. The caller must validate the
 // concrete CRDT delta before invoking Append.
-func (store *Store) Append(groupID string, change replica.Change) (appendResult, error) {
+func (store *Store) Append(groupID string, change replica.Change) (AppendResult, error) {
 	if store == nil || store.db == nil || groupID == "" {
-		return appendResult{}, ErrInvalidConfig
+		return AppendResult{}, ErrInvalidConfig
 	}
 	if store.closed.Load() {
-		return appendResult{}, ErrClosed
+		return AppendResult{}, ErrClosed
 	}
 	encoded, err := marshalChange(change)
 	if err != nil {
-		return appendResult{}, err
+		return AppendResult{}, err
 	}
 	if uint64(len(encoded)) > store.maxBytes {
-		return appendResult{}, ErrStoreFull
+		return AppendResult{}, ErrStoreFull
 	}
 	digest := sha256.Sum256(encoded)
 	dotKey := makeDotKey(change.Dot)
-	var result appendResult
+	var result AppendResult
 	err = store.db.Update(func(transaction *bolt.Tx) error {
 		group, err := store.groupBucket(transaction, groupID, true)
 		if err != nil {
@@ -144,7 +145,7 @@ func (store *Store) Append(groupID string, change replica.Change) (appendResult,
 			if existingDigest != digest {
 				return ErrConflictingDot
 			}
-			result = appendResult{Event: Event{Sequence: sequence, Change: change}, Duplicate: true}
+			result = AppendResult{Event: Event{Sequence: sequence, Change: change}, Duplicate: true}
 			return nil
 		}
 		highWater, count, usedBytes, err := readMeta(meta)
@@ -164,14 +165,14 @@ func (store *Store) Append(groupID string, change replica.Change) (appendResult,
 		if err := writeMeta(meta, sequence, count+1, usedBytes+uint64(len(encoded))); err != nil {
 			return err
 		}
-		result = appendResult{Event: Event{Sequence: sequence, Change: change}}
+		result = AppendResult{Event: Event{Sequence: sequence, Change: change}}
 		return nil
 	})
 	if err != nil {
 		if errors.Is(err, ErrConflictingDot) || errors.Is(err, ErrStoreFull) || errors.Is(err, ErrCorruptStore) {
-			return appendResult{}, err
+			return AppendResult{}, err
 		}
-		return appendResult{}, fmt.Errorf("append durable event: %w", err)
+		return AppendResult{}, fmt.Errorf("append durable event: %w", err)
 	}
 	return result, nil
 }

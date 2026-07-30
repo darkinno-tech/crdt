@@ -133,11 +133,25 @@ func marshalChange(change replica.Change) ([]byte, error) {
 	return append(encoded, delta...), nil
 }
 
+// EncodeChange produces the canonical durable-log envelope for one validated
+// CRDT change. The envelope is not authentication; callers still bind it to
+// an authenticated manifest and actor at their transport boundary.
+func EncodeChange(change replica.Change) ([]byte, error) {
+	return marshalChange(change)
+}
+
 func unmarshalChange(data []byte, maxMessageBytes, maxActorBytes int) (replica.Dot, []byte, error) {
 	if len(data) == 0 || len(data) > maxMessageBytes || maxActorBytes <= 0 || data[0] != changeMessage {
 		return replica.Dot{}, nil, errInvalidWire
 	}
 	return unmarshalChangeFields(data, 1, maxMessageBytes, maxActorBytes)
+}
+
+// DecodeChange decodes a bounded durable-log envelope. Storage providers must
+// construct a replica.Change with the expected manifest and policy before
+// returning this data to a relay.
+func DecodeChange(data []byte, maxMessageBytes, maxActorBytes int) (replica.Dot, []byte, error) {
+	return unmarshalChange(data, maxMessageBytes, maxActorBytes)
 }
 
 func marshalEvent(event Event) ([]byte, error) {

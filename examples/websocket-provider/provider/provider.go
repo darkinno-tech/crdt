@@ -408,7 +408,7 @@ func (g *Group) receiveAwareness(peer Peer, authorize AuthorizeAwareness, data [
 	if err != nil {
 		return err
 	}
-	g.broadcast(encoded)
+	g.broadcastAwareness(encoded)
 	return nil
 }
 
@@ -462,6 +462,16 @@ func (g *Group) receiveChanges(peer Peer, authorize Authorize, incoming []wireCh
 func (g *Group) broadcast(data []byte) {
 	g.broadcastToPeers(func(peer *connection) bool {
 		return peer.enqueue(data)
+	})
+}
+
+// broadcastAwareness sends an awareness-v1 envelope only to peers that
+// explicitly negotiated crdt-sync-v3. Sending its discriminator to a v1 or v2
+// connection would make an otherwise valid legacy client reject the message as
+// an unknown CRDT change and disconnect.
+func (g *Group) broadcastAwareness(data []byte) {
+	g.broadcastToPeers(func(peer *connection) bool {
+		return !peer.awarenessEnabled || peer.enqueue(data)
 	})
 }
 

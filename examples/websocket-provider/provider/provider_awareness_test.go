@@ -66,9 +66,41 @@ func TestAwarenessRequiresV3AuthorizationAndSyncsLiveSnapshot(t *testing.T) {
 	if err := legacy.client.PublishAwareness(context.Background(), update); !errors.Is(err, ErrAwarenessUnsupported) {
 		t.Fatalf("v1 PublishAwareness = %v, want %v", err, ErrAwarenessUnsupported)
 	}
+	// Awareness is a v3-only envelope. A v1 peer must neither receive it nor
+	// disconnect; it must still be able to publish ordinary CRDT changes.
+	select {
+	case <-legacy.client.Done():
+		t.Fatal("v1 client disconnected after a v3 awareness broadcast")
+	case <-time.After(100 * time.Millisecond):
+	}
+	legacyDelta, err := legacy.state.Increment(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyChange := newCounterChange(t, manifest, "legacy", 1, legacyDelta)
+	if err := legacy.client.Publish(context.Background(), legacyChange); err != nil {
+		t.Fatalf("v1 publish after awareness = %v", err)
+	}
+	eventually(t, func() bool {
+		return group.Frontier().Counter("legacy") == 1
+	})
 
 	attackerStore := mustAwarenessStore(t)
-	attacker := newAwarenessClient(t, endpoint, manifest, "eve", attackerStore, nil)
+	attackerUpdates := make(chan awareness.Update, 1)
+	attacker := newAwarenessClient(t, endpoint, manifest, "eve", attackerStore, attackerUpdates)
+	// Dial returns after the handshake response, before the server has necessarily
+	// delivered its live-awareness snapshot. Wait for that snapshot before
+	// installing the forged update locally: otherwise a concurrent snapshot and
+	// forged value can legitimately conflict at clock 1, closing the client before
+	// the authorization path under test receives the forged message.
+	select {
+	case received := <-attackerUpdates:
+		if received.Actor != "alice" || received.Clock != 1 {
+			t.Fatalf("attacker snapshot = %#v", received)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("attacker did not receive live awareness snapshot")
+	}
 	forged, err := attackerStore.Set("alice", []byte(`{"name":"forged"}`), time.Now())
 	if err != nil {
 		t.Fatal(err)

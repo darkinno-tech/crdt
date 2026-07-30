@@ -3,7 +3,8 @@ name: Test
 on:
   push:
     branches:
-      - "**"
+      - beta
+      - main
   pull_request:
 
 permissions:
@@ -11,7 +12,13 @@ permissions:
 
 jobs:
   test:
+    # A beta-to-main PR already has a full push validation for the exact same
+    # SHA. Do not spend a second runner on an identical workflow.
+    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
     runs-on: ubuntu-latest
+    concurrency:
+      group: test-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -32,11 +39,19 @@ jobs:
         run: go test -race ./...
       - name: Run vet
         run: go vet ./...
-      - name: Fuzz decoders
+      - name: Fuzz decoders (PR smoke)
+        if: github.event_name == 'pull_request'
+        run: make fuzz-smoke
+      - name: Fuzz decoders (release candidate)
+        if: github.event_name == 'push'
         run: make fuzz
 
   staticcheck:
+    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
     runs-on: ubuntu-latest
+    concurrency:
+      group: staticcheck-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -50,7 +65,11 @@ jobs:
           use-cache: false
 
   coverage:
+    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
     runs-on: ubuntu-latest
+    concurrency:
+      group: coverage-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -60,7 +79,11 @@ jobs:
         run: make coverage
 
   docker:
+    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
     runs-on: ubuntu-latest
+    concurrency:
+      group: docker-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build and run Go 1.26 coverage container
@@ -69,7 +92,11 @@ jobs:
           docker run --rm --env COVERAGE_THRESHOLD=90 crdt-ci:ci
 
   golangci:
+    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
     runs-on: ubuntu-latest
+    concurrency:
+      group: golangci-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

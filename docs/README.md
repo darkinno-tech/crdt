@@ -19,6 +19,7 @@ be committed.
 - [本地 bbolt 检查点参考实现](integration/local-checkpoint.zh-CN.md)
 - [Durable WebSocket relay reference](integration/durable-provider.md)
 - [可持久化 WebSocket relay 参考实现](integration/durable-provider.zh-CN.md)
+- [Browser and provider architecture](integration/provider-architecture.md)
 - [WebSocket provider reference](integration/websocket-provider.md)
 - [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
 - [Attachment reference integration](integration/attachment.md)

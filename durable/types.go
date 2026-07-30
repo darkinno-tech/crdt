@@ -73,3 +73,28 @@ type Event struct {
 	Sequence uint64
 	Change   replica.Change
 }
+
+// AppendResult records the outcome of one idempotent log append. A duplicate
+// Dot is safe only when the store verified that its canonical payload is
+// identical to the existing binding.
+type AppendResult struct {
+	Event     Event
+	Duplicate bool
+}
+
+// Log is the durable-relay storage contract. Implementations must make Append
+// atomic: a new event, its group-local sequence, the Dot-to-canonical-payload
+// binding, and capacity accounting either all become durable or none do.
+//
+// Replay must return a contiguous complete suffix or ErrReplayUnavailable;
+// returning a prefix silently would let a receiver advance its cursor past
+// missing CRDT changes. Implementations validate stored bytes against the
+// manifest and policy supplied by the relay before returning them.
+//
+// The relay never closes a Log. Its owner controls connection lifetime so a
+// shared PostgreSQL or Redis client pool can serve more than one handler.
+type Log interface {
+	Append(groupID string, change replica.Change) (AppendResult, error)
+	Replay(groupID string, after, maxEvents, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) ([]Event, uint64, error)
+	Closed() bool
+}
