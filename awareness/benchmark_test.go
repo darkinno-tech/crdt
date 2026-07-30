@@ -1,6 +1,7 @@
 package awareness
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -43,6 +44,27 @@ func BenchmarkStoreSetUnchangedState(b *testing.B) {
 		if _, err := store.Set("alice", state, now); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkStoreExpireNoTransition(b *testing.B) {
+	for _, actorCount := range []int{1, 64, 1024} {
+		b.Run(fmt.Sprintf("actors_%d", actorCount), func(b *testing.B) {
+			store := mustStore(b, DefaultOptions())
+			now := time.Date(2026, time.July, 31, 11, 0, 0, 0, time.UTC)
+			for index := 0; index < actorCount; index++ {
+				if _, err := store.Set(fmt.Sprintf("actor-%d", index), []byte(`{"cursor":1}`), now); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for index := 0; index < b.N; index++ {
+				if store.Expire(now) {
+					b.Fatal("fresh state expired")
+				}
+			}
+		})
 	}
 }
 

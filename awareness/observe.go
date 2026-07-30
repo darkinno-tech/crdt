@@ -1,6 +1,7 @@
 package awareness
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,10 @@ var (
 	// ErrSubscriptionLimit reports that local application observation exceeded
 	// the Store's configured resource bound.
 	ErrSubscriptionLimit = errors.New("awareness: subscription limit exceeded")
+	// ErrNilContext reports an expiry loop without an explicit owner lifecycle.
+	ErrNilContext = errors.New("awareness: nil context")
+	// ErrInvalidExpiryInterval reports a non-positive expiry scheduling interval.
+	ErrInvalidExpiryInterval = errors.New("awareness: invalid expiry interval")
 )
 
 // Origin identifies why a local presence observer received a new snapshot.
@@ -130,6 +135,57 @@ func (store *Store) Expire(now time.Time) bool {
 	}
 	store.mu.Unlock()
 	return changed
+}
+
+// ExpiryLoop is one caller-owned expiry scheduler. Done closes after its
+// context is cancelled; cancelling a parent application context is the only
+// shutdown mechanism, so a Store never retains an unbounded background task.
+type ExpiryLoop struct{ done <-chan struct{} }
+
+// Done closes once the expiry scheduler has stopped. It is already closed for
+// a nil loop, matching Subscription's lifecycle behavior.
+func (loop *ExpiryLoop) Done() <-chan struct{} {
+	if loop == nil || loop.done == nil {
+		return closedDone
+	}
+	return loop.done
+}
+
+// StartExpiry runs Expire immediately and then at interval until ctx is
+// cancelled. It only makes local liveness transitions observable: it never
+// sends a removal, mutates a CRDT, or deletes retained actor clocks. Use an
+// interval no greater than Options.Timeout when the UI must reflect expiry
+// promptly.
+func (store *Store) StartExpiry(ctx context.Context, interval time.Duration) (*ExpiryLoop, error) {
+	if store == nil {
+		return nil, ErrInvalidOptions
+	}
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
+	if interval <= 0 {
+		return nil, ErrInvalidExpiryInterval
+	}
+	done := make(chan struct{})
+	loop := &ExpiryLoop{done: done}
+	go func() {
+		defer close(done)
+		if ctx.Err() != nil {
+			return
+		}
+		store.Expire(time.Now())
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				store.Expire(now)
+			}
+		}
+	}()
+	return loop, nil
 }
 
 func (store *Store) publishLocked(origin Origin, update Update, now time.Time) {

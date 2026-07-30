@@ -1,6 +1,7 @@
 package awareness
 
 import (
+	"context"
 	"errors"
 	"math"
 	"math/rand"
@@ -408,6 +409,66 @@ func TestStoreSubscriptionLifecycleEdges(t *testing.T) {
 	case <-broken.Done():
 	case <-time.After(time.Second):
 		t.Fatal("panicking callback did not stop")
+	}
+}
+
+func TestStoreStartExpiryPublishesAndStopsWithContext(t *testing.T) {
+	options := DefaultOptions()
+	options.Timeout = time.Millisecond
+	store := mustStore(t, options)
+	staleAt := time.Now().Add(-time.Second)
+	if _, err := store.Set("alice", []byte(`{"cursor":1}`), staleAt); err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan Event, 2)
+	subscription, err := store.Subscribe(func(event Event) { events <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		subscription.Unsubscribe()
+		<-subscription.Done()
+	}()
+	if event := awaitEvent(t, events); event.Origin != Initial || len(event.Active) != 0 {
+		t.Fatalf("initial stale event = %#v", event)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	loop, err := store.StartExpiry(ctx, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event := awaitEvent(t, events); event.Origin != Expired || event.Version != 2 || len(event.Active) != 0 {
+		t.Fatalf("scheduled expiry event = %#v", event)
+	}
+	cancel()
+	select {
+	case <-loop.Done():
+	case <-time.After(time.Second):
+		t.Fatal("expiry loop did not stop after context cancellation")
+	}
+	if store.Expire(time.Now()) {
+		t.Fatal("expiry scheduler left an unmarked stale record")
+	}
+}
+
+func TestStoreStartExpiryRejectsInvalidLifecycle(t *testing.T) {
+	store := mustStore(t, DefaultOptions())
+	var nilContext context.Context
+	if loop, err := store.StartExpiry(nilContext, time.Second); loop != nil || !errors.Is(err, ErrNilContext) {
+		t.Fatalf("nil context = %#v, %v", loop, err)
+	}
+	if loop, err := store.StartExpiry(context.Background(), 0); loop != nil || !errors.Is(err, ErrInvalidExpiryInterval) {
+		t.Fatalf("zero interval = %#v, %v", loop, err)
+	}
+	var nilStore *Store
+	if loop, err := nilStore.StartExpiry(context.Background(), time.Second); loop != nil || !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("nil store = %#v, %v", loop, err)
+	}
+	var nilLoop *ExpiryLoop
+	select {
+	case <-nilLoop.Done():
+	default:
+		t.Fatal("nil expiry loop Done did not close")
 	}
 }
 
