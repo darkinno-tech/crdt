@@ -48,10 +48,13 @@ paths never wait for a callback.
 
 Callbacks run outside the Store lock and receive a shared immutable snapshot;
 a panic stops only the failing subscription. `MaxSubscribers` defaults to
-1,024 and bounds this process-local UI resource. `Store.Expire(now)` makes timeout transitions
-observable without starting a hidden timer or goroutine; applications schedule
-it with their own lifecycle. Expiry neither sends a removal nor deletes the
-actor clock: only a strictly newer heartbeat can make that actor live again.
+1,024 and bounds this process-local UI resource. `Store.Expire(now)` makes
+timeout transitions observable. Applications that want a lifecycle-bound
+helper can call `Store.StartExpiry(ctx, interval)`; its only goroutine stops
+when `ctx` is cancelled. Choose an interval no greater than the awareness TTL
+when the UI must reflect expiry promptly. Expiry neither sends a removal nor
+deletes the actor clock: only a strictly newer heartbeat can make that actor
+live again.
 
 These events are deliberately local. `Event.Version`, `Origin`, and
 `Coalesced` must not be transmitted, persisted, used for authorization, or
