@@ -1,0 +1,12 @@
+{
+  "name": "@darkinno/crdt-competitor-benchmarks",
+  "private": true,
+  "type": "module",
+  "description": "Pinned, reproducible external CRDT comparison workloads",
+  "scripts": {
+    "yjs": "node --no-experimental-webstorage --expose-gc yjs.mjs"
+  },
+  "dependencies": {
+    "yjs": "13.6.31"
+  }
+}
