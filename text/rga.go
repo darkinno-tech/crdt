@@ -513,6 +513,50 @@ func (r *RGA) DeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderL
 	return encoded, err
 }
 
+// ReplaceBinaryWithLimits atomically replaces count visible runes at offset
+// with value and returns one preflighted scalar-v1 delta. A rejected frame or
+// state-limit check leaves both visible text and tombstones unchanged. The HLC
+// may reserve un-emitted insertion tags, which are safe to skip.
+func (r *RGA) ReplaceBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.replace(offset, count, value, limits, Delta.MarshalBinaryWithLimits)
+	return encoded, err
+}
+
+// ReplaceRunBinaryWithLimits atomically replaces count visible runes at offset
+// with value and returns one preflighted run-v2 delta. It is the editor-facing
+// operation: a text binding must never publish a delete and insert half-pair
+// when a local frame or retention bound rejects the replacement.
+func (r *RGA) ReplaceRunBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.replace(offset, count, value, limits, Delta.MarshalRunBinaryWithLimits)
+	return encoded, err
+}
+
+func (r *RGA) replace(offset, count int, value string, limits frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
+	if r == nil || r.clock == nil {
+		return Delta{}, nil, ErrNilText
+	}
+	if !utf8.ValidString(value) {
+		return Delta{}, nil, ErrInvalidText
+	}
+	deleted, _, err := r.prepareDelete(offset, count, nil, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	inserted, _, err := r.prepareInsert(offset, value, nil, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	delta := Delta{nodes: inserted.nodes, tombstones: deleted.tombstones}
+	encoded, err := encode(delta, limits)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
+}
+
 // PrepareDeleteRunBinaryWithLimits returns a canonical run-v2 deletion delta
 // without applying its tombstones. It is intended for a composed CRDT that
 // must preflight an enclosing frame before committing local text changes.

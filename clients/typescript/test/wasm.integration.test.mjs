@@ -37,11 +37,20 @@ after(async () => {
 });
 
 test("TypeScript loader starts the real Go Wasm module over application/wasm", () => {
-  const document = loaderRuntime.create("loader");
-  const frame = document.insert(0, "loader local merge");
+	const document = loaderRuntime.create("loader");
+	const frame = document.insert(0, "loader local merge");
   assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
   assert.equal(document.text(), "loader local merge");
-  assert.equal(document.close(), true);
+	assert.equal(document.close(), true);
+});
+
+test("TypeScript wrapper atomically replaces text", () => {
+	const document = loaderRuntime.create("relative-position");
+	document.insert(0, "abc");
+	const frame = document.replace(1, 1, "XY");
+	assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
+	assert.equal(document.text(), "aXYc");
+	assert.equal(document.close(), true);
 });
 
 test("plain-text binding exchanges actual Go Wasm RGA frames without echoing remote updates", () => {

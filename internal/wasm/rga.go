@@ -285,6 +285,27 @@ func (r *Runtime) Delete(handle uint64, offset, count int) ([]byte, error) {
 	}
 }
 
+// Replace performs one atomic local editor replacement and returns one framed
+// delta. It preflights the combined insert/tombstone delta before committing so
+// a rejected editor transaction cannot leave a half-applied local change.
+func (r *Runtime) Replace(handle uint64, offset, count int, value string) ([]byte, error) {
+	document, err := r.document(handle)
+	if err != nil {
+		return nil, err
+	}
+	if len(value) > r.options.MaxLocalEditBytes || utf8.RuneCountInString(value) > r.options.MaxLocalEditRunes {
+		return nil, frame.ErrFrameLimit
+	}
+	switch r.options.WireFormat {
+	case RGAWireFormatV1:
+		return document.ReplaceBinaryWithLimits(offset, count, value, r.options.Decoder)
+	case RGAWireFormatRunV2:
+		return document.ReplaceRunBinaryWithLimits(offset, count, value, r.options.Decoder)
+	default:
+		return nil, ErrInvalidOptions
+	}
+}
+
 // ApplyDelta validates and joins one untrusted canonical delta frame for the
 // runtime's selected RGA format. A malformed, mismatched, or over-limit frame
 // leaves the document unchanged.

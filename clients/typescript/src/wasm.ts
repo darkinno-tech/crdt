@@ -102,8 +102,15 @@ export class RGAWasmDocument {
   /** Deletes visible runes and returns a canonical tombstone delta frame. */
   delete(offset: number, count: number): Uint8Array {
     this.assertOpen();
-    return copiedBytes(unwrap(this.api.delete(this.handle, offset, count)));
+	return copiedBytes(unwrap(this.api.delete(this.handle, offset, count)));
   }
+
+  /** Atomically replaces a visible rune range and returns one negotiated delta. */
+  replace(offset: number, count: number, value: string): Uint8Array {
+	this.assertOpen();
+	assertBoundedString(value, this.limits.maxLocalEditBytes, "resource_limit");
+	return copiedBytes(unwrap(this.api.replace(this.handle, offset, count, value)));
+	}
 
   /** Validates and joins one untrusted canonical frame for this runtime's negotiated RGA format. */
   applyDelta(encoded: Uint8Array): void {
@@ -124,7 +131,7 @@ export class RGAWasmDocument {
   /** Reports accepted nodes still waiting for an out-of-order parent. */
   pendingCount(): number {
     this.assertOpen();
-    return nonNegativeSafeInteger(unwrap(this.api.pendingCount(this.handle)));
+	return nonNegativeSafeInteger(unwrap(this.api.pendingCount(this.handle)));
   }
 
   /** Returns a fully copied, complete persistence unit. */
@@ -248,6 +255,7 @@ interface RawRGAAPI {
   drop(handle: number): RawResult;
   insert(handle: number, offset: number, value: string): RawResult;
   delete(handle: number, offset: number, count: number): RawResult;
+  replace(handle: number, offset: number, count: number, value: string): RawResult;
   applyDelta(handle: number, encoded: Uint8Array): RawResult;
   text(handle: number): RawResult;
   pendingCount(handle: number): RawResult;
@@ -300,6 +308,7 @@ function rawAPIFromGlobal(): RawRGAAPI | undefined {
     "drop",
     "insert",
     "delete",
+    "replace",
     "applyDelta",
     "text",
     "pendingCount",

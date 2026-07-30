@@ -93,6 +93,43 @@ func TestRuntimeRunV2InteroperatesWithNativeRGA(t *testing.T) {
 	}
 }
 
+func TestRuntimeReplace(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		options RGAOptions
+		typeID  uint64
+	}{
+		{"scalar-v1", DefaultRGAOptions(), RGADeltaTypeID},
+		{"run-v2", DefaultRunRGAOptions(), RGARunDeltaTypeID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, err := NewRuntime(test.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := mustCreate(t, runtime, "writer")
+			receiver := mustCreate(t, runtime, "receiver")
+			base := mustInsert(t, runtime, writer, 0, "abc")
+			mustApply(t, runtime, receiver, base)
+			replace, err := runtime.Replace(writer, 1, 1, "XY")
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := frame.UnmarshalFrame(replace, test.options.Decoder)
+			if err != nil || decoded.TypeID != test.typeID {
+				t.Fatalf("replace frame = %#v, %v", decoded, err)
+			}
+			mustApply(t, runtime, receiver, replace)
+			if got, want := mustText(t, runtime, writer), "aXYc"; got != want {
+				t.Fatalf("writer = %q, want %q", got, want)
+			}
+			if got, want := mustText(t, runtime, receiver), mustText(t, runtime, writer); got != want {
+				t.Fatalf("receiver = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T, options RGAOptions, wantProtocol RGAProtocol) {
 	t.Helper()
 	runtime, err := NewRuntime(options)
@@ -379,6 +416,7 @@ func TestRuntimeBoundaryErrorsAndAccessors(t *testing.T) {
 	}{
 		{"insert", func() error { _, err := runtime.Insert(99, 0, "x"); return err }()},
 		{"delete", func() error { _, err := runtime.Delete(99, 0, 1); return err }()},
+		{"replace", func() error { _, err := runtime.Replace(99, 0, 1, "x"); return err }()},
 		{"apply", runtime.ApplyDelta(99, nil)},
 		{"pending", func() error { _, err := runtime.PendingCount(99); return err }()},
 		{"snapshot", func() error { _, err := runtime.Snapshot(99); return err }()},
@@ -397,6 +435,9 @@ func TestRuntimeBoundaryErrorsAndAccessors(t *testing.T) {
 	}
 	if _, err := runtime.Delete(handle, 0, -1); err == nil {
 		t.Fatal("negative delete count was accepted")
+	}
+	if _, err := runtime.Replace(handle, 0, 0, strings.Repeat("a", runtime.MaxLocalEditBytes()+1)); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("oversized replacement error = %v, want %v", err, frame.ErrFrameLimit)
 	}
 	saved, err := runtime.Snapshot(handle)
 	if err != nil {
