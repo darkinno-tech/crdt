@@ -55,37 +55,38 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *basePath == "" || *candidatePath == "" {
-		fmt.Fprintln(stderr, "both -base and -candidate are required")
+		_, _ = fmt.Fprintln(stderr, "both -base and -candidate are required")
 		return 2
 	}
 	if *minimumSamples < 1 || *maxTimeRegression < 0 || *maxBytesRegression < 0 || *maxAllocsRegression < 0 {
-		fmt.Fprintln(stderr, "sample count and regression limits must be non-negative; sample count must be positive")
+		_, _ = fmt.Fprintln(stderr, "sample count and regression limits must be non-negative; sample count must be positive")
 		return 2
 	}
 
 	base, err := parseFile(*basePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "read baseline: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "read baseline: %v\n", err)
 		return 2
 	}
 	candidate, err := parseFile(*candidatePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "read candidate: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "read candidate: %v\n", err)
 		return 2
 	}
 	if err := compare(base, candidate, required, *minimumSamples, *maxTimeRegression, *maxBytesRegression, *maxAllocsRegression, stdout); err != nil {
-		fmt.Fprintf(stderr, "benchmark regression: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "benchmark regression: %v\n", err)
 		return 1
 	}
 	return 0
 }
 
 func parseFile(path string) (results, error) {
-	file, err := os.Open(path)
+	// The command compares local CI artifacts selected by its caller.
+	file, err := os.Open(path) // #nosec G304 -- the caller explicitly supplies both artifact paths.
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return parse(file)
 }
 
@@ -162,7 +163,9 @@ func compare(base, candidate results, required []string, minimumSamples int, max
 		if err := withinLimit(name, "allocs/op", baseMedian.allocsPerOp, candidateMedian.allocsPerOp, maxAllocs); err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "%s: ns/op %.2f -> %.2f, B/op %.2f -> %.2f, allocs/op %.2f -> %.2f\n", name, baseMedian.nsPerOp, candidateMedian.nsPerOp, baseMedian.bytesPerOp, candidateMedian.bytesPerOp, baseMedian.allocsPerOp, candidateMedian.allocsPerOp)
+		if _, err := fmt.Fprintf(output, "%s: ns/op %.2f -> %.2f, B/op %.2f -> %.2f, allocs/op %.2f -> %.2f\n", name, baseMedian.nsPerOp, candidateMedian.nsPerOp, baseMedian.bytesPerOp, candidateMedian.bytesPerOp, baseMedian.allocsPerOp, candidateMedian.allocsPerOp); err != nil {
+			return fmt.Errorf("write comparison: %w", err)
+		}
 	}
 	return nil
 }
