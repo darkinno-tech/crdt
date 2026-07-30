@@ -8,6 +8,7 @@
     ".": "./dist/index.js",
     "./frame": "./dist/frame.js",
     "./native": "./dist/native.js",
+    "./browser": "./dist/browser.js",
     "./wasm": "./dist/wasm.js"
   },
   "files": [
@@ -19,11 +20,12 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "test": "npm run build && node --test test/frame.test.mjs test/native.test.mjs test/rga-run-v2-vectors.test.mjs",
+    "test": "npm run build && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/rga-run-v2-vectors.test.mjs",
     "test:wasm": "npm run build && node --test test/wasm.integration.test.mjs",
-    "test:compat": "npm run build && node --test test/frame.test.mjs test/native.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm.integration.test.mjs",
+    "test:compat": "npm run build && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm.integration.test.mjs",
     "bench:frame": "npm run build && node bench/frame.bench.mjs",
     "bench:native": "npm run build && node bench/native.bench.mjs",
+    "bench:browser": "npm run build && node bench/browser.bench.mjs",
     "bench:wasm": "node bench/wasm.bench.mjs"
   },
   "devDependencies": {

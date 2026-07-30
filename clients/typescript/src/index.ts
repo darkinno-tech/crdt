@@ -45,6 +45,7 @@ export type {
   NativeMapDeleteOperation,
   NativeMapSetOperation,
   NativeOperation,
+  NativePersistenceMetadata,
   NativeRoot,
   NativeSnapshot,
   NativeTypeEvent,
@@ -54,3 +55,22 @@ export type {
   NativeUpdateListener,
   NativeValue,
 } from "./native.js";
+export {
+  createBrowserReplicaID,
+  BroadcastChannelNativeTransport,
+  IndexedDBNativePersistence,
+  MemoryNativeBrowserPersistence,
+  NativeBrowserDocument,
+  NativeBrowserError,
+  openNativeBrowserDocument,
+} from "./browser.js";
+export type {
+  BrowserNativeDocumentOptions,
+  BrowserPersistenceLimits,
+  BrowserPersistedUpdate,
+  BrowserStoredDocument,
+  NativeBrowserErrorCode,
+  NativeBrowserPersistence,
+  NativeBrowserTransport,
+  NativeBrowserUpdateEvent,
+} from "./browser.js";

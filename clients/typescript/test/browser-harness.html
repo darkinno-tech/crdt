@@ -20,7 +20,14 @@
     </script>
     <script src="/.tmp/crdt-rga-wasm/wasm_exec.js"></script>
     <script type="module">
-      import { decodeFrame, FrameType, initRGAWasm } from "../dist/index.js";
+      import {
+        BroadcastChannelNativeTransport,
+        createBrowserReplicaID,
+        decodeFrame,
+        FrameType,
+        initRGAWasm,
+        openNativeBrowserDocument,
+      } from "../dist/index.js";
 
       const status = document.querySelector("#status");
       try {
@@ -42,13 +49,61 @@
         alice.close();
         bob.close();
         restored.close();
-        window.__crdtWasmResult = { ok: true, text };
-        status.textContent = `PASS: ${text}`;
+
+        const documentID = `browser-native-${crypto.randomUUID()}`;
+        const persisted = await openNativeBrowserDocument({
+          documentID,
+          replicaID: createBrowserReplicaID(),
+        });
+        persisted.getMap("metadata").set("title", "offline browser state");
+        await persisted.flush();
+        await persisted.close();
+        const recovered = await openNativeBrowserDocument({
+          documentID,
+          replicaID: createBrowserReplicaID(),
+        });
+        if (recovered.getMap("metadata").get("title") !== "offline browser state") {
+          throw new Error("IndexedDB recovery lost native state");
+        }
+        await recovered.close();
+
+        const channelName = `browser-native-channel-${crypto.randomUUID()}`;
+        const leftTransport = new BroadcastChannelNativeTransport(channelName);
+        const rightTransport = new BroadcastChannelNativeTransport(channelName);
+        const left = await openNativeBrowserDocument({
+          documentID: `${documentID}-tabs`,
+          replicaID: createBrowserReplicaID(),
+          transport: leftTransport,
+        });
+        const right = await openNativeBrowserDocument({
+          documentID: `${documentID}-tabs`,
+          replicaID: createBrowserReplicaID(),
+          transport: rightTransport,
+        });
+        left.getArray("cards").push(["shared across tabs"]);
+        await left.flush();
+        await waitFor(() => right.getArray("cards").get(0) === "shared across tabs");
+        await right.flush();
+        await left.close();
+        await right.close();
+        leftTransport.close();
+        rightTransport.close();
+
+        window.__crdtWasmResult = { ok: true, text, native: "IndexedDB + BroadcastChannel" };
+        status.textContent = `PASS: ${text}; native IndexedDB + BroadcastChannel`;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         window.__crdtWasmResult = { ok: false, error: message };
         console.error(message);
         status.textContent = `FAIL: ${message}`;
+      }
+
+      async function waitFor(predicate) {
+        const deadline = performance.now() + 2_000;
+        while (!predicate()) {
+          if (performance.now() >= deadline) throw new Error("cross-tab native update timed out");
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
       }
     </script>
   </body>

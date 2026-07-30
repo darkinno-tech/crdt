@@ -119,7 +119,8 @@ export type NativeCRDTErrorCode =
   | "state_conflict"
   | "type_conflict"
   | "transaction_active"
-  | "document_closed";
+  | "document_closed"
+  | "incomplete_state";
 
 export class NativeCRDTError extends Error {
   readonly code: NativeCRDTErrorCode;
@@ -135,6 +136,8 @@ export class NativeCRDTError extends Error {
 export interface NativeUpdateEvent {
   readonly update: NativeUpdate;
   readonly origin: unknown;
+  /** True only for an update created by this document's local mutation API. */
+  readonly local?: boolean;
 }
 
 export interface NativeTypeEvent extends NativeUpdateEvent {
@@ -153,6 +156,15 @@ export interface NativeRoot {
 export interface NativeSnapshot {
   readonly roots: readonly NativeRoot[];
   readonly updates: readonly NativeUpdate[];
+  readonly counter: number;
+}
+
+/**
+ * The mutable portion of a persistence record. Browser stores can append
+ * canonical updates without repeatedly encoding the complete document state.
+ */
+export interface NativePersistenceMetadata {
+  readonly roots: readonly NativeRoot[];
   readonly counter: number;
 }
 
@@ -520,7 +532,7 @@ export class NativeArray<T extends NativeValue = NativeValue> {
   /** @internal */
   _stateOperations(): NativeOperation[] {
     if (this.#pending.size !== 0) {
-      throw invalidUpdate();
+      throw incompleteState();
     }
     const operations: NativeOperation[] = [];
     const entries = topologicalNodes(this.#nodes);
@@ -693,7 +705,7 @@ export class NativeDocument {
     const prepared = this.#prepare(update);
     const changed = this.#applyPrepared(prepared);
     if (changed) {
-      this.#emit(prepared.update, origin);
+      this.#emit(prepared.update, origin, false);
     }
     return changed;
   }
@@ -708,7 +720,7 @@ export class NativeDocument {
     const prepared = this.#prepareNormalized(decodeNativeUpdate(encoded, this.limits));
     const changed = this.#applyPrepared(prepared);
     if (changed) {
-      this.#emit(prepared.update, origin);
+      this.#emit(prepared.update, origin, false);
     }
     return changed;
   }
@@ -727,10 +739,20 @@ export class NativeDocument {
 
   snapshot(): NativeSnapshot {
     this._assertOpen();
+    return { ...this.persistenceMetadata(), updates: this.encodeStateAsUpdates() };
+  }
+
+  /**
+   * Returns copied root declarations and the local counter without encoding
+   * complete state. Pair this metadata with an atomically appended canonical
+   * update log; it is not a standalone recovery record.
+   */
+  persistenceMetadata(): NativePersistenceMetadata {
+    this._assertOpen();
     const roots: NativeRoot[] = [...this.#roots.values()]
       .sort((left, right) => compareText(left.name, right.name))
       .map((root) => ({ name: root.name, type: root instanceof NativeMap ? "map" : "array" }));
-    return { roots, updates: this.encodeStateAsUpdates(), counter: this.#counter };
+    return { roots, counter: this.#counter };
   }
 
   static restore(replicaID: string, snapshot: NativeSnapshot, options: NativeDocumentOptions = {}): NativeDocument {
@@ -905,11 +927,11 @@ export class NativeDocument {
     this.#pendingOperations = [];
     const origin = this.#transactionOrigin;
     this.#transactionOrigin = undefined;
-    this.#emit(update, origin);
+    this.#emit(update, origin, true);
   }
 
-  #emit(update: NativeUpdate, origin: unknown): void {
-    const updateEvent: NativeUpdateEvent = { update, origin };
+  #emit(update: NativeUpdate, origin: unknown, local: boolean): void {
+    const updateEvent: NativeUpdateEvent = { update, origin, local };
     for (const listener of [...this.#updateListeners]) {
       listener(updateEvent);
     }
@@ -1598,6 +1620,10 @@ function resourceLimit(): NativeCRDTError {
 
 function stateConflict(): NativeCRDTError {
   return new NativeCRDTError("state_conflict");
+}
+
+function incompleteState(): NativeCRDTError {
+  return new NativeCRDTError("incomplete_state");
 }
 
 function typeConflict(): NativeCRDTError {
