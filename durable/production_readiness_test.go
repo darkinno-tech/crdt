@@ -80,9 +80,7 @@ func TestDurableRelayReportsRealHandshakeReplayAndAppend(t *testing.T) {
 			if event.Component != "durable" || event.Outcome != telemetry.OutcomeSuccess {
 				t.Fatalf("event = %+v, want successful durable event", event)
 			}
-			if _, ok := want[event.Operation]; ok {
-				delete(want, event.Operation)
-			}
+			delete(want, event.Operation)
 		case <-deadline:
 			t.Fatalf("missing real relay telemetry operations: %v", want)
 		}
