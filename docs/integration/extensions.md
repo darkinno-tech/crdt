@@ -14,6 +14,7 @@ handler, err := extensions.NewHandler(extensions.Config{
 	Features: extensions.FeatureWebSocket | extensions.FeatureHTTP,
 	Groups:   []*extensions.Group{group},
 	// Authenticate, Authorize, and AuthorizeSubscription are required here.
+	// Telemetry is optional and records bounded, payload-free local events.
 })
 if err != nil {
 	return err
@@ -42,6 +43,19 @@ relay=5
 The example uses `httptest` so it is self-contained. A production host mounts
 the same handler in its own `http.Server`, configures TLS, and uses `wss://`
 from browsers.
+
+## Local operational telemetry
+
+Set `Config.Telemetry` to an explicitly constructed bounded
+`telemetry.Reporter` when the host needs local operational signals. The relay
+records `handshake`, `append`, and `append_batch` outcomes, elapsed time, and a
+stable error code. Events never contain CRDT payloads, group IDs, actor IDs, or
+credentials.
+
+Reporting is asynchronous and intentionally lossy under sink pressure. It is
+not a CRDT protocol message, delivery receipt, audit log, or recovery source.
+For queue sizing, sink behavior, and production examples, see
+[production readiness](../operations/production-readiness.md).
 
 ## Feature switch and surfaces
 

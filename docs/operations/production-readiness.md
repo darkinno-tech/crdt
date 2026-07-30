@@ -58,8 +58,8 @@ if errors.Is(err, durable.ErrInvalidConfig) {
 }
 ```
 
-The durable public constructors and the new configuration helpers use this
-form. Operation names are fixed diagnostic labels; they never contain peer IDs,
+The durable and extensions public constructors, plus the new configuration
+helpers, use this form. Operation names are fixed diagnostic labels; they never contain peer IDs,
 group IDs, endpoint URLs, headers, CRDT frames, or application values. Keep
 using the package-specific sentinel for program control and use `ErrorCodeOf`
 only for low-cardinality operational classification.
@@ -91,7 +91,8 @@ handler, err := durable.NewHandler(durable.Config{
 ```
 
 The durable relay reports only these fixed operations: `handshake`, `replay`,
-and `append`. Events contain a timestamp, duration, outcome, and low-cardinality
+and `append`. The opt-in extensions relay reports `handshake`, `append`, and
+`append_batch` on its server-side WebSocket/HTTP publication paths. Events contain a timestamp, duration, outcome, and low-cardinality
 error code; they do not contain IDs, payloads, endpoint URLs, headers, raw
 errors, or state summaries. A nil `durable.Config.Telemetry` retains the normal
 no-reporter path.
@@ -100,12 +101,27 @@ no-reporter path.
 wait on `Done()` when its sink is known to complete; it must not make shutdown
 depend on an untrusted or remote telemetry backend.
 
+The same reporter may be supplied explicitly to an `extensions.Config`; it is
+still local process observation, not CRDT state, a client receipt, or a durable
+audit stream:
+
+```go
+live, err := extensions.NewHandler(extensions.Config{
+    Features: extensions.FeatureWebSocket | extensions.FeatureHTTP,
+    Groups: groups,
+    Authenticate: authenticate,
+    Authorize: authorize,
+    AuthorizeSubscription: authorizeSubscription,
+    Telemetry: reporter,
+})
+```
+
 ## Evidence and limits
 
 ```sh
 # Unit, real loopback WebSocket, and configuration/error-path coverage.
-go test ./config ./telemetry ./durable
-go test -race ./config ./telemetry ./durable
+go test ./config ./telemetry ./durable ./extensions
+go test -race ./config ./telemetry ./durable ./extensions
 
 # Parser robustness and hot-path allocation evidence.
 go test -run='^$' -fuzz=FuzzLoaderTypedAccessors -fuzztime=20s ./config

@@ -12,6 +12,7 @@ handler, err := extensions.NewHandler(extensions.Config{
 	Features: extensions.FeatureWebSocket | extensions.FeatureHTTP,
 	Groups:   []*extensions.Group{group},
 	// 此处必须提供 Authenticate、Authorize 和 AuthorizeSubscription。
+	// Telemetry 可选；它只记录有界且不含载荷的本地事件。
 })
 if err != nil {
 	return err
@@ -39,6 +40,16 @@ relay=5
 
 示例使用 `httptest`，可独立运行。生产宿主应将同一 handler 挂入自己的
 `http.Server`，配置 TLS，并让浏览器使用 `wss://`。
+
+## 本地运行观测
+
+当宿主需要运行观测时，可为 `Config.Telemetry` 显式传入有界的
+`telemetry.Reporter`。relay 会记录 `handshake`、`append` 和 `append_batch`
+的结果、耗时与稳定错误码；事件不会包含 CRDT 载荷、group ID、actor ID 或凭据。
+
+上报为异步处理，在 sink 有压力时会有意丢弃事件。它不是 CRDT 协议消息、投递回执、
+审计日志或恢复数据源。队列大小、sink 行为和生产接入示例见
+[生产就绪](../operations/production-readiness.md)。
 
 ## 功能开关与端点
 
