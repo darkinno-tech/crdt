@@ -32,7 +32,7 @@ const (
 // Config configures an authenticated durable WebSocket relay. Store and all
 // authorization callbacks are required; the handler never starts a listener.
 type Config struct {
-	Store                 *Store
+	Store                 Log
 	Groups                []*Group
 	Authenticate          Authenticate
 	Authorize             Authorize
@@ -62,7 +62,7 @@ type limits struct {
 // Handler is safe to mount into an application-owned HTTP server. It exposes
 // only GET /ws and requires Subprotocol on every accepted connection.
 type Handler struct {
-	store                 *Store
+	store                 Log
 	groups                map[string]*Group
 	authenticate          Authenticate
 	authorize             Authorize
@@ -109,7 +109,7 @@ func (group *Group) Manifest() replica.Manifest {
 
 // NewHandler validates a complete, bounded durable-relay configuration.
 func NewHandler(config Config) (*Handler, error) {
-	if config.Store == nil || config.Store.closed.Load() || config.Authenticate == nil || config.Authorize == nil || config.AuthorizeSubscription == nil || len(config.Groups) == 0 {
+	if config.Store == nil || config.Store.Closed() || config.Authenticate == nil || config.Authorize == nil || config.AuthorizeSubscription == nil || len(config.Groups) == 0 {
 		return nil, ErrInvalidConfig
 	}
 	limits, err := normalizeLimits(config)
@@ -145,7 +145,7 @@ func NewHandler(config Config) (*Handler, error) {
 
 // ServeHTTP exposes a single durable WebSocket endpoint at /ws.
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if handler == nil || handler.store == nil || handler.store.closed.Load() {
+	if handler == nil || handler.store == nil || handler.store.Closed() {
 		http.Error(writer, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -237,7 +237,7 @@ func (handler *Handler) serverHandshake(ctx context.Context, connection *websock
 	return group, resume, nil
 }
 
-func (group *Group) subscribe(store *Store, peer *serverPeer, resume uint64, limits limits) ([]Event, uint64, error) {
+func (group *Group) subscribe(store Log, peer *serverPeer, resume uint64, limits limits) ([]Event, uint64, error) {
 	group.mu.Lock()
 	defer group.mu.Unlock()
 	events, highWater, err := store.Replay(group.manifest.GroupID, resume, limits.maxReplayEvents, limits.maxReplayBytes, group.manifest, group.policy, limits.maxMessageBytes, limits.maxActorBytes)
