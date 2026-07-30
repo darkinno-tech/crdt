@@ -146,6 +146,14 @@ paragraphs and writes a validated `paragraph`, `heading` (levels 1-6), `quote`,
 onto future concurrent inserts: an editor that needs inheritance must explicitly
 apply it in its local adapter after manifest/schema negotiation.
 
+The adapter also exposes `Blocks()` for a single consistent newline-delimited
+projection, `ClearBlocks` for LWW marker removal, and anchored variants for
+relative selections. `Blocks()` only reports a `BlockFormat` when every current
+position in a paragraph agrees on one valid marker; conflicting concurrent
+edits remain visibly unformatted rather than choosing an arbitrary winner.
+`InsertWithBlockFormat` is the intentional, explicit way for an editor to add
+new text with a selected block format.
+
 ## Performance plan and acceptance tests
 
 The implementation must retain the RGA's run-v2 text compression. Formatting
