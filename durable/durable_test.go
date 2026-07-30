@@ -167,9 +167,13 @@ func TestReconnectClientReplaysAfterForcedPeerDrop(t *testing.T) {
 		return err == nil && highWater == 1
 	})
 	replayed := awaitDurableEvent(t, events)
-	if replayed.Sequence != 1 || replayed.Change.Dot != change.Dot || client.Cursor() != 1 {
-		t.Fatalf("reconnected replay = %+v cursor=%d", replayed, client.Cursor())
+	if replayed.Sequence != 1 || replayed.Change.Dot != change.Dot {
+		t.Fatalf("reconnected replay = %+v", replayed)
 	}
+	// OnEvent exposes the event before it returns. The client advances its
+	// cursor only after that callback has completed, so wait for that documented
+	// ordering rather than racing the callback return.
+	waitUntil(t, func() bool { return client.Cursor() == replayed.Sequence })
 }
 
 func TestOutOfOrderActorDotsConvergeThroughDurableReplay(t *testing.T) {
