@@ -74,3 +74,17 @@ export type {
   NativeBrowserTransport,
   NativeBrowserUpdateEvent,
 } from "./browser.js";
+  NativeNestedArray,
+  NativeNestedDocument,
+  NativeNestedMap,
+  NATIVE_NESTED_SEMANTICS,
+} from "./nested.js";
+export type {
+  NativeNestedContainerSnapshot,
+  NativeNestedDocumentOptions,
+  NativeNestedSnapshot,
+  NativeNestedType,
+  NativeNestedTypeEvent,
+  NativeNestedTypeListener,
+  NativeNestedValue,
+} from "./nested.js";

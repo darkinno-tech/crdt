@@ -154,6 +154,31 @@ test("native UTF-8 byte limits and actor ordering match canonical wire rules", (
   assert.equal(receiverMap.get("winner"), expectedWinner);
 });
 
+test("transaction byte accounting accepts exactly canonical output and rejects the next operation before mutation", () => {
+  const source = new NativeDocument("writer");
+  const sourceUpdates = recordUpdates(source);
+  source.transact(() => {
+    source.getMap("metadata").set("first", "one");
+    source.getMap("metadata").set("second", "two");
+  });
+  const exactBytes = encodeNativeUpdate(sourceUpdates[0]).byteLength;
+  const exact = new NativeDocument("writer", { maxUpdateBytes: exactBytes, maxValueBytes: exactBytes });
+  const exactUpdates = recordUpdates(exact);
+  exact.transact(() => {
+    exact.getMap("metadata").set("first", "one");
+    exact.getMap("metadata").set("second", "two");
+  });
+  assert.equal(encodeNativeUpdate(exactUpdates[0]).byteLength, exactBytes);
+
+  const constrained = new NativeDocument("writer", { maxUpdateBytes: exactBytes - 1, maxValueBytes: exactBytes - 1 });
+  assertCode(() => constrained.transact(() => {
+    constrained.getMap("metadata").set("first", "one");
+    constrained.getMap("metadata").set("second", "two");
+  }), "resource_limit");
+  assert.equal(constrained.getMap("metadata").get("first"), "one");
+  assert.equal(constrained.getMap("metadata").get("second"), undefined);
+});
+
 test("NativeArray keeps tombstones and resolves a reversed parent chain", () => {
   const source = new NativeDocument("source");
   const updates = recordUpdates(source);
