@@ -17,9 +17,9 @@ SLA or a comparison with Yjs or Go RGA/Wasm.
 
 | Workload | Payload | Samples (ms/op) | Median (ms/op) |
 | --- | ---: | --- | ---: |
-| Build and merge 64 nested cards | 63,392 update bytes | 26.618, 26.152, 24.606, 25.792, 25.616 | 25.792 |
-| Snapshot and restore 64 nested cards | 44,747 state bytes | 19.707, 19.883, 20.347, 19.873, 19.583 | 19.873 |
-| Three editors, shuffled duplicate delivery | 96 divergent edits; 89,426 total bytes | 122.200, 122.061, 122.282, 121.262, 122.554 | 122.200 |
+| Build and merge 64 nested cards | 63,392 update bytes | 26.239, 26.387, 24.847, 25.774, 24.561 | 25.774 |
+| Snapshot and restore 64 nested cards | 44,747 state bytes | 19.224, 19.243, 19.096, 19.137, 18.938 | 19.137 |
+| Three editors, shuffled duplicate delivery | 96 divergent edits; 89,426 total bytes | 120.040, 120.108, 119.492, 119.651, 119.665 | 119.665 |
 
 The first two workloads run three iterations per sample; the simulation runs
 four. Heap deltas vary with V8 garbage collection and are not a capacity
