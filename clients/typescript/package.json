@@ -19,9 +19,9 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "test": "npm run build && node --test test/frame.test.mjs test/rga-run-v2-vectors.test.mjs",
+    "test": "npm run build && node --test test/frame.test.mjs test/native.test.mjs test/rga-run-v2-vectors.test.mjs",
     "test:wasm": "npm run build && node --test test/wasm.integration.test.mjs",
-    "test:compat": "npm run build && node --test test/frame.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm.integration.test.mjs",
+    "test:compat": "npm run build && node --test test/frame.test.mjs test/native.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm.integration.test.mjs",
     "bench:frame": "npm run build && node bench/frame.bench.mjs",
     "bench:wasm": "node bench/wasm.bench.mjs"
   },
