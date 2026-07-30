@@ -222,6 +222,165 @@ func TestStoreAndUpdateBoundaries(t *testing.T) {
 	}
 }
 
+func TestStoreSubscriptionObservesSnapshotsAndExpiry(t *testing.T) {
+	options := DefaultOptions()
+	options.Timeout = time.Second
+	store := mustStore(t, options)
+	now := time.Date(2026, time.July, 31, 10, 0, 0, 0, time.UTC)
+	events := make(chan Event, 4)
+	subscription, err := store.SubscribeAt(now, func(event Event) {
+		events <- event
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		subscription.Unsubscribe()
+		<-subscription.Done()
+	}()
+
+	initial := awaitEvent(t, events)
+	if initial.Origin != Initial || initial.Version != 0 || len(initial.Active) != 0 {
+		t.Fatalf("initial event = %#v", initial)
+	}
+	if _, err := store.Set("alice", []byte(`{"cursor":1}`), now); err != nil {
+		t.Fatal(err)
+	}
+	local := awaitEvent(t, events)
+	if local.Origin != Local || local.Version != 1 || local.Update.Actor != "alice" || len(local.Active) != 1 {
+		t.Fatalf("local event = %#v", local)
+	}
+	local.Active[0].State[0] = '!'
+	if active := store.ActiveAt(now); string(active[0].State) != `{"cursor":1}` {
+		t.Fatalf("event mutated store state: %#v", active)
+	}
+	if changed, err := store.Apply(Update{Actor: "bob", Clock: 1, State: []byte(`{"cursor":2}`)}, now); err != nil || !changed {
+		t.Fatalf("apply bob = %t, %v", changed, err)
+	}
+	remote := awaitEvent(t, events)
+	if remote.Origin != Remote || remote.Version != 2 || len(remote.Active) != 2 || remote.Active[1].Actor != "bob" {
+		t.Fatalf("remote event = %#v", remote)
+	}
+	if !store.Expire(now.Add(time.Second + time.Nanosecond)) {
+		t.Fatal("Expire did not report liveness transition")
+	}
+	expired := awaitEvent(t, events)
+	if expired.Origin != Expired || expired.Version != 3 || len(expired.Active) != 0 {
+		t.Fatalf("expired event = %#v", expired)
+	}
+	if store.Expire(now.Add(2 * time.Second)) {
+		t.Fatal("second expiry reported a duplicate transition")
+	}
+	if changed, err := store.Apply(Update{Actor: "alice", Clock: 2, State: []byte(`{"cursor":3}`)}, now.Add(2*time.Second)); err != nil || !changed {
+		t.Fatalf("newer heartbeat = %t, %v", changed, err)
+	}
+	revived := awaitEvent(t, events)
+	if revived.Origin != Remote || revived.Version != 4 || len(revived.Active) != 1 || revived.Active[0].Actor != "alice" {
+		t.Fatalf("revived event = %#v", revived)
+	}
+}
+
+func TestStoreSubscriptionCoalescesAndBoundsListeners(t *testing.T) {
+	options := DefaultOptions()
+	options.MaxSubscribers = 1
+	store := mustStore(t, options)
+	now := time.Date(2026, time.July, 31, 10, 0, 0, 0, time.UTC)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	events := make(chan Event, 2)
+	subscription, err := store.SubscribeAt(now, func(event Event) {
+		entered <- struct{}{}
+		<-release
+		events <- event
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		subscription.Unsubscribe()
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		<-subscription.Done()
+	}()
+	if _, err := store.SubscribeAt(now, func(Event) {}); !errors.Is(err, ErrSubscriptionLimit) {
+		t.Fatalf("second subscription error = %v", err)
+	}
+	<-entered
+	if _, err := store.Set("alice", []byte(`{}`), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Set("bob", []byte(`{}`), now); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	first := awaitEvent(t, events)
+	second := awaitEvent(t, events)
+	if first.Origin != Initial || second.Origin != Local || second.Version != 2 || second.Coalesced != 1 || len(second.Active) != 2 {
+		t.Fatalf("coalesced events = %#v, %#v", first, second)
+	}
+}
+
+func TestStoreSubscriptionLifecycleEdges(t *testing.T) {
+	var nilStore *Store
+	if subscription, err := nilStore.Subscribe(func(Event) {}); subscription != nil || !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("nil Subscribe = %#v, %v", subscription, err)
+	}
+	if nilStore.Expire(time.Time{}) {
+		t.Fatal("nil Expire reported a transition")
+	}
+	var nilSubscription *Subscription
+	select {
+	case <-nilSubscription.Done():
+	default:
+		t.Fatal("nil subscription Done did not close")
+	}
+	nilSubscription.Unsubscribe()
+
+	store := mustStore(t, DefaultOptions())
+	if subscription, err := store.SubscribeAt(time.Now(), nil); subscription != nil || !errors.Is(err, ErrNilCallback) {
+		t.Fatalf("nil callback = %#v, %v", subscription, err)
+	}
+	initial := make(chan Event, 1)
+	subscription, err := store.Subscribe(func(event Event) { initial <- event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event := awaitEvent(t, initial); event.Origin != Initial {
+		t.Fatalf("Subscribe initial event = %#v", event)
+	}
+	subscription.Unsubscribe()
+	<-subscription.Done()
+
+	panicked := make(chan struct{})
+	broken, err := store.SubscribeAt(time.Now(), func(Event) {
+		close(panicked)
+		panic("render failed")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-panicked
+	select {
+	case <-broken.Done():
+	case <-time.After(time.Second):
+		t.Fatal("panicking callback did not stop")
+	}
+}
+
+func awaitEvent(t testing.TB, events <-chan Event) Event {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for awareness event")
+		return Event{}
+	}
+}
+
 func mustStore(t testing.TB, options Options) *Store {
 	t.Helper()
 	store, err := NewStore(options)
