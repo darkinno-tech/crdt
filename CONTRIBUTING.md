@@ -35,6 +35,8 @@ go vet ./...
 | 数据竞争 | `make race` |
 | 解码器模糊测试（每个目标 10 秒） | `make fuzz` |
 | 每包覆盖率门槛（90%） | `make coverage` |
+| 更新 TypeID 生成物 | `make generate` |
+| 检查 TypeID 生成物未漂移 | `make generate-check` |
 | TypeScript frame 解码器 | `make typescript-test` |
 | 实际 Go Wasm + Node 三副本协作场景 | `make wasm-test` |
 | 静态检查 | `make staticcheck`、`make lint` |

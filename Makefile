@@ -1,4 +1,4 @@
-.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark wasm-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark wasm-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -13,6 +13,12 @@ NPM ?= npm
 
 fmt-check:
 	test -z "$$(gofmt -l .)"
+
+generate:
+	go generate ./...
+
+generate-check:
+	go run ./internal/cmd/typeidgen -check
 
 test:
 	go test ./...
@@ -126,7 +132,7 @@ staticcheck:
 lint:
 	$(GOLANGCI_LINT) run ./...
 
-verify: fmt-check test-unit test-integration test-extreme race vet fuzz coverage staticcheck lint
+verify: fmt-check generate-check test-unit test-integration test-extreme race vet fuzz coverage staticcheck lint
 
 sync-main:
 	./scripts/sync-main.sh
