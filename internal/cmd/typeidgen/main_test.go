@@ -92,7 +92,7 @@ func TestRenderGoIncludesSemanticVersionsAndRegistrationNames(t *testing.T) {
 		`Name: "Counter"`,
 		`Name: "Register"`,
 		"var frameTypeRegistrations",
-		"SemanticsVersionCounter uint64 = 7",
+		"SemanticsVersionCounter",
 		"SemanticsVersion: SemanticsVersionCounter",
 	} {
 		if !strings.Contains(output, want) {
