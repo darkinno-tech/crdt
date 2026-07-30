@@ -86,7 +86,21 @@ func TestAwarenessRequiresV3AuthorizationAndSyncsLiveSnapshot(t *testing.T) {
 	})
 
 	attackerStore := mustAwarenessStore(t)
-	attacker := newAwarenessClient(t, endpoint, manifest, "eve", attackerStore, nil)
+	attackerUpdates := make(chan awareness.Update, 1)
+	attacker := newAwarenessClient(t, endpoint, manifest, "eve", attackerStore, attackerUpdates)
+	// Dial returns after the handshake response, before the server has necessarily
+	// delivered its live-awareness snapshot. Wait for that snapshot before
+	// installing the forged update locally: otherwise a concurrent snapshot and
+	// forged value can legitimately conflict at clock 1, closing the client before
+	// the authorization path under test receives the forged message.
+	select {
+	case received := <-attackerUpdates:
+		if received.Actor != "alice" || received.Clock != 1 {
+			t.Fatalf("attacker snapshot = %#v", received)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("attacker did not receive live awareness snapshot")
+	}
 	forged, err := attackerStore.Set("alice", []byte(`{"name":"forged"}`), time.Now())
 	if err != nil {
 		t.Fatal(err)
