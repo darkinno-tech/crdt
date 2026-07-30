@@ -93,3 +93,47 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 		t.Fatalf("negative queue error = %v", err)
 	}
 }
+
+func TestReporterDefaultTimeCloseAndNilBoundaries(t *testing.T) {
+	var nilReporter *Reporter
+	nilReporter.Record(Event{})
+	if nilReporter.Dropped() != 0 || nilReporter.Done() != nil {
+		t.Fatal("nil Reporter did not remain a no-op")
+	}
+
+	delivered := make(chan Event, 1)
+	reporter, err := New(Options{Sink: func(event Event) { delivered <- event }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reporter.Record(Event{Operation: "default-time"})
+	select {
+	case event := <-delivered:
+		if event.Time.IsZero() {
+			t.Fatal("Record() did not assign a default timestamp")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event was not delivered")
+	}
+	reporter.Close()
+	reporter.Close()
+	select {
+	case <-reporter.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not stop reporter")
+	}
+	reporter.Record(Event{Operation: "after-close"})
+	if reporter.Dropped() != 0 {
+		t.Fatal("Record() after Close() changed drop count")
+	}
+}
+
+func TestSlogSinkHandlesSuccessAndDefaultLogger(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	SlogSink(logger)(Event{Component: "sync", Operation: "merge", Outcome: OutcomeSuccess})
+	if got := output.String(); !bytes.Contains([]byte(got), []byte(`"level":"DEBUG"`)) || bytes.Contains([]byte(got), []byte("error_code")) {
+		t.Fatalf("success log output = %q", got)
+	}
+	SlogSink(nil)(Event{Component: "sync", Operation: "merge", Outcome: OutcomeFailure})
+}

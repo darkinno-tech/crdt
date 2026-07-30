@@ -1,12 +1,14 @@
 package persistence
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"testing"
 
+	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/set"
 )
 
@@ -220,6 +222,240 @@ func TestFileStoreConcurrentSavesAndLoads(t *testing.T) {
 	for err := range errorsSeen {
 		t.Error(err)
 	}
+}
+
+func TestFileStoreConfigurationClosedAndCodecBoundaries(t *testing.T) {
+	root := t.TempDir()
+	config := testFileConfig()
+	if _, err := OpenFile("", config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile() empty path error = %v", err)
+	}
+	invalidSize := config
+	invalidSize.MaxStoreBytes = 0
+	if _, err := OpenFile(root+"/checkpoint.store", invalidSize); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile() invalid size error = %v", err)
+	}
+	invalidValidator := config
+	invalidValidator.Validate = nil
+	if _, err := OpenFile(root+"/checkpoint.store", invalidValidator); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile() invalid validator error = %v", err)
+	}
+	parentFile := root + "/parent-file"
+	if err := os.WriteFile(parentFile, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenFile(parentFile+"/checkpoint.store", config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile() file parent error = %v", err)
+	}
+	if _, err := OpenFile(root, config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile() directory path error = %v", err)
+	}
+
+	store := testFileStore(t, root+"/checkpoint.store", config)
+	if _, found, err := store.Load("missing"); err != nil || found {
+		t.Fatalf("Load(missing) found=%t err=%v", found, err)
+	}
+	if err := store.Save("invalid/name", Checkpoint{Snapshot: testSnapshot(t)}); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Save(invalid name) error = %v", err)
+	}
+	if err := store.Save("invalid", Checkpoint{}); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Save(invalid checkpoint) error = %v", err)
+	}
+	if _, _, err := store.Load("invalid/name"); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Load(invalid name) error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if err := store.Save("checkpoint", Checkpoint{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Save() after Close error = %v", err)
+	}
+	var nilStore *FileStore
+	if err := nilStore.Save("checkpoint", Checkpoint{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("nil Save() error = %v", err)
+	}
+	if _, _, err := nilStore.Load("checkpoint"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("nil Load() error = %v", err)
+	}
+	if _, err := nilStore.Delete("checkpoint"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("nil Delete() error = %v", err)
+	}
+
+	record, err := marshalCheckpoint(Checkpoint{Snapshot: testSnapshot(t)}, config.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unmarshalCheckpoint(record, config.Config); err != nil {
+		t.Fatalf("unmarshal current checkpoint error = %v", err)
+	}
+	if _, err := unmarshalCheckpoint([]byte("corrupt"), config.Config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("unmarshal corrupt checkpoint error = %v", err)
+	}
+	migrationConfig := config.Config
+	migrationConfig.Format.MigrateOnLoad = true
+	legacyConfig := migrationConfig
+	legacyConfig.Format = FormatConfig{Version: RecordFormatV1, Compatibility: CompatibilityCurrentOnly}
+	legacy, err := marshalCheckpoint(Checkpoint{Snapshot: testSnapshot(t)}, legacyConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unmarshalCheckpoint(legacy, migrationConfig); err != nil {
+		t.Fatalf("unmarshal legacy checkpoint error = %v", err)
+	}
+	encoded, err := marshalFileRecords(map[string][]byte{"checkpoint": record}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unmarshalFileRecords(encoded[:len(encoded)-1], config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("unmarshal truncated record error = %v", err)
+	}
+	corrupt := append([]byte(nil), encoded...)
+	corrupt[0] ^= 1
+	if _, err := unmarshalFileRecords(corrupt, config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("unmarshal corrupt magic error = %v", err)
+	}
+	if _, err := loadFileRecords(root, config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("load directory error = %v", err)
+	}
+	smallStore := config
+	smallStore.MaxStoreBytes = 1
+	oversized := root + "/oversized.store"
+	if err := os.WriteFile(oversized, []byte("too large"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFileRecords(oversized, smallStore); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("load oversized file error = %v", err)
+	}
+	if _, err := marshalFileRecords(map[string][]byte{"invalid/name": record}, config); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("marshal invalid name error = %v", err)
+	}
+	if _, err := marshalFileRecords(map[string][]byte{"checkpoint": []byte("not-a-record")}, config); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("marshal corrupt record error = %v", err)
+	}
+	invalidFormat := config.Config
+	invalidFormat.Format.Version = 99
+	if _, err := marshalCheckpoint(Checkpoint{Snapshot: testSnapshot(t)}, invalidFormat); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("marshal invalid format error = %v", err)
+	}
+	if _, err := normalizeCheckpoint(Checkpoint{}, config.Config); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("normalize empty checkpoint error = %v", err)
+	}
+	if format := effectiveFormat(Config{Format: FormatConfig{Version: 99}}); format.Version != 0 {
+		t.Fatalf("effective invalid format = %+v", format)
+	}
+	tightRecord := config.Config
+	tightRecord.MaxRecordBytes = 1
+	if _, err := checkpointSize(Checkpoint{Snapshot: testSnapshot(t)}, tightRecord); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("checkpoint size over budget error = %v", err)
+	}
+	if _, err := migrateCheckpoint(Checkpoint{Snapshot: testSnapshot(t)}, RecordFormatV2, config.Config); !errors.Is(err, ErrMigration) {
+		t.Fatalf("migrate current format error = %v", err)
+	}
+	if _, err := applyMigration(func(Checkpoint) (Checkpoint, error) { panic("migration panic") }, Checkpoint{}); !errors.Is(err, ErrMigration) {
+		t.Fatalf("panic migration error = %v", err)
+	}
+	if replaced, err := replaceFile(root+"/missing/checkpoint.store", []byte("state")); replaced || err == nil {
+		t.Fatalf("replace missing parent replaced=%t err=%v", replaced, err)
+	}
+	if replaced, err := replaceFile(root, []byte("state")); replaced || err == nil {
+		t.Fatalf("replace directory target replaced=%t err=%v", replaced, err)
+	}
+	tightStore := config
+	tightStore.MaxStoreBytes = len(record)
+	if _, err := marshalFileRecords(map[string][]byte{"checkpoint": record}, tightStore); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("marshal over-budget record error = %v", err)
+	}
+}
+
+func TestFileStoreMigrationClosedMissingAndCorruptBoundaries(t *testing.T) {
+	config := testFileConfig()
+	config.Format.MigrateOnLoad = true
+	store := testFileStore(t, t.TempDir()+"/checkpoint.store", config)
+	if _, found, err := store.migrateAndLoad("missing"); err != nil || found {
+		t.Fatalf("migrate missing found=%t err=%v", found, err)
+	}
+	store.records["corrupt"] = []byte("not-a-checkpoint")
+	if _, _, err := store.migrateAndLoad("corrupt"); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("migrate corrupt record error = %v", err)
+	}
+	delete(store.records, "corrupt")
+	if err := store.Save("current", Checkpoint{Snapshot: testSnapshot(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := store.migrateAndLoad("current"); err != nil || !found {
+		t.Fatalf("migrate current record found=%t err=%v", found, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.migrateAndLoad("missing"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("migrate after Close error = %v", err)
+	}
+}
+
+func TestFileStoreMigrationFailsClosedWhenTransformPanics(t *testing.T) {
+	config := testFileConfig()
+	config.Format.MigrateOnLoad = true
+	config.Format.Migrations = []Migration{{
+		FromVersion: RecordFormatV1,
+		Transform:   func(Checkpoint) (Checkpoint, error) { panic("migration panic") },
+	}}
+	legacyConfig := config.Config
+	legacyConfig.Format = FormatConfig{Version: RecordFormatV1, Compatibility: CompatibilityCurrentOnly}
+	legacy, err := marshalCheckpoint(Checkpoint{Snapshot: testSnapshot(t)}, legacyConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := testFileStore(t, t.TempDir()+"/checkpoint.store", config)
+	defer func() { _ = store.Close() }()
+	store.records["legacy"] = legacy
+	if _, _, err := store.migrateAndLoad("legacy"); !errors.Is(err, ErrMigration) {
+		t.Fatalf("panic migration error = %v", err)
+	}
+}
+
+func TestUnmarshalFileRecordsRejectsCanonicalStructureViolations(t *testing.T) {
+	config := testFileConfig()
+	record, err := marshalCheckpoint(Checkpoint{Snapshot: testSnapshot(t)}, config.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, payload := range map[string][]byte{
+		"count-exceeds-bytes": appendFileCount(nil, 2),
+		"missing-name":        appendFileCount(nil, 1),
+		"trailing-bytes":      append(appendFileCount(nil, 0), 'x'),
+		"empty-record":        append(appendBytes(appendFileCount(nil, 1), []byte("checkpoint")), 0),
+		"invalid-record":      appendBytes(appendBytes(appendFileCount(nil, 1), []byte("checkpoint")), []byte("invalid")),
+		"duplicate-name": appendBytes(
+			appendBytes(
+				appendBytes(
+					appendBytes(appendFileCount(nil, 2), []byte("checkpoint")), record,
+				),
+				[]byte("checkpoint"),
+			),
+			record,
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalFileRecords(sealFilePayload(payload), config); !errors.Is(err, ErrCorruptStore) {
+				t.Fatalf("unmarshal error = %v, want %v", err, ErrCorruptStore)
+			}
+		})
+	}
+}
+
+func appendFileCount(payload []byte, count uint64) []byte {
+	payload = append(payload, fileMagic[:]...)
+	payload = append(payload, fileVersion)
+	return frame.AppendUvarint(payload, count)
+}
+
+func sealFilePayload(payload []byte) []byte {
+	digest := sha256.Sum256(payload)
+	return append(payload, digest[:]...)
 }
 
 func testFileConfig() FileConfig {
