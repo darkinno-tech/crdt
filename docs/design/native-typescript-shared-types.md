@@ -71,24 +71,28 @@ requiring independent concurrent merge.
 
 ## Performance model
 
-`NativeMap` lookup/update is amortized O(1) plus value-copy cost. `NativeArray`
-is optimized for batch append and convergence: resolving an index projects the
-visible sequence, so `insert(index, ...)`, `get`, and `toArray` are O(n) in
-retained nodes. Child lists are sorted only when projected, which avoids
-re-sorting a batch of inserts. Large arrays should live in a Worker and edits
-should be grouped with `transact`.
+`NativeMap` lookup/update/`size` are amortized O(1) plus value-copy cost.
+`NativeArray` is optimized for batch append and convergence: it retains a
+private visible-node projection until an insert or tombstone changes structure.
+After that one O(n) projection, repeated `length` is O(1), and `get(index)` is
+O(1) plus value-copy cost. `insert(index, ...)`, `delete`, and `toArray` still
+have linear components for index/range resolution or copying. Child lists are
+sorted only when projected, which avoids re-sorting a batch of inserts. Large
+arrays should live in a Worker and edits should be grouped with `transact`.
 
-State export splits canonical JSON by incrementally counted bytes. It must not
-serialize an ever-growing candidate update per array entry: that causes O(n²)
-time and makes the 100,000-node retained-state limit unusable. The benchmark
-exercises 4,096-item append/merge, middle insert/merge, shuffled duplicate
-three-editor delivery, and state encode/recovery.
+State export splits canonical JSON by incrementally counted bytes without
+allocating a `TextEncoder` buffer for every size check. It must not serialize an
+ever-growing candidate update per array entry: that causes O(n²) time and makes
+the 100,000-node retained-state limit unusable. The benchmark exercises
+4,096-item append/merge, middle insert/merge, shuffled duplicate three-editor
+delivery, state encode/recovery, and cached visible reads.
 
 ## Validation plan
 
 - Unit tests: copied values, transactions/observers, LWW ties, RGA ordering,
   delete-before-insert, pending-parent resolution, type/tag/cycle conflicts,
-  configured capacity rejection, canonical decoding, and snapshot counters.
+  configured capacity rejection (including multi-byte UTF-8 limits), canonical
+  decoding, cache invalidation, and snapshot counters.
 - Robustness: 600 deterministic malformed-byte samples must either decode to a
   valid update or throw `NativeCRDTError`, never a runtime exception.
 - Simulation: three offline editors make 180 deterministic divergent changes;

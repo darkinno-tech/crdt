@@ -93,12 +93,14 @@ with unresolved array parents cannot create a snapshot; deliver the missing
 parents first.
 
 Native arrays optimize for batched local edits and convergent sequence
-semantics, not random-access workloads. `insert(index, ...)` projects the
-visible sequence to find its left neighbour, so it is linear in visible items;
+semantics, not general random-access workloads. A visible-node projection is
+retained privately until an insert or tombstone changes structure, making
+repeated `length` and `get(index)` reads cheap after the initial O(n) projection.
+`insert(index, ...)` still needs that projection to find its left neighbour;
 large arrays should be edited in a Worker and mutations should be batched in a
 transaction. The included benchmark records append, middle-insert, shuffled
-merge, and state-update costs on the executing Node version rather than making
-a mobile-device capacity claim.
+merge, state-update, and cached-read costs on the executing Node version rather
+than making a mobile-device capacity claim.
 
 The RGA protocol still requires explicit compatibility admission. Before
 loading or applying an RGA frame, authenticate a matching `replica.Manifest`,
@@ -136,10 +138,11 @@ different Go release with the generated module. The Node test loads the actual
 Wasm artifact, checks Go-to-TypeScript frame decoding, and simulates three
 replicas with duplicate, reordered delivery and snapshot recovery.
 
-The native benchmark reports append, middle insert, shuffled replication, and
-state-update samples; the existing targets report raw decoder throughput and
-actual Node-to-Go-Wasm insert/apply latency. Treat all of them as controlled
-baselines for the local machine and Node/Go versions, not a mobile-device SLA.
+The native benchmark reports append, middle insert, shuffled replication,
+state-update, and cached visible-read samples; the existing targets report raw
+decoder throughput and actual Node-to-Go-Wasm insert/apply latency. Treat all
+of them as controlled baselines for the local machine and Node/Go versions, not
+a mobile-device SLA.
 
 The current controlled local sample, including all five values and frame sizes,
 is recorded in the [2026-07-29 benchmark report](../../docs/operations/benchmark-2026-07-29.md).

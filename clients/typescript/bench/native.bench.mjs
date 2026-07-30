@@ -3,28 +3,36 @@ import { performance } from "node:perf_hooks";
 import { encodeNativeUpdate, NativeDocument } from "../dist/native.js";
 
 const SAMPLES = 5;
+const CACHED_READS_PER_OPERATION = 262_144;
+const cachedReadDocument = new NativeDocument("cached-reader");
+const cachedReadCards = cachedReadDocument.getArray("cards");
+cachedReadCards.push(Array.from({ length: 4096 }, (_, index) => `card-${index}`));
+if (cachedReadCards.length !== 4096) {
+  throw new Error("cached read fixture did not initialize");
+}
 
 console.log(`runtime=node-${process.version} workload=native-ts-v1 controlled=true`);
 benchmark("cold_append_and_encoded_merge_4096", 6, runAppendAndMerge);
 benchmark("cold_middle_insert_and_encoded_merge_4096", 8, runMiddleInsertAndMerge);
 benchmark("shuffled_duplicate_three_editor_session", 6, runShuffledThreeEditorSession);
 benchmark("cold_state_encode_and_restore_4096", 6, runStateEncodeAndRestore);
+benchmark("cached_visible_projection_reads_4096", 2, runCachedProjectionReads, "reads");
 
-function benchmark(name, iterations, operation) {
+function benchmark(name, iterations, operation, measurementName = "bytes") {
   for (let warmup = 0; warmup < 2; warmup += 1) {
     operation();
   }
   for (let sample = 0; sample < SAMPLES; sample += 1) {
     const beforeHeap = process.memoryUsage().heapUsed;
     const started = performance.now();
-    let bytes = 0;
+    let measurement = 0;
     for (let index = 0; index < iterations; index += 1) {
-      bytes = operation();
+      measurement = operation();
     }
     const elapsedMs = performance.now() - started;
     const afterHeap = process.memoryUsage().heapUsed;
     console.log(
-      `workload=${name} sample=${sample + 1} iterations=${iterations} bytes=${bytes} elapsed_ms=${elapsedMs.toFixed(2)} ms_per_operation=${(elapsedMs / iterations).toFixed(3)} heap_delta_b=${afterHeap - beforeHeap}`,
+      `workload=${name} sample=${sample + 1} iterations=${iterations} ${measurementName}=${measurement} elapsed_ms=${elapsedMs.toFixed(2)} ms_per_operation=${(elapsedMs / iterations).toFixed(3)} heap_delta_b=${afterHeap - beforeHeap}`,
     );
   }
 }
@@ -107,6 +115,21 @@ function runStateEncodeAndRestore() {
     throw new Error("state recovery benchmark did not converge");
   }
   return snapshot.updates.reduce((total, update) => total + encodeNativeUpdate(update).byteLength, 0);
+}
+
+function runCachedProjectionReads() {
+  let checksum = 0;
+  for (let index = 0; index < CACHED_READS_PER_OPERATION; index += 1) {
+    checksum += cachedReadCards.length;
+    const cardIndex = (index * 17) & 4095;
+    if (cachedReadCards.get(cardIndex) !== `card-${cardIndex}`) {
+      throw new Error("cached projection benchmark read an unexpected card");
+    }
+  }
+  if (checksum !== CACHED_READS_PER_OPERATION * 4096) {
+    throw new Error("cached projection benchmark read an unexpected length");
+  }
+  return CACHED_READS_PER_OPERATION;
 }
 
 function recordUpdates(document) {
