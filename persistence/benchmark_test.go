@@ -47,6 +47,29 @@ func BenchmarkStoreSaveParallel(b *testing.B) {
 	})
 }
 
+// BenchmarkStoreLoadLegacyMigration measures the one-time read-plus-rewrite
+// path. Fixture insertion is excluded so the result captures the migration
+// transaction rather than test setup.
+func BenchmarkStoreLoadLegacyMigration(b *testing.B) {
+	config := testConfig()
+	config.Format.MigrateOnLoad = true
+	store, err := Open(b.TempDir()+"/checkpoint.db", config)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	legacy := marshalLegacyCheckpoint(b, benchmarkCheckpoint(b))
+	b.ReportAllocs()
+	for index := 0; index < b.N; index++ {
+		b.StopTimer()
+		putRawCheckpoint(b, store, "maintenance", legacy)
+		b.StartTimer()
+		if _, found, err := store.Load("maintenance"); err != nil || !found {
+			b.Fatalf("Load() found=%t err=%v", found, err)
+		}
+	}
+}
+
 func benchmarkStore(b *testing.B) *Store {
 	b.Helper()
 	store, err := Open(b.TempDir()+"/checkpoint.db", testConfig())

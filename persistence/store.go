@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -27,14 +26,13 @@ type Store struct {
 // to Config.Validate, so a type or codec change must use an explicit migration
 // rather than silently reinterpreting old bytes.
 func Open(path string, config Config) (*Store, error) {
-	if path == "" || !config.valid() {
+	if path == "" {
 		return nil, ErrInvalidConfig
 	}
-	if config.OpenTimeout == 0 {
-		config.OpenTimeout = 5 * time.Second
-	}
-	if config.OpenTimeout < 0 {
-		return nil, ErrInvalidConfig
+	var err error
+	config, err = config.normalized()
+	if err != nil {
+		return nil, err
 	}
 	parent := filepath.Dir(path)
 	info, err := os.Stat(parent)
@@ -119,7 +117,9 @@ func (store *Store) Save(name string, checkpoint Checkpoint) error {
 
 // Load returns one validated checkpoint. found is false when name has not
 // been saved. A malformed or semantically invalid stored value returns
-// ErrCorruptStore and never returns a partial checkpoint.
+// ErrCorruptStore and never returns a partial checkpoint. If configured,
+// accepted legacy records are migrated and rewritten atomically before Load
+// returns them.
 func (store *Store) Load(name string) (checkpoint Checkpoint, found bool, err error) {
 	if store == nil || store.db == nil || store.closed.Load() {
 		return Checkpoint{}, false, ErrClosed
@@ -136,15 +136,21 @@ func (store *Store) Load(name string) (checkpoint Checkpoint, found bool, err er
 		if encoded == nil {
 			return nil
 		}
-		decoded, err := unmarshalCheckpoint(encoded, store.config)
+		decoded, version, err := decodeCheckpoint(encoded, store.config)
 		if err != nil {
 			return ErrCorruptStore
 		}
 		checkpoint = decoded
 		found = true
+		if store.config.Format.MigrateOnLoad && version != store.config.Format.Version {
+			return errLegacyRecord
+		}
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errLegacyRecord) {
+			return store.migrateAndLoad(name)
+		}
 		if errors.Is(err, ErrCorruptStore) {
 			return Checkpoint{}, false, ErrCorruptStore
 		}
@@ -156,11 +162,47 @@ func (store *Store) Load(name string) (checkpoint Checkpoint, found bool, err er
 	return checkpoint, found, nil
 }
 
-func (config Config) valid() bool {
-	return config.MaxRecordBytes > 0 && config.MaxStateBytes > 0 &&
-		config.MaxFrontierEntries > 0 && config.MaxReplicaIDBytes > 0 &&
-		config.MaxOutboxBytes >= 0 && config.MaxNameBytes > 0 &&
-		config.Validate != nil
+var errLegacyRecord = errors.New("crdt persistence: legacy record")
+
+func (store *Store) migrateAndLoad(name string) (checkpoint Checkpoint, found bool, err error) {
+	err = store.db.Update(func(transaction *bolt.Tx) error {
+		bucket := transaction.Bucket(checkpointBucket)
+		if bucket == nil {
+			return ErrCorruptStore
+		}
+		encoded := bucket.Get([]byte(name))
+		if encoded == nil {
+			return nil
+		}
+		decoded, version, err := decodeCheckpoint(encoded, store.config)
+		if err != nil {
+			return ErrCorruptStore
+		}
+		found = true
+		if version == store.config.Format.Version {
+			checkpoint = decoded
+			return nil
+		}
+		checkpoint, err = migrateCheckpoint(decoded, version, store.config)
+		if err != nil {
+			return err
+		}
+		reencoded, err := marshalCheckpoint(checkpoint, store.config)
+		if err != nil {
+			return ErrMigration
+		}
+		return bucket.Put([]byte(name), reencoded)
+	})
+	if err != nil {
+		if errors.Is(err, ErrCorruptStore) || errors.Is(err, ErrMigration) {
+			return Checkpoint{}, false, err
+		}
+		if store.closed.Load() {
+			return Checkpoint{}, false, ErrClosed
+		}
+		return Checkpoint{}, false, fmt.Errorf("migrate persistence checkpoint: %w", err)
+	}
+	return checkpoint, found, nil
 }
 
 func (store *Store) validName(name string) bool {
