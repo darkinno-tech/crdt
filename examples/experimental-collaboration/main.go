@@ -1,5 +1,5 @@
 // Command experimental-collaboration demonstrates bounded framed replication
-// for experimental LWW-Map and legacy RGA plus stable observed-remove tree v1
+// for stable LWW-Map, scalar RGA v1, and observed-remove tree v1
 // after an application has authenticated the matching replication manifest.
 package main
 
@@ -40,9 +40,9 @@ func main() {
 }
 
 func run(writer io.Writer) error {
-	// In a real application, only construct this policy after the peer has
-	// authenticated an identical replication manifest and protocol version.
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	// Authenticate an identical replication manifest and protocol version before
+	// accepting any frame; policy selection does not authenticate a peer.
+	policy := crdt.ProtocolPolicy{}
 	assignee, err := replicateAssignee(policy)
 	if err != nil {
 		return fmt.Errorf("replicate assignee: %w", err)

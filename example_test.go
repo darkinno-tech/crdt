@@ -228,19 +228,19 @@ func Example_maxRegister() {
 
 func ExampleProtocolPolicy() {
 	stable := crdt.ProtocolPolicy{}
-	experimental := crdt.ProtocolPolicy{AllowExperimental: true}
+	compatibility := crdt.ProtocolPolicy{AllowExperimental: true}
 
 	fmt.Println(stable.SupportsFrame(crdt.TypeIDRGAState))
-	fmt.Println(experimental.SupportsFrame(crdt.TypeIDRGAState))
+	fmt.Println(compatibility.SupportsFrame(crdt.TypeIDRGAState))
 	// Output:
-	// false
+	// true
 	// true
 }
 
 func ExampleRGA() {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	policy := crdt.ProtocolPolicy{}
 	if !policy.SupportsFrame(crdt.TypeIDRGADelta) {
-		panic("RGA must be enabled by the authenticated replication-group policy")
+		panic("RGA frame type must be implemented")
 	}
 	options := text.Options{MaxNodes: 64, MaxTombstones: 64, MaxPendingNodes: 16, MaxPendingBytes: 1024}
 	writer, err := text.NewWithOptions("writer", options)
@@ -273,7 +273,7 @@ func ExampleRGA() {
 }
 
 func ExampleORTree() {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	policy := crdt.ProtocolPolicy{}
 	if !policy.SupportsFrame(crdt.TypeIDORTreeDelta) {
 		panic("OR-Tree must be enabled by the authenticated replication-group policy")
 	}

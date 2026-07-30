@@ -106,18 +106,18 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 	}
 }
 
-func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
+func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 	stable := (ProtocolPolicy{}).FrameTypes()
-	if len(stable) != 8 {
-		t.Fatalf("stable protocol count = %d, want 8", len(stable))
+	if len(stable) != 12 {
+		t.Fatalf("stable protocol count = %d, want 12", len(stable))
 	}
 	for _, kind := range stable {
 		if IsExperimentalFrame(kind.StateID) || IsExperimentalFrame(kind.DeltaID) {
 			t.Fatalf("default policy advertised experimental protocol %#v", kind)
 		}
 	}
-	if (ProtocolPolicy{}).SupportsFrame(TypeIDRGAState) {
-		t.Fatal("default policy supports experimental scalar RGA state")
+	if !(ProtocolPolicy{}).SupportsFrame(TypeIDRGAState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDRGADelta) {
+		t.Fatal("default policy omitted stable scalar RGA frames")
 	}
 	if !(ProtocolPolicy{}).SupportsFrame(TypeIDRGARunState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDRGARunDelta) {
 		t.Fatal("default policy omitted run RGA frames")
@@ -130,11 +130,11 @@ func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 	}
 }
 
-func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
+func TestProtocolPolicyCompatibilityFlagAndUnknownFrameHandling(t *testing.T) {
 	policy := ProtocolPolicy{AllowExperimental: true}
 	types := policy.FrameTypes()
 	if len(types) != 12 {
-		t.Fatalf("experimental protocol count = %d, want 12", len(types))
+		t.Fatalf("stable protocol count = %d, want 12", len(types))
 	}
 	if !policy.SupportsFrame(TypeIDLWWSetState) || !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDRGARunDelta) || !policy.SupportsFrame(TypeIDListRGADelta) || !policy.SupportsFrame(TypeIDORTreeDelta) || !policy.SupportsFrame(TypeIDRichTextDelta) {
 		t.Fatal("enabled policy omitted an implemented protocol")
@@ -142,8 +142,8 @@ func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
 	if policy.SupportsFrame(999) {
 		t.Fatal("policy supported an unknown frame")
 	}
-	if !IsExperimentalFrame(TypeIDLWWSetDelta) || !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || IsExperimentalFrame(TypeIDRGARunState) || !IsExperimentalFrame(TypeIDListRGAState) || IsExperimentalFrame(TypeIDORTreeDelta) || IsExperimentalFrame(TypeIDRichTextState) {
-		t.Fatal("implemented experimental protocol was not marked experimental")
+	if IsExperimentalFrame(TypeIDLWWSetDelta) || IsExperimentalFrame(TypeIDLWWMapDelta) || IsExperimentalFrame(TypeIDRGAState) || IsExperimentalFrame(TypeIDRGARunState) || IsExperimentalFrame(TypeIDListRGAState) || IsExperimentalFrame(TypeIDORTreeDelta) || IsExperimentalFrame(TypeIDRichTextState) {
+		t.Fatal("implemented protocol was still marked experimental")
 	}
 	if IsExperimentalFrame(999) {
 		t.Fatal("unknown protocol was marked experimental")

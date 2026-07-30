@@ -71,7 +71,7 @@ func TestClusterServerAcknowledgesWithoutStateAndMeasuresApply(t *testing.T) {
 	}
 }
 
-func TestClusterServerRejectsExperimentalScalarRGAFrames(t *testing.T) {
+func TestClusterServerRejectsMismatchedScalarRGAFrames(t *testing.T) {
 	server, err := newClusterServer("receiver", "secret")
 	if err != nil {
 		t.Fatal(err)

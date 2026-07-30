@@ -273,7 +273,7 @@ func TestSendBroadcastsExplicitRGADeltaAndRejectsProtocolMismatch(t *testing.T) 
 	}
 }
 
-func TestProbeDefaultRunV2RejectsExperimentalScalarRGAFrames(t *testing.T) {
+func TestProbeDefaultRunV2RejectsMismatchedScalarRGAFrames(t *testing.T) {
 	receiver, err := newProbe("receiver", "secret", defaultRGAProtocol)
 	if err != nil {
 		t.Fatal(err)

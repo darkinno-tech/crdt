@@ -24,13 +24,13 @@ func TestManifestRejectsDisabledAndMismatchedProtocols(t *testing.T) {
 	}
 	if _, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
 		StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
-		t.Fatalf("experimental RGA manifest error = %v", err)
+	}, crdt.ProtocolPolicy{}); err != nil {
+		t.Fatalf("stable scalar RGA manifest error = %v", err)
 	}
 	if _, err := NewManifest("set", "example.com/set/v1", 1, Protocol{
 		StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
-		t.Fatalf("experimental LWW-Set manifest error = %v", err)
+	}, crdt.ProtocolPolicy{}); err != nil {
+		t.Fatalf("stable LWW-Set manifest error = %v", err)
 	}
 	remote := stable
 	remote.Protocol.SemanticsVersion = 2
@@ -98,7 +98,7 @@ func TestManifestNegotiatesOuterFrameV2AtEveryReplicaBoundary(t *testing.T) {
 	}
 }
 
-func TestDefaultRunRGAProtocolDoesNotRequireExperimentalPolicy(t *testing.T) {
+func TestDefaultRunRGAProtocolUsesStablePolicy(t *testing.T) {
 	policy := crdt.ProtocolPolicy{}
 	manifest, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
 		StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: 2,
@@ -646,7 +646,7 @@ func TestInboxRejectsChangesFromAnotherEpoch(t *testing.T) {
 }
 
 func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	policy := crdt.ProtocolPolicy{}
 	protocol := Protocol{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1}
 	oldManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 1, protocol, policy)
 	newManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 2, protocol, policy)

@@ -33,7 +33,7 @@ func TestRunReturnsWriteFailure(t *testing.T) {
 
 func TestAttachmentFlowRejectsTamperedDownload(t *testing.T) {
 	objects := []downloadedObject{{key: "audio", objectID: "objects/audio.ogg", mediaType: "audio/ogg", body: []byte("inspection-audio-v1")}}
-	refs, err := replicateAttachments(crdt.ProtocolPolicy{AllowExperimental: true}, objects)
+	refs, err := replicateAttachments(crdt.ProtocolPolicy{}, objects)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +42,11 @@ func TestAttachmentFlowRejectsTamperedDownload(t *testing.T) {
 	}
 }
 
-func TestExperimentalPolicyIsRequired(t *testing.T) {
-	if _, err := replicateNote(crdt.ProtocolPolicy{}); err == nil {
-		t.Fatal("text replication accepted without experimental policy")
+func TestStableCollectionPolicyIsAccepted(t *testing.T) {
+	if _, err := replicateNote(crdt.ProtocolPolicy{}); err != nil {
+		t.Fatalf("text replication rejected stable policy: %v", err)
 	}
-	if _, err := replicateAttachments(crdt.ProtocolPolicy{}, nil); err == nil {
-		t.Fatal("attachment replication accepted without experimental policy")
+	if _, err := replicateAttachments(crdt.ProtocolPolicy{}, nil); err != nil {
+		t.Fatalf("attachment replication rejected stable policy: %v", err)
 	}
 }

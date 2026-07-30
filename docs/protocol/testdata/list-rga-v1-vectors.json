@@ -1,0 +1,9 @@
+{
+  "protocol": "list-rga-v1",
+  "semantics_version": 1,
+  "frame_types": { "state": 21, "delta": 22 },
+  "vectors": [
+    { "name": "one-root-value-delta", "frame_type": 22, "complete_state": false, "codec_id": "example.com/list-string/v1", "hex": "4352445401161a6578616d706c652e636f6d2f6c6973742d737472696e672f76310d0105616c696365010000017800a192d983", "values": ["x"] },
+    { "name": "one-root-value-state", "frame_type": 21, "complete_state": true, "codec_id": "example.com/list-string/v1", "hex": "4352445401151a6578616d706c652e636f6d2f6c6973742d737472696e672f76310d0105616c696365010000017800b00624c2", "values": ["x"] }
+  ]
+}

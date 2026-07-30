@@ -16,6 +16,15 @@ func TestStableFrameTypeUsesRunV2Contract(t *testing.T) {
 	}
 }
 
+func TestLegacyFrameTypeUsesScalarV1Contract(t *testing.T) {
+	if LegacySemanticsVersion != 1 {
+		t.Fatalf("LegacySemanticsVersion = %d, want 1", LegacySemanticsVersion)
+	}
+	if got, want := LegacyFrameType(), (crdt.FrameType{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, UsesHLC: true}); got != want {
+		t.Fatalf("LegacyFrameType() = %#v, want %#v", got, want)
+	}
+}
+
 func TestRGARetainsPositionUntilCompaction(t *testing.T) {
 	value := mustRGA(t, "writer")
 	insert := mustInsertRGA(t, value, 0, "a")

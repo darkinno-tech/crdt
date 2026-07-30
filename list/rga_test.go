@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/DarkInno/crdt"
 	frame "github.com/DarkInno/crdt/encoding"
 )
 
@@ -83,6 +84,15 @@ func TestRGAConvergesAcrossDuplicateOutOfOrderDelivery(t *testing.T) {
 	}
 	if left.PendingCount() != 0 || right.PendingCount() != 0 {
 		t.Fatalf("pending left=%d right=%d", left.PendingCount(), right.PendingCount())
+	}
+}
+
+func TestStableFrameTypeUsesGenericListV1Contract(t *testing.T) {
+	if SemanticsVersion != 1 {
+		t.Fatalf("SemanticsVersion = %d, want 1", SemanticsVersion)
+	}
+	if got, want := StableFrameType(), (crdt.FrameType{StateID: crdt.TypeIDListRGAState, DeltaID: crdt.TypeIDListRGADelta, UsesHLC: true}); got != want {
+		t.Fatalf("StableFrameType() = %#v, want %#v", got, want)
 	}
 }
 

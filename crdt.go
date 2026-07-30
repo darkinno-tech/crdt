@@ -72,25 +72,10 @@ var frameTypes = [...]FrameType{
 }
 
 // DefaultRGAFrameType returns the compact run-v2 protocol for new RGA
-// replication groups. Legacy scalar RGA v1 frames remain available only when
-// a group explicitly enables experimental protocols for migration.
+// replication groups. Legacy scalar RGA v1 frames remain a separately selected
+// stable migration contract.
 func DefaultRGAFrameType() FrameType {
 	return FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true}
-}
-
-// experimentalFrameTypes are fully framed protocols whose public API and
-// tombstone-lifecycle guidance are still evolving. They are never enabled by
-// ProtocolPolicy's zero value, so an application must opt in per replication
-// group before advertising or accepting them from a peer.
-var experimentalFrameTypes = map[uint64]struct{}{
-	TypeIDLWWSetState:  {},
-	TypeIDLWWSetDelta:  {},
-	TypeIDLWWMapState:  {},
-	TypeIDLWWMapDelta:  {},
-	TypeIDRGAState:     {},
-	TypeIDRGADelta:     {},
-	TypeIDListRGAState: {},
-	TypeIDListRGADelta: {},
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group
@@ -102,10 +87,12 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // TypeID remains necessary but is not sufficient: applications still own
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
-	// AllowExperimental includes framed LWW-Set, LWW-Map, legacy scalar RGA v1,
-	// and generic list RGA protocols. Keep it false until the
-	// replication group has accepted their experimental API and
-	// tombstone-retention lifecycle.
+	// AllowExperimental is retained for source compatibility with releases that
+	// required an opt-in for collection frames. Every implemented frame type is
+	// stable now, so the field has no effect. It is not a substitute for an
+	// authenticated manifest, authorization, limits, or tombstone retirement.
+	//
+	// Deprecated: all implemented protocol pairs are included by the zero value.
 	AllowExperimental bool
 }
 
@@ -129,15 +116,17 @@ func (p ProtocolPolicy) SupportsFrame(typeID uint64) bool {
 			return false
 		}
 	}
-	_, experimental := experimentalFrameTypes[typeID]
-	return p.AllowExperimental || !experimental
+	return true
 }
 
-// IsExperimentalFrame reports whether typeID belongs to an implemented
-// experimental protocol. Reserved or unknown type IDs return false.
+// IsExperimentalFrame reports whether typeID belongs to an experimental
+// protocol. No implemented protocol is experimental; reserved and unknown IDs
+// also return false. It remains for source compatibility with earlier policy
+// negotiation code.
+//
+// Deprecated: every implemented frame type is stable.
 func IsExperimentalFrame(typeID uint64) bool {
-	_, ok := experimentalFrameTypes[typeID]
-	return ok
+	return false
 }
 
 // FrameTypeForState returns the supported protocol associated with stateID.

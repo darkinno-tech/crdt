@@ -27,6 +27,15 @@ var (
 	ErrUnsafeCompaction = errors.New("list: unsafe RGA tombstone compaction")
 )
 
+// SemanticsVersion is the immutable generic list RGA v1 contract. It must
+// match the value negotiated in a replica manifest.
+const SemanticsVersion uint64 = 1
+
+// StableFrameType returns the stable generic list RGA v1 state/delta pair.
+func StableFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDListRGAState, DeltaID: crdt.TypeIDListRGADelta, UsesHLC: true}
+}
+
 // Position is a stable, opaque list-element identity.
 type Position = crdt.Tag
 

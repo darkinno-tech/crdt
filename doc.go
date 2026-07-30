@@ -8,8 +8,8 @@
 //
 // The framed protocol table is intentionally closed. Use ProtocolPolicy during
 // authenticated connection setup to advertise only the state and delta frame
-// types a replication group has agreed to exchange. Experimental protocols
-// require explicit opt-in and may change before stable promotion.
+// types a replication group has agreed to exchange. Every implemented protocol
+// pair is stable; matching TypeIDs alone still do not authenticate a peer.
 //
 // For installation, examples, and package-level guidance, see the module
 // README at https://github.com/darkinno/crdt.

@@ -207,12 +207,12 @@ func TestRegisterUsesExplicitLWWMapManifestBoundary(t *testing.T) {
 			DeltaID:          crdt.TypeIDLWWMapDelta,
 			SemanticsVersion: SemanticsVersion,
 		},
-		crdt.ProtocolPolicy{AllowExperimental: true},
+		crdt.ProtocolPolicy{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := replica.NewChangeWithPolicy(manifest, replica.Dot{Actor: "writer", Counter: 1}, encoded, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
+	if _, err := replica.NewChangeWithPolicy(manifest, replica.Dot{Actor: "writer", Counter: 1}, encoded, crdt.ProtocolPolicy{}); err != nil {
 		t.Fatalf("attachment delta crossed authenticated manifest boundary: %v", err)
 	}
 }

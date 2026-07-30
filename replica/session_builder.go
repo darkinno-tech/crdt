@@ -9,9 +9,9 @@ import (
 // selected during authenticated group negotiation. It centralizes construction
 // of the replication objects that must share that same policy.
 //
-// A builder is not a handshake and does not make experimental protocols
-// implicit: callers still pass an explicit policy when creating it. The zero
-// policy continues to permit stable protocols only.
+// A builder is not a handshake: callers must still authenticate one exact
+// manifest before creating it. The policy parameter is retained for source
+// compatibility and future policy extensions.
 type SessionBuilder struct {
 	manifest Manifest
 	policy   crdt.ProtocolPolicy
@@ -28,8 +28,8 @@ func NewSessionBuilder(groupID, schemaID string, epoch uint64, protocol Protocol
 }
 
 // NewSessionBuilderFromManifest binds an already authenticated manifest to
-// policy. It rejects a manifest that policy does not admit, including an
-// experimental manifest passed with the zero policy.
+// policy. It rejects a manifest that is structurally invalid or names an
+// unknown protocol pair.
 func NewSessionBuilderFromManifest(manifest Manifest, policy crdt.ProtocolPolicy) (SessionBuilder, error) {
 	if err := manifest.validate(policy); err != nil {
 		return SessionBuilder{}, ErrInvalidManifest

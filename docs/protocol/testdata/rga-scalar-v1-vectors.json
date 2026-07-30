@@ -1,0 +1,9 @@
+{
+  "protocol": "rga-scalar-v1",
+  "semantics_version": 1,
+  "frame_types": { "state": 11, "delta": 12 },
+  "vectors": [
+    { "name": "one-root-rune-delta", "frame_type": 12, "complete_state": false, "hex": "43524454010c000c0105616c6963650100004100fd0a1fd7", "text": "A" },
+    { "name": "one-root-rune-state", "frame_type": 11, "complete_state": true, "hex": "43524454010b000c0105616c6963650100004100ce4e9a21", "text": "A" }
+  ]
+}
