@@ -194,6 +194,75 @@ func TestStoreCopiesMigrationConfiguration(t *testing.T) {
 	}
 }
 
+func TestFormatConfigurationValidation(t *testing.T) {
+	defaultConfig, err := testConfig().normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultConfig.Format.Version != RecordFormatV2 || defaultConfig.Format.Compatibility != CompatibilityCurrentAndPrevious {
+		t.Fatalf("default format = %+v", defaultConfig.Format)
+	}
+
+	for _, format := range []FormatConfig{
+		{Version: 99},
+		{Version: RecordFormatV2, Compatibility: Compatibility(99)},
+		{Version: RecordFormatV1, Compatibility: CompatibilityCurrentAndPrevious},
+		{Migrations: []Migration{{FromVersion: RecordFormatV2}}},
+		{Migrations: []Migration{{FromVersion: RecordFormatV1}, {FromVersion: RecordFormatV1}}},
+	} {
+		config := testConfig()
+		config.Format = format
+		if _, err := config.normalized(); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("normalized(%+v) error = %v, want %v", format, err, ErrInvalidConfig)
+		}
+	}
+	config := testConfig()
+	config.OpenTimeout = -1
+	if _, err := config.normalized(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("negative timeout error = %v, want %v", err, ErrInvalidConfig)
+	}
+}
+
+func TestMigrationCodecBoundaryPaths(t *testing.T) {
+	checkpoint := Checkpoint{Snapshot: testSnapshot(t)}
+	legacy := marshalLegacyCheckpoint(t, checkpoint)
+	invalid := testConfig()
+	invalid.Format.Version = 99
+	if _, err := unmarshalCheckpoint(legacy, invalid); !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("invalid format decode error = %v, want %v", err, ErrCorruptStore)
+	}
+	config := testConfig()
+	if _, err := migrateCheckpoint(checkpoint, RecordFormatV2, config); !errors.Is(err, ErrMigration) {
+		t.Fatalf("current version migration error = %v, want %v", err, ErrMigration)
+	}
+	config.Format.MigrateOnLoad = true
+	config.Format.Migrations = []Migration{{
+		FromVersion: RecordFormatV1,
+		Transform: func(Checkpoint) (Checkpoint, error) {
+			return Checkpoint{}, nil
+		},
+	}}
+	if _, err := migrateCheckpoint(checkpoint, RecordFormatV1, config); !errors.Is(err, ErrMigration) {
+		t.Fatalf("invalid target migration error = %v, want %v", err, ErrMigration)
+	}
+}
+
+func TestMigrateAndLoadHandlesMissingAndCurrentRecords(t *testing.T) {
+	store := testStore(t, t.TempDir()+"/checkpoint.db", testConfig())
+	defer func() { _ = store.Close() }()
+	if _, found, err := store.migrateAndLoad("missing"); err != nil || found {
+		t.Fatalf("missing migrate found=%t err=%v", found, err)
+	}
+	checkpoint := Checkpoint{Snapshot: testSnapshot(t), Cursor: 52}
+	if err := store.Save("tasks", checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	loaded, found, err := store.migrateAndLoad("tasks")
+	if err != nil || !found || loaded.Cursor != checkpoint.Cursor {
+		t.Fatalf("current migrate checkpoint=%+v found=%t err=%v", loaded, found, err)
+	}
+}
+
 func marshalLegacyCheckpoint(t testing.TB, checkpoint Checkpoint) []byte {
 	t.Helper()
 	config := testConfig()
