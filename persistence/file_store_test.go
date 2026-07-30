@@ -89,6 +89,17 @@ func TestFileStoreRejectsCorruptionAndUnsafePaths(t *testing.T) {
 	if _, err := OpenFile(path, config); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("OpenFile() public permissions error = %v, want %v", err, ErrInvalidConfig)
 	}
+	privatePath := root + "/private.store"
+	if err := os.WriteFile(privatePath, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := root + "/checkpoint.link"
+	if err := os.Symlink(privatePath, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := OpenFile(linkPath, config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("OpenFile() symlink error = %v, want %v", err, ErrInvalidConfig)
+	}
 }
 
 func TestFileStoreValidatesConfigurationAndOperationBoundaries(t *testing.T) {
@@ -262,7 +273,7 @@ func TestFileStoreCoversMigrationAndFileBoundaryFailures(t *testing.T) {
 	if err := store.Save("invalid-format", Checkpoint{Snapshot: testSnapshot(t)}); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("Save(invalid format) error = %v, want %v", err, ErrInvalidCheckpoint)
 	}
-	store.config.Format = config.Config.Format
+	store.config.Format = config.Format
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -471,8 +482,12 @@ func TestFileStoreConcurrentSavesAndLoads(t *testing.T) {
 					return
 				}
 				checkpoint, found, err := store.Load(name)
-				if err != nil || !found || checkpoint.Snapshot.TypeID != saved.TypeID {
-					errorsSeen <- fmt.Errorf("worker %d load found=%t checkpoint=%+v err=%v", worker, found, checkpoint, err)
+				if err != nil {
+					errorsSeen <- fmt.Errorf("worker %d load: %w", worker, err)
+					return
+				}
+				if !found || checkpoint.Snapshot.TypeID != saved.TypeID {
+					errorsSeen <- fmt.Errorf("worker %d load found=%t checkpoint=%+v", worker, found, checkpoint)
 					return
 				}
 			}
@@ -685,15 +700,15 @@ func TestUnmarshalFileRecordsRejectsCanonicalStructureViolations(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, payload := range map[string][]byte{
-		"count-exceeds-bytes": appendFileCount(nil, 2),
-		"missing-name":        appendFileCount(nil, 1),
-		"trailing-bytes":      append(appendFileCount(nil, 0), 'x'),
-		"empty-record":        append(appendBytes(appendFileCount(nil, 1), []byte("checkpoint")), 0),
-		"invalid-record":      appendBytes(appendBytes(appendFileCount(nil, 1), []byte("checkpoint")), []byte("invalid")),
+		"count-exceeds-bytes": filePayloadWithCount(2),
+		"missing-name":        filePayloadWithCount(1),
+		"trailing-bytes":      append(filePayloadWithCount(0), 'x'),
+		"empty-record":        append(appendBytes(filePayloadWithCount(1), []byte("checkpoint")), 0),
+		"invalid-record":      appendBytes(appendBytes(filePayloadWithCount(1), []byte("checkpoint")), []byte("invalid")),
 		"duplicate-name": appendBytes(
 			appendBytes(
 				appendBytes(
-					appendBytes(appendFileCount(nil, 2), []byte("checkpoint")), record,
+					appendBytes(filePayloadWithCount(2), []byte("checkpoint")), record,
 				),
 				[]byte("checkpoint"),
 			),
@@ -708,8 +723,8 @@ func TestUnmarshalFileRecordsRejectsCanonicalStructureViolations(t *testing.T) {
 	}
 }
 
-func appendFileCount(payload []byte, count uint64) []byte {
-	payload = append(payload, fileMagic[:]...)
+func filePayloadWithCount(count uint64) []byte {
+	payload := append([]byte(nil), fileMagic[:]...)
 	payload = append(payload, fileVersion)
 	return frame.AppendUvarint(payload, count)
 }
