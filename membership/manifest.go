@@ -11,7 +11,8 @@ const manifestDomain = "darkinno/crdt/membership-manifest/v1"
 
 // ManifestHash returns the control-plane binding digest for a replication
 // manifest. It includes the membership/data-plane epoch, schema, codec, frame
-// IDs, and semantics version; changing any of them requires a new signed View.
+// IDs, semantics version, and negotiated outer frame version; changing any of
+// them requires a new signed View.
 func ManifestHash(manifest replica.Manifest) [sha256.Size]byte {
 	encoded := make([]byte, 0, len(manifestDomain)+len(manifest.GroupID)+len(manifest.SchemaID)+len(manifest.Protocol.CodecID)+96)
 	encoded = appendString(encoded, manifestDomain)
@@ -22,6 +23,7 @@ func ManifestHash(manifest replica.Manifest) [sha256.Size]byte {
 	encoded = binary.AppendUvarint(encoded, manifest.Protocol.DeltaID)
 	encoded = appendString(encoded, manifest.Protocol.CodecID)
 	encoded = binary.AppendUvarint(encoded, manifest.Protocol.SemanticsVersion)
+	encoded = binary.AppendUvarint(encoded, manifest.Protocol.FrameFormatVersion())
 	return sha256.Sum256(encoded)
 }
 

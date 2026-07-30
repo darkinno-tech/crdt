@@ -45,11 +45,24 @@ var (
 //
 // CodecID is the schema/element codec identifier carried by every frame in
 // this group. It may be empty for CRDTs whose canonical frames have no codec.
+// WireFormatVersion selects the outer frame representation. Zero retains the
+// v1 default for source and JSON compatibility; v2 is an explicit capability
+// that must match across the authenticated manifest.
 type Protocol struct {
-	StateID          uint64
-	DeltaID          uint64
-	CodecID          string
-	SemanticsVersion uint64
+	StateID           uint64
+	DeltaID           uint64
+	CodecID           string
+	SemanticsVersion  uint64
+	WireFormatVersion uint64
+}
+
+// FrameFormatVersion returns the negotiated outer encoding version. A zero
+// field is the legacy spelling of encoding.FormatVersion.
+func (p Protocol) FrameFormatVersion() uint64 {
+	if p.WireFormatVersion == 0 {
+		return frame.FormatVersion
+	}
+	return p.WireFormatVersion
 }
 
 // Manifest is the authenticated agreement for one CRDT replication group.
@@ -88,7 +101,9 @@ func (m Manifest) Compatible(remote Manifest) error {
 	if m.GroupID != remote.GroupID || m.SchemaID != remote.SchemaID || m.Epoch != remote.Epoch {
 		return ErrManifestMismatch
 	}
-	if m.Protocol != remote.Protocol {
+	if m.Protocol.StateID != remote.Protocol.StateID || m.Protocol.DeltaID != remote.Protocol.DeltaID ||
+		m.Protocol.CodecID != remote.Protocol.CodecID || m.Protocol.SemanticsVersion != remote.Protocol.SemanticsVersion ||
+		m.Protocol.FrameFormatVersion() != remote.Protocol.FrameFormatVersion() {
 		return ErrProtocolMismatch
 	}
 	return nil
@@ -96,7 +111,8 @@ func (m Manifest) Compatible(remote Manifest) error {
 
 func (m Manifest) validate(policy crdt.ProtocolPolicy) error {
 	if strings.TrimSpace(m.GroupID) == "" || strings.TrimSpace(m.SchemaID) == "" || m.Epoch == 0 ||
-		m.Protocol.SemanticsVersion == 0 || len(m.Protocol.CodecID) > frame.DefaultLimits().MaxCodecID {
+		m.Protocol.SemanticsVersion == 0 || len(m.Protocol.CodecID) > frame.DefaultLimits().MaxCodecID ||
+		(m.Protocol.FrameFormatVersion() != frame.FormatVersion && m.Protocol.FrameFormatVersion() != frame.FormatVersionV2) {
 		return ErrInvalidManifest
 	}
 	kind, ok := crdt.FrameTypeForState(m.Protocol.StateID)
@@ -215,7 +231,7 @@ func NewChangeWithPolicy(manifest Manifest, dot Dot, delta []byte, policy crdt.P
 		return Change{}, ErrInvalidChange
 	}
 	decoded, err := frame.UnmarshalFrame(delta, frame.DefaultLimits())
-	if err != nil || decoded.TypeID != manifest.Protocol.DeltaID || decoded.CodecID != manifest.Protocol.CodecID {
+	if err != nil || decoded.Version() != manifest.Protocol.FrameFormatVersion() || decoded.TypeID != manifest.Protocol.DeltaID || decoded.CodecID != manifest.Protocol.CodecID {
 		return Change{}, ErrInvalidChange
 	}
 	return Change{Dot: dot, manifest: manifest, delta: append([]byte(nil), delta...)}, nil
@@ -232,7 +248,7 @@ func (c Change) validate(manifest Manifest) error {
 		return err
 	}
 	decoded, err := frame.UnmarshalFrame(c.delta, frame.DefaultLimits())
-	if err != nil || decoded.TypeID != manifest.Protocol.DeltaID || decoded.CodecID != manifest.Protocol.CodecID {
+	if err != nil || decoded.Version() != manifest.Protocol.FrameFormatVersion() || decoded.TypeID != manifest.Protocol.DeltaID || decoded.CodecID != manifest.Protocol.CodecID {
 		return ErrInvalidChange
 	}
 	return nil
@@ -455,7 +471,7 @@ func NewCheckpointWithPolicy(manifest Manifest, state []byte, frontier Frontier,
 		return Checkpoint{}, ErrInvalidCheckpoint
 	}
 	decoded, err := frame.UnmarshalFrame(state, frame.DefaultLimits())
-	if err != nil || decoded.TypeID != manifest.Protocol.StateID || decoded.CodecID != manifest.Protocol.CodecID || !validateState(validator, state) {
+	if err != nil || decoded.Version() != manifest.Protocol.FrameFormatVersion() || decoded.TypeID != manifest.Protocol.StateID || decoded.CodecID != manifest.Protocol.CodecID || !validateState(validator, state) {
 		return Checkpoint{}, ErrInvalidCheckpoint
 	}
 	checkpoint := Checkpoint{manifest: manifest, state: append([]byte(nil), state...), frontier: frontier.clone()}
@@ -499,7 +515,7 @@ func (c Checkpoint) valid() bool {
 		return false
 	}
 	decoded, err := frame.UnmarshalFrame(c.state, frame.DefaultLimits())
-	if err != nil || decoded.TypeID != c.manifest.Protocol.StateID || decoded.CodecID != c.manifest.Protocol.CodecID {
+	if err != nil || decoded.Version() != c.manifest.Protocol.FrameFormatVersion() || decoded.TypeID != c.manifest.Protocol.StateID || decoded.CodecID != c.manifest.Protocol.CodecID {
 		return false
 	}
 	kind, _ := crdt.FrameTypeForState(c.manifest.Protocol.StateID)
@@ -526,6 +542,7 @@ func (c Checkpoint) digest() [sha256.Size]byte {
 	encoded = binary.AppendUvarint(encoded, c.manifest.Protocol.DeltaID)
 	encoded = appendString(encoded, c.manifest.Protocol.CodecID)
 	encoded = binary.AppendUvarint(encoded, c.manifest.Protocol.SemanticsVersion)
+	encoded = binary.AppendUvarint(encoded, c.manifest.Protocol.FrameFormatVersion())
 	encoded = appendBytes(encoded, c.state)
 	actors := make([]string, 0, len(c.frontier.entries))
 	for actor := range c.frontier.entries {

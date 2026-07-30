@@ -1,6 +1,7 @@
 package snapshot
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/DarkInno/crdt"
@@ -71,6 +72,34 @@ func TestRecoveryPlanRejectsMismatchedDelta(t *testing.T) {
 	}
 	if _, err := NewRecoveryPlan(snapshot, [][]byte{state}, len(state)); err == nil {
 		t.Fatal("state frame accepted as recovery delta")
+	}
+}
+
+func TestSnapshotAndRecoveryPlanBindOuterFrameVersion(t *testing.T) {
+	state, err := frame.MarshalFrameV2(frame.Frame{TypeID: crdt.TypeIDGCounterState, Payload: []byte{0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := New(state, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.FormatVersion != frame.FormatVersionV2 {
+		t.Fatalf("snapshot format = %d, want %d", saved.FormatVersion, frame.FormatVersionV2)
+	}
+	delta, err := frame.MarshalFrameV2(frame.Frame{TypeID: crdt.TypeIDGCounterDelta, Payload: []byte{0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRecoveryPlan(saved, [][]byte{delta}, len(delta)); err != nil {
+		t.Fatalf("v2 recovery plan: %v", err)
+	}
+	legacy, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDGCounterDelta, Payload: []byte{0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRecoveryPlan(saved, [][]byte{legacy}, len(legacy)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mixed frame recovery plan error = %v, want ErrInvalid", err)
 	}
 }
 

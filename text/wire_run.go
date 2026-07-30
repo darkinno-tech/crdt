@@ -623,7 +623,8 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	canonical, err := marshalRGARun(expectedType, nodes, tombstones, limits)
-	if err != nil || !bytes.Equal(canonical, data) {
+	canonicalFrame, canonicalErr := frame.UnmarshalFrameView(canonical, limits)
+	if err != nil || canonicalErr != nil || !bytes.Equal(canonicalFrame.Payload, decoded.Payload) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	return nodes, tombstones, nil

@@ -39,6 +39,65 @@ func TestManifestRejectsDisabledAndMismatchedProtocols(t *testing.T) {
 	}
 }
 
+func TestManifestNegotiatesOuterFrameV2AtEveryReplicaBoundary(t *testing.T) {
+	manifest, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
+		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1, WireFormatVersion: frame.FormatVersionV2,
+	}, crdt.ProtocolPolicy{})
+	if err != nil {
+		t.Fatalf("NewManifest v2: %v", err)
+	}
+	if got := manifest.Protocol.FrameFormatVersion(); got != frame.FormatVersionV2 {
+		t.Fatalf("FrameFormatVersion() = %d, want %d", got, frame.FormatVersionV2)
+	}
+	legacy := manifest
+	legacy.Protocol.WireFormatVersion = 0
+	if err := manifest.Compatible(legacy); !errors.Is(err, ErrProtocolMismatch) {
+		t.Fatalf("v2/legacy compatibility error = %v, want ErrProtocolMismatch", err)
+	}
+
+	delta, err := frame.MarshalFrameV2(frame.Frame{TypeID: crdt.TypeIDGCounterDelta, Payload: []byte{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, err := NewChange(manifest, Dot{Actor: "writer", Counter: 1}, delta)
+	if err != nil {
+		t.Fatalf("NewChange v2: %v", err)
+	}
+	frontier, err := NewFrontier(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := NewInbox(manifest, frontier, 2, 1024, func(data []byte) error {
+		decoded, err := frame.UnmarshalFrame(data, frame.DefaultLimits())
+		if err != nil || decoded.Version() != frame.FormatVersionV2 || decoded.TypeID != crdt.TypeIDGCounterDelta {
+			return ErrInvalidChange
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
+		t.Fatalf("v2 inbox delivery = %#v, %v", delivery, err)
+	}
+	if _, err := NewChange(legacy, Dot{Actor: "writer", Counter: 1}, delta); !errors.Is(err, ErrInvalidChange) {
+		t.Fatalf("v2 frame under legacy manifest error = %v, want ErrInvalidChange", err)
+	}
+
+	state, err := frame.MarshalFrameV2(frame.Frame{TypeID: crdt.TypeIDGCounterState, Payload: []byte{0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCheckpoint(manifest, state, frontier, clock.State{}, func([]byte) error { return nil }); err != nil {
+		t.Fatalf("NewCheckpoint v2: %v", err)
+	}
+	if _, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
+		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1, WireFormatVersion: 3,
+	}, crdt.ProtocolPolicy{}); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("unknown format manifest error = %v, want ErrInvalidManifest", err)
+	}
+}
+
 func TestDefaultRunRGAProtocolDoesNotRequireExperimentalPolicy(t *testing.T) {
 	policy := crdt.ProtocolPolicy{}
 	manifest, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
