@@ -69,28 +69,6 @@ object field-by-field. Model independently collaborative structures as named
 root `NativeMap`/`NativeArray` values instead. This avoids invisible in-place
 mutation and keeps resource accounting explicit.
 
-For a replication group that explicitly negotiates `native-ts-nested-v1`, use
-`NativeNestedDocument` from `@darkinno/crdt-client/nested`. It preserves the
-atomic-v1 API while allowing a map or array entry to own one independently
-merged child `NativeNestedMap`/`NativeNestedArray`:
-
-```ts
-import { NativeNestedDocument } from "@darkinno/crdt-client/nested";
-
-const document = new NativeNestedDocument("alice-device-7");
-const board = document.getMap("board");
-const card = board.createArray("cards").pushMap();
-card.set("title", "Draft");
-card.createArray("labels").push(["planning"]);
-```
-
-The child reference is bound to its immutable parent-operation ID, so it has
-one owner and cannot be moved or aliased. Nested updates that arrive before a
-parent wait under an explicit limit; snapshots reject while unresolved. This
-is a new semantics contract, not Yjs compatibility, a Go frame TypeID, or a
-transparent upgrade for a `NativeDocument` peer. See the
-[nested-type design](../../docs/design/native-typescript-nested-types.md).
-
 ### Native protocol, limits, and persistence
 
 `native-ts-v1` updates are immutable operation sets, not authentication. A
