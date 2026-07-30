@@ -98,3 +98,7 @@ type Log interface {
 	Replay(groupID string, after, maxEvents, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) ([]Event, uint64, error)
 	Closed() bool
 }
+
+func invalidConfig(operation string, cause error) error {
+	return crdt.WrapError(crdt.ErrorCodeInvalidConfig, operation, cause)
+}

@@ -105,6 +105,7 @@ The `durable` package intentionally persists a relay operation log and replay cu
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
 | `persistence` | Local bounded bbolt CRDT checkpoint reference. |
+| `config`, `telemetry` | Explicit layered host configuration and bounded payload-free operational telemetry. |
 | `durable`, `extensions`, `awareness`, `observe` | Durable relay, bounded live relay, ephemeral presence, and process-local observation. |
 | `attachment` | Immutable media-reference metadata; never raw media bytes. |
 
@@ -130,6 +131,8 @@ make verify
 ```
 
 `make verify` also runs bounded fuzzing, static analysis, linting, integration, and extreme scenarios. `make benchmark` is a controlled development measure, not a production capacity promise—repeat focused benchmarks on the target disk, CPU, Go version, network, and workload before selecting limits.
+
+For host wiring of layered configuration, structured error codes, and bounded durable-relay telemetry, see [production readiness](docs/operations/production-readiness.md).
 
 ## Boundaries that matter
 

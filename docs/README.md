@@ -46,6 +46,7 @@ be committed.
 
 ## Operations and architecture
 
+- [Production configuration, errors, and telemetry](operations/production-readiness.md)
 - [Merkle state-repair CLI runbook](operations/merkle-sync-cli.md)
 - [Merkle 状态修复 CLI 手册](operations/merkle-sync-cli.zh-CN.md)
 - [Cross-host probe deployment runbook](operations/cross-host-probe.md)

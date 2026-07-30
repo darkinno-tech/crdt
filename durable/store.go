@@ -51,13 +51,13 @@ type Store struct {
 // The parent directory must already be owned and protected by the host.
 func OpenStore(path string, config StoreConfig) (*Store, error) {
 	if path == "" || config.MaxEvents == 0 || config.MaxBytes == 0 {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("durable.open_store", ErrInvalidConfig)
 	}
 	if config.OpenTimeout == 0 {
 		config.OpenTimeout = 5 * time.Second
 	}
 	if config.OpenTimeout < 0 {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("durable.open_store", ErrInvalidConfig)
 	}
 	parent := filepath.Dir(path)
 	info, err := os.Stat(parent)
@@ -65,11 +65,11 @@ func OpenStore(path string, config StoreConfig) (*Store, error) {
 		return nil, fmt.Errorf("durable store directory: %w", err)
 	}
 	if !info.IsDir() {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("durable.open_store", ErrInvalidConfig)
 	}
 	if info, err := os.Stat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("durable.open_store", ErrInvalidConfig)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect durable store: %w", err)

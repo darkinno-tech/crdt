@@ -73,18 +73,18 @@ type ReconnectClient struct {
 // NewReconnectClient validates configuration without making a network call.
 func NewReconnectClient(endpoint string, manifest replica.Manifest, config ClientConfig) (*ReconnectClient, error) {
 	if config.OnEvent == nil {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil || (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
 	}
 	if _, err := replica.NewSessionWithPolicy(manifest, config.Policy); err != nil {
-		return nil, fmt.Errorf("validate durable manifest: %w", err)
+		return nil, crdt.WrapError(crdt.ErrorCodeInvalidConfig, "durable.new_reconnect_client", fmt.Errorf("validate durable manifest: %w", err))
 	}
 	limits, err := normalizeClientLimits(config)
 	if err != nil {
-		return nil, err
+		return nil, invalidConfig("durable.new_reconnect_client", err)
 	}
 	return &ReconnectClient{
 		endpoint: endpoint,
