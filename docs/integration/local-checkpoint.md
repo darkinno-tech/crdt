@@ -66,6 +66,39 @@ if err != nil {
 defer store.Close()
 ```
 
+## Record-format compatibility and migration
+
+`Config.Format` is the single policy for the local checkpoint envelope. New
+stores write `RecordFormatV2` by default and, by default, can read the
+immediately preceding v1 envelope. This compatibility applies only to the
+outer bbolt value; it does not make CRDT frame versions, TypeIDs, codecs, or
+Manifests interchangeable.
+
+For an envelope-only upgrade, enable transactional rewrite after a verified
+backup. The v1 and v2 checkpoint payloads have the same semantics, so no
+custom transform is needed:
+
+```go
+config.Format = persistence.FormatConfig{
+	Version:       persistence.RecordFormatV2,
+	Compatibility: persistence.CompatibilityCurrentAndPrevious,
+	MigrateOnLoad: true,
+}
+```
+
+`Load` first checks the record digest, all configured byte/count limits, the
+source validator, and the CRDT frame before calling a migration. It then
+validates the replacement with `Config.Validate` and rewrites it in the same
+bbolt write transaction. A failed transform returns `persistence.ErrMigration`
+and leaves the source record unchanged. Set `CompatibilityCurrentOnly` once
+the rollback window closes to reject legacy files.
+
+When a CRDT schema or codec also changes, supply one `Migration` for the old
+record version. Its optional `Validate` validates the source format and its
+`Transform` must return a complete target checkpoint accepted by
+`Config.Validate`. Keep the transform bounded and deterministic; do not use
+it to infer identity, authorize input, or rewrite live remote CRDT traffic.
+
 The parent directory must already exist and be host-protected; the database is
 opened as `0600`. bbolt holds an exclusive process lock, so run exactly one
 active process for a path. Keep databases per local replica/schema instead of
@@ -134,7 +167,7 @@ snapshot.
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='BenchmarkStore(Save|Load|SaveParallel)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -bench='BenchmarkStore(Save|Load|SaveParallel|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
 ```
 
 These checks cover local restart, corruption rejection, concurrent access, and

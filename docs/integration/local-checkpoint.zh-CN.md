@@ -62,6 +62,32 @@ if err != nil {
 defer store.Close()
 ```
 
+## 记录格式兼容与迁移
+
+`Config.Format` 是本地 checkpoint 外层记录格式的唯一策略入口。新 Store 默认写入
+`RecordFormatV2`，也默认可读取紧邻的 v1 记录。这个兼容性只覆盖 bbolt value 的外层
+格式；它不使 CRDT frame 版本、TypeID、codec 或 Manifest 变得可互换。
+
+对于只变更外层格式的升级，请在已验证备份后启用事务性重写。v1 和 v2 checkpoint 的
+payload 语义相同，因此不需要自定义 transform：
+
+```go
+config.Format = persistence.FormatConfig{
+	Version:       persistence.RecordFormatV2,
+	Compatibility: persistence.CompatibilityCurrentAndPrevious,
+	MigrateOnLoad: true,
+}
+```
+
+`Load` 会先验证记录摘要、所有已配置的字节/数量上限、source validator 和 CRDT frame，
+才调用迁移。随后它使用 `Config.Validate` 验证替换后的 checkpoint，并在同一个 bbolt 写事务
+中重写。transform 失败会返回 `persistence.ErrMigration`，原始记录保持不变。回滚窗口关闭后
+可设为 `CompatibilityCurrentOnly`，以拒绝旧文件。
+
+若 CRDT schema 或 codec 也发生变化，请为旧记录版本提供一个 `Migration`。其可选
+`Validate` 校验 source format，`Transform` 必须返回能通过 `Config.Validate` 的完整目标
+checkpoint。transform 必须有界且确定；不得据此推断身份、授权输入或改写在线远程 CRDT 流量。
+
 父目录必须预先存在并由宿主保护，数据库以 `0600` 打开。bbolt 有进程独占锁，同一路径
 只能有一个 active process。请按本地 replica/schema 拆分数据库，不能将同一文件挂载给
 多个 pod。
@@ -121,7 +147,7 @@ bbolt 有可串行化 ACID 事务，但只有一个 writer。`Save` 事务应保
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='BenchmarkStore(Save|Load|SaveParallel)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -bench='BenchmarkStore(Save|Load|SaveParallel|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
 ```
 
 这些检查覆盖本地重启、损坏拒绝、并发访问和 fuzz 解码；它们不证明宿主备份、磁盘写满、
