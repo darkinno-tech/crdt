@@ -26,6 +26,7 @@
 - 混合逻辑时钟（HLC）标签和可持久化的时钟状态，支持副本重启。
 - 规范化、带校验和的二进制帧；解码有边界且编码确定。
 - 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
+- 本地 **RGA 光标/选区锚点**：无需创建完整可见 Position 投影即可解析；墓碑回收后明确失败。
 - 带成员纪元的可选精确确认墓碑回收。
 - 所提供 CRDT 实现均支持安全的并发访问。
 - 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
@@ -438,6 +439,12 @@ RGA 探针对每个生成 delta 限制为 16 MiB 和 200,000 个 rune；这是�
 容量建议。它没有持久化 HLC 状态、outbox、重放、恢复或墓碑 GC 权威。`run-v2` 能压缩
 同副本的线性 frame，但规范化解码会带来独立的 CPU 与分配成本；选择前必须在目标机器上
 测量两种 wire shape。
+
+`crdt-merkle-sync` 是独立的、有边界的状态修复 CLI，用于只包含稳定 G-Counter 帧的专用目录。
+它比较已认证的 Merkle 根，只传输缺失或不同的帧，以 G-Counter `Merge` 合并，并在双方验证最终根。
+其他 CRDT 类型一律 fail-closed：一个可解析的 TypeID 并不能证明该工具理解此类型的状态、codec、
+HLC 恢复或墓碑语义。它是离线修复工具：同一个状态目录不能同时被 `serve`、`sync` 或
+`gcounter-add` 进程打开。详见 [Merkle 状态修复 CLI 手册](docs/operations/merkle-sync-cli.zh-CN.md)。
 
 使用 `make test-unit` 分别运行各包；使用 `make test-integration` 运行三副本、
 恢复、批处理、编码和反熵流程。

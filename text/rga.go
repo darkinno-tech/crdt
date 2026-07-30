@@ -583,6 +583,40 @@ func (r *RGA) String() string {
 	return string(result)
 }
 
+// Len returns the number of visible Unicode scalar values without allocating a
+// projection. It is safe to call concurrently with other RGA operations.
+func (r *RGA) Len() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return visibleCount(r.sequence.root)
+}
+
+// VisibleRunes returns copies of the visible stable positions and their runes
+// in display order from one consistent projection. Callers may modify either
+// returned slice. It avoids the duplicated traversal required by separately
+// calling Positions and String when both are needed by a renderer.
+func (r *RGA) VisibleRunes() ([]Position, []rune) {
+	if r == nil {
+		return nil, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	count := visibleCount(r.sequence.root)
+	positions := make([]Position, 0, count)
+	runes := make([]rune, 0, count)
+	for current := r.sequence.entry(Position{}).next; current != nil; current = current.next {
+		if !current.visible {
+			continue
+		}
+		positions = append(positions, current.pair.position)
+		runes = append(runes, r.nodes[current.pair.position].rune)
+	}
+	return positions, runes
+}
+
 // Positions returns a copy of visible stable IDs in display order.
 func (r *RGA) Positions() []Position {
 	if r == nil {

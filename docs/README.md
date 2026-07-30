@@ -34,6 +34,8 @@ be committed.
 
 ## Operations and architecture
 
+- [Merkle state-repair CLI runbook](operations/merkle-sync-cli.md)
+- [Merkle 状态修复 CLI 手册](operations/merkle-sync-cli.zh-CN.md)
 - [Cross-host probe deployment runbook](operations/cross-host-probe.md)
 - [跨机器同步探针部署手册](operations/cross-host-probe.zh-CN.md)
 - [Durable relay benchmark](operations/durable-benchmark-2026-07-29.md)

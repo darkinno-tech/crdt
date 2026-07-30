@@ -82,6 +82,70 @@ type markValue struct {
 	deleted bool
 }
 
+// markSet stores the common single attribute inline. Formatted prose usually
+// assigns one attribute to a position (for example, bold or a link), so a map
+// per position needlessly turns one range format into thousands of heap
+// allocations. Additional attributes retain the same per-key LWW semantics in
+// extra without changing the canonical state or delta formats.
+type markSet struct {
+	key   string
+	value markValue
+	extra map[string]markValue
+}
+
+func (s markSet) get(key string) (markValue, bool) {
+	if s.key != "" && s.key == key {
+		return s.value, true
+	}
+	value, ok := s.extra[key]
+	return value, ok
+}
+
+func (s markSet) len() int {
+	if s.key == "" {
+		return 0
+	}
+	return 1 + len(s.extra)
+}
+
+func (s *markSet) put(key string, value markValue) bool {
+	if s.key == "" {
+		s.key, s.value = key, value
+		return false
+	}
+	if s.key == key {
+		s.value = value
+		return true
+	}
+	if s.extra == nil {
+		s.extra = make(map[string]markValue, 1)
+	}
+	_, exists := s.extra[key]
+	s.extra[key] = value
+	return exists
+}
+
+func (s markSet) clone() markSet {
+	cloned := markSet{key: s.key, value: s.value}
+	if len(s.extra) == 0 {
+		return cloned
+	}
+	cloned.extra = make(map[string]markValue, len(s.extra))
+	for key, value := range s.extra {
+		cloned.extra[key] = value
+	}
+	return cloned
+}
+
+func (s markSet) rangeValues(visit func(string, markValue)) {
+	if s.key != "" {
+		visit(s.key, s.value)
+	}
+	for key, value := range s.extra {
+		visit(key, value)
+	}
+}
+
 type formatOperation struct {
 	tag     crdt.Tag
 	targets []text.Position
@@ -102,7 +166,7 @@ type Document struct {
 	mu        sync.RWMutex
 	text      *text.RGA
 	options   Options
-	marks     map[text.Position]map[string]markValue
+	marks     map[text.Position]markSet
 	markCount int
 }
 
@@ -121,7 +185,7 @@ func NewWithOptions(replicaID string, options Options) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Document{text: value, options: options, marks: make(map[text.Position]map[string]markValue)}, nil
+	return &Document{text: value, options: options, marks: make(map[text.Position]markSet)}, nil
 }
 
 // NewFromClock restores a document whose RGA HLC state was persisted with a
@@ -139,7 +203,7 @@ func NewFromClockWithOptions(state clock.State, options Options) (*Document, err
 	if err != nil {
 		return nil, err
 	}
-	return &Document{text: value, options: options, marks: make(map[text.Position]map[string]markValue)}, nil
+	return &Document{text: value, options: options, marks: make(map[text.Position]markSet)}, nil
 }
 
 // ClockState returns the shared RGA clock state that must be saved atomically
@@ -170,7 +234,7 @@ func (d *Document) Len() int {
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return len(d.text.Positions())
+	return d.text.Len()
 }
 
 // AttributesAt returns a copy of the live attributes at a visible rune offset.
@@ -195,7 +259,7 @@ func (d *Document) Spans() []Span {
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	positions, runes := d.text.Positions(), []rune(d.text.String())
+	positions, runes := d.text.VisibleRunes()
 	if len(positions) == 0 || len(runes) == 0 {
 		return nil
 	}
@@ -336,8 +400,10 @@ func (d *Document) FormatWithLimits(offset, count int, changes []AttributeChange
 	if err != nil {
 		return Delta{}, err
 	}
+	targets := append([]text.Position(nil), positions[offset:offset+count]...)
+	sort.Slice(targets, func(left, right int) bool { return targets[left].Compare(targets[right]) < 0 })
 	delta := Delta{operations: []formatOperation{{
-		tag: tag, targets: append([]text.Position(nil), positions[offset:offset+count]...), changes: changes,
+		tag: tag, targets: targets, changes: changes,
 	}}}
 	if _, err := delta.MarshalBinaryWithLimits(limits); err != nil {
 		return Delta{}, err
@@ -373,13 +439,13 @@ func (d *Document) ApplyDelta(delta Delta) error {
 	if err := d.preflightOperationsLocked(delta.operations); err != nil {
 		return err
 	}
-	if tag, ok := greatestOperationTag(delta.operations); ok {
-		if err := d.text.WitnessTag(tag); err != nil {
+	if len(delta.textDelta) > 0 {
+		if err := d.text.ApplyDelta(textDelta); err != nil {
 			return err
 		}
 	}
-	if len(delta.textDelta) > 0 {
-		if err := d.text.ApplyDelta(textDelta); err != nil {
+	if tag, ok := greatestOperationTag(delta.operations); ok {
+		if err := d.text.WitnessTag(tag); err != nil {
 			return err
 		}
 	}
@@ -414,13 +480,13 @@ func (d *Document) Merge(other *Document) error {
 	if err := d.preflightMarksLocked(marks); err != nil {
 		return err
 	}
+	if err := d.text.Merge(otherText); err != nil {
+		return err
+	}
 	if tag, ok := greatestMarkTag(marks); ok {
 		if err := d.text.WitnessTag(tag); err != nil {
 			return err
 		}
-	}
-	if err := d.text.Merge(otherText); err != nil {
-		return err
 	}
 	return d.applyMarksLocked(marks)
 }
@@ -436,11 +502,11 @@ func (d *Document) State() crdt.StateSnapshot {
 	state := d.text.State()
 	state.Type = "rich-text"
 	for _, entries := range d.marks {
-		for _, value := range entries {
+		entries.rangeValues(func(_ string, value markValue) {
 			if value.deleted {
 				state.TombstoneCount++
 			}
-		}
+		})
 	}
 	return state
 }
@@ -449,16 +515,16 @@ func (d *Document) State() crdt.StateSnapshot {
 func (d *Document) MarshalJSON() ([]byte, error) { return crdt.MarshalStateJSON(d) }
 
 func (d *Document) attributesForPositionLocked(position text.Position) Attributes {
-	entries := d.marks[position]
-	if len(entries) == 0 {
+	entries, exists := d.marks[position]
+	if !exists {
 		return nil
 	}
-	attributes := make(Attributes, len(entries))
-	for key, value := range entries {
+	attributes := make(Attributes, entries.len())
+	entries.rangeValues(func(key string, value markValue) {
 		if !value.deleted {
 			attributes[key] = value.value
 		}
-	}
+	})
 	if len(attributes) == 0 {
 		return nil
 	}
@@ -484,6 +550,9 @@ func (d *Document) preflightOperationsLocked(operations []formatOperation) error
 		}
 		updates += len(operation.targets) * len(operation.changes)
 	}
+	if len(operations) == 1 {
+		return d.preflightOperationLocked(operations[0])
+	}
 	pending := make(map[markKey]markValue)
 	for _, operation := range operations {
 		if len(operation.changes) > d.options.MaxAttributesPerOperation {
@@ -494,13 +563,17 @@ func (d *Document) preflightOperationsLocked(operations []formatOperation) error
 				key := markKey{position: target, key: change.Key}
 				incoming := markValue{tag: operation.tag, value: change.Value, deleted: change.Remove}
 				if current, exists := pending[key]; exists {
-					if current != incoming {
+					if current.tag == incoming.tag && current != incoming {
 						return ErrTagConflict
 					}
+					// Operations are canonically sorted by tag, so a later
+					// assignment for the same position/key remains one retained
+					// entry and must be allowed to win by LWW order.
+					pending[key] = incoming
 					continue
 				}
-				if entries := d.marks[target]; entries != nil {
-					if current, exists := entries[change.Key]; exists && current.tag == incoming.tag && current != incoming {
+				if entries, exists := d.marks[target]; exists {
+					if current, exists := entries.get(change.Key); exists && current.tag == incoming.tag && current != incoming {
 						return ErrTagConflict
 					}
 				}
@@ -510,9 +583,32 @@ func (d *Document) preflightOperationsLocked(operations []formatOperation) error
 	}
 	newEntries := 0
 	for key := range pending {
-		if entries := d.marks[key.position]; entries == nil {
+		if entries, exists := d.marks[key.position]; !exists {
 			newEntries++
-		} else if _, exists := entries[key.key]; !exists {
+		} else if _, exists := entries.get(key.key); !exists {
+			newEntries++
+		}
+	}
+	if newEntries > d.options.MaxMarkEntries-d.markCount {
+		return ErrResourceLimit
+	}
+	return nil
+}
+
+func (d *Document) preflightOperationLocked(operation formatOperation) error {
+	newEntries := 0
+	for _, target := range operation.targets {
+		entries, hasEntries := d.marks[target]
+		for _, change := range operation.changes {
+			incoming := markValue{tag: operation.tag, value: change.Value, deleted: change.Remove}
+			if hasEntries {
+				if current, exists := entries.get(change.Key); exists {
+					if current.tag == incoming.tag && current != incoming {
+						return ErrTagConflict
+					}
+					continue
+				}
+			}
 			newEntries++
 		}
 	}
@@ -526,53 +622,50 @@ func (d *Document) applyOperationsLocked(operations []formatOperation) error {
 	for _, operation := range operations {
 		for _, target := range operation.targets {
 			entries := d.marks[target]
-			if entries == nil {
-				entries = make(map[string]markValue, len(operation.changes))
-				d.marks[target] = entries
-			}
 			for _, change := range operation.changes {
 				incoming := markValue{tag: operation.tag, value: change.Value, deleted: change.Remove}
-				current, exists := entries[change.Key]
+				current, exists := entries.get(change.Key)
 				if exists && current.tag.Compare(incoming.tag) > 0 {
 					continue
 				}
-				if !exists {
+				if !entries.put(change.Key, incoming) {
 					d.markCount++
 				}
-				entries[change.Key] = incoming
 			}
+			d.marks[target] = entries
 		}
 	}
 	return nil
 }
 
-func (d *Document) preflightMarksLocked(marks map[text.Position]map[string]markValue) error {
-	pending := make(map[markKey]markValue)
+func (d *Document) preflightMarksLocked(marks map[text.Position]markSet) error {
+	newEntries := 0
 	for position, entries := range marks {
 		if !position.Valid() {
 			return ErrInvalidDelta
 		}
-		for key, incoming := range entries {
+		var preflightErr error
+		entries.rangeValues(func(key string, incoming markValue) {
+			if preflightErr != nil {
+				return
+			}
 			if key == "" || !utf8.ValidString(key) || !utf8.ValidString(incoming.value) || !incoming.tag.Valid() ||
 				(incoming.deleted && incoming.value != "") {
-				return ErrInvalidDelta
+				preflightErr = ErrInvalidDelta
+				return
 			}
-			markKey := markKey{position: position, key: key}
-			if current, exists := pending[markKey]; exists && current != incoming {
-				return ErrTagConflict
+			if currentEntries, exists := d.marks[position]; exists {
+				if current, exists := currentEntries.get(key); exists {
+					if current.tag == incoming.tag && current != incoming {
+						preflightErr = ErrTagConflict
+					}
+					return
+				}
 			}
-			if current, exists := d.marks[position][key]; exists && current.tag == incoming.tag && current != incoming {
-				return ErrTagConflict
-			}
-			pending[markKey] = incoming
-		}
-	}
-	newEntries := 0
-	for key := range pending {
-		if entries := d.marks[key.position]; entries == nil {
 			newEntries++
-		} else if _, exists := entries[key.key]; !exists {
-			newEntries++
+		})
+		if preflightErr != nil {
+			return preflightErr
 		}
 	}
 	if newEntries > d.options.MaxMarkEntries-d.markCount {
@@ -581,23 +674,19 @@ func (d *Document) preflightMarksLocked(marks map[text.Position]map[string]markV
 	return nil
 }
 
-func (d *Document) applyMarksLocked(marks map[text.Position]map[string]markValue) error {
+func (d *Document) applyMarksLocked(marks map[text.Position]markSet) error {
 	for position, incomingEntries := range marks {
 		entries := d.marks[position]
-		if entries == nil {
-			entries = make(map[string]markValue, len(incomingEntries))
-			d.marks[position] = entries
-		}
-		for key, incoming := range incomingEntries {
-			current, exists := entries[key]
+		incomingEntries.rangeValues(func(key string, incoming markValue) {
+			current, exists := entries.get(key)
 			if exists && current.tag.Compare(incoming.tag) > 0 {
-				continue
+				return
 			}
-			if !exists {
+			if !entries.put(key, incoming) {
 				d.markCount++
 			}
-			entries[key] = incoming
-		}
+		})
+		d.marks[position] = entries
 	}
 	return nil
 }
@@ -668,27 +757,23 @@ func greatestOperationTag(operations []formatOperation) (crdt.Tag, bool) {
 	return operations[len(operations)-1].tag, true
 }
 
-func cloneMarks(source map[text.Position]map[string]markValue) map[text.Position]map[string]markValue {
-	cloned := make(map[text.Position]map[string]markValue, len(source))
+func cloneMarks(source map[text.Position]markSet) map[text.Position]markSet {
+	cloned := make(map[text.Position]markSet, len(source))
 	for position, entries := range source {
-		copied := make(map[string]markValue, len(entries))
-		for key, value := range entries {
-			copied[key] = value
-		}
-		cloned[position] = copied
+		cloned[position] = entries.clone()
 	}
 	return cloned
 }
 
-func greatestMarkTag(marks map[text.Position]map[string]markValue) (crdt.Tag, bool) {
+func greatestMarkTag(marks map[text.Position]markSet) (crdt.Tag, bool) {
 	var greatest crdt.Tag
 	ok := false
 	for _, entries := range marks {
-		for _, value := range entries {
+		entries.rangeValues(func(_ string, value markValue) {
 			if !ok || greatest.Compare(value.tag) < 0 {
 				greatest, ok = value.tag, true
 			}
-		}
+		})
 	}
 	return greatest, ok
 }
@@ -709,32 +794,33 @@ func attributesEqual(left, right Attributes) bool {
 // caller-owned maps returned by AttributesAt or Spans. HLC tags are excluded:
 // two registers with equal live values render as one span even when they were
 // written by different replicas.
-func liveAttributesEqual(left, right map[string]markValue) bool {
+func liveAttributesEqual(left, right markSet) bool {
 	leftLive := 0
-	for _, value := range left {
+	left.rangeValues(func(_ string, value markValue) {
 		if !value.deleted {
 			leftLive++
 		}
-	}
+	})
 	rightLive := 0
-	for _, value := range right {
+	right.rangeValues(func(_ string, value markValue) {
 		if !value.deleted {
 			rightLive++
 		}
-	}
+	})
 	if leftLive != rightLive {
 		return false
 	}
-	for key, value := range left {
+	equal := true
+	left.rangeValues(func(key string, value markValue) {
 		if value.deleted {
-			continue
+			return
 		}
-		other, exists := right[key]
+		other, exists := right.get(key)
 		if !exists || other.deleted || other.value != value.value {
-			return false
+			equal = false
 		}
-	}
-	return true
+	})
+	return equal
 }
 
 // NewFromSnapshot restores a complete rich-text snapshot with default bounds.

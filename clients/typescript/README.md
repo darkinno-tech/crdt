@@ -1,17 +1,106 @@
-# TypeScript frame decoder and RGA Wasm client
+# TypeScript CRDT client: native shared types, frame decoder, and RGA Wasm
 
-This directory gives browser and JavaScript/WebView clients a local RGA merge
-path without reimplementing the Go RGA algorithm. It has two intentionally
-separate layers:
+This directory gives browsers and JavaScript/WebView clients two deliberately
+separate local-merge paths:
 
-1. `src/frame.ts` is a dependency-free TypeScript decoder for the canonical
+1. `src/native.ts` is a dependency-free TypeScript document with `NativeMap`
+   and `NativeArray` shared types. It avoids Wasm download/startup overhead for
+   structured application state where all peers select its native TS contract.
+2. `src/frame.ts` is a dependency-free TypeScript decoder for the canonical
    v1 outer frame. It validates magic, version, shortest varints, lengths and
    CRC-32C under explicit limits. It returns opaque codec bytes and does not
    treat a checksum as authentication.
-2. `cmd/crdt-rga-wasm` compiles the existing Go RGA implementation to Wasm.
+3. `cmd/crdt-rga-wasm` compiles the existing Go RGA implementation to Wasm.
    The default artifact uses compact run-v2 frames, matching new Go RGA
    groups. Local edits produce canonical delta frames; incoming frames go
    through the same bounded Go decoder and merge semantics as server-side Go.
+
+`NativeDocument` is not a substitute implementation of Go RGA run-v2. Its
+canonical UTF-8 JSON updates are called **`native-ts-v1`** in this guide, have
+no `FrameType`, and must never be passed to `decodeFrame`, a Go frame decoder,
+or an existing Go replication group. For a group that must interoperate with
+Go, native mobile, or prior RGA data, retain the negotiated Wasm path below.
+
+## Native TypeScript shared types
+
+The native layer provides the browser-facing shared-map/shared-array model,
+without claiming Yjs API or wire compatibility:
+
+- `document.getMap(name)` returns a LWW `NativeMap`. A set/delete carries an
+  immutable `{ actor, counter }` ID; concurrent writes choose the greatest
+  counter then raw UTF-8 actor bytes. Deletes are retained tombstones.
+- `document.getArray(name)` returns an RGA `NativeArray`. Inserts point to a
+  left neighbour, concurrent siblings use the same deterministic ID ordering,
+  and deletes retain structural tombstones. Parent-missing inserts wait in a
+  bounded queue; delete-before-insert is supported.
+- `document.transact()` emits one local update after a group of mutations.
+  `onUpdate()` supplies transport-ready operations and `observe()` on a type
+  runs after the transaction has been applied.
+- `applyUpdate()` is transport-agnostic and validates the entire update before
+  mutation. It accepts reordered and duplicate operations. `encodeNativeUpdate`
+  and `decodeNativeUpdate` use canonical JSON for byte transports.
+
+```ts
+import { decodeNativeUpdate, encodeNativeUpdate, NativeDocument } from "@darkinno/crdt-client/native";
+
+const alice = new NativeDocument("alice-device-7");
+const metadata = alice.getMap("metadata");
+const cards = alice.getArray("cards");
+
+alice.onUpdate(({ update }) => {
+  // Authenticate and authorize this message at the transport boundary first.
+  socket.send(encodeNativeUpdate(update));
+});
+
+alice.transact(() => {
+  metadata.set("title", "Roadmap");
+  cards.push([{ id: "card-1", title: "Draft" }]);
+}, "local-editor");
+
+socket.onmessage = ({ data }) => {
+  alice.applyUpdate(decodeNativeUpdate(new Uint8Array(data)), "remote-peer");
+};
+```
+
+Values are copied JSON values (`null`, booleans, finite numbers, strings,
+arrays, and plain objects). They are intentionally **atomic**: this first
+native version does not support nested shared types or merge a mutated nested
+object field-by-field. Model independently collaborative structures as named
+root `NativeMap`/`NativeArray` values instead. This avoids invisible in-place
+mutation and keeps resource accounting explicit.
+
+### Native protocol, limits, and persistence
+
+`native-ts-v1` updates are immutable operation sets, not authentication. A
+host must still authenticate the sender, authorize the document/group, bind a
+schema and deployment limits, cap the HTTP/WebSocket body before allocating a
+`Uint8Array`, protect replay/outbox retention, and encrypt in transit/at rest
+where required. The decoder checks canonical UTF-8 JSON, exact fields, IDs,
+cycles, type conflicts, duplicate-ID payload conflicts, and every limit before
+it changes state.
+
+The defaults are deliberately mobile-oriented: 1 MiB encoded update, 10,000
+operations/update, 128 roots, 10,000 retained map entries, 100,000 array nodes
+and array tombstones, 10,000 unresolved array nodes, 64 KiB/value, and nesting
+depth 32. Pass lower compatible values to `new NativeDocument(replicaID,
+options)`. A limit rejection is atomic; it never accepts a partial update.
+
+Call `document.snapshot()` and atomically persist its **root declarations**,
+`updates`, and `counter`; restore with `NativeDocument.restore(replicaID,
+snapshot, options)`. The local counter is part of identity safety: persisting
+only state risks reuse of an `{ actor, counter }` ID after restart. A document
+with unresolved array parents cannot create a snapshot; deliver the missing
+parents first.
+
+Native arrays optimize for batched local edits and convergent sequence
+semantics, not general random-access workloads. A visible-node projection is
+retained privately until an insert or tombstone changes structure, making
+repeated `length` and `get(index)` reads cheap after the initial O(n) projection.
+`insert(index, ...)` still needs that projection to find its left neighbour;
+large arrays should be edited in a Worker and mutations should be batched in a
+transaction. The included benchmark records append, middle-insert, shuffled
+merge, state-update, and cached-read costs on the executing Node version rather
+than making a mobile-device capacity claim.
 
 The RGA protocol still requires explicit compatibility admission. Before
 loading or applying an RGA frame, authenticate a matching `replica.Manifest`,
@@ -36,6 +125,7 @@ From the repository root:
 make wasm
 make wasm-v1 # optional legacy scalar-v1 artifact in .tmp/crdt-rga-v1-wasm/
 make typescript-test
+make typescript-native-benchmark
 make wasm-test
 make wasm-v1-test # verifies the separately built legacy artifact
 make typescript-benchmark
@@ -48,9 +138,11 @@ different Go release with the generated module. The Node test loads the actual
 Wasm artifact, checks Go-to-TypeScript frame decoding, and simulates three
 replicas with duplicate, reordered delivery and snapshot recovery.
 
-The two benchmark targets report raw five-sample decoder throughput and actual
-Node-to-Go-Wasm insert/apply latency. Treat them as a baseline for the local
-machine and Go/Node versions, not a mobile-device SLA.
+The native benchmark reports append, middle insert, shuffled replication,
+state-update, and cached visible-read samples; the existing targets report raw
+decoder throughput and actual Node-to-Go-Wasm insert/apply latency. Treat all
+of them as controlled baselines for the local machine and Node/Go versions, not
+a mobile-device SLA.
 
 The current controlled local sample, including all five values and frame sizes,
 is recorded in the [2026-07-29 benchmark report](../../docs/operations/benchmark-2026-07-29.md).
@@ -114,10 +206,22 @@ engine.
 
 ## 中文说明
 
-该目录为浏览器和 JavaScript/WebView 客户端提供本地 RGA 合并能力，而不是把编辑
-退化为服务端仲裁。TypeScript 只负责有界的通用 frame 外层解码；默认 Wasm 产物复用
-同一份 Go 代码的 run-v2 编辑、乱序处理、墓碑和 HLC 语义，因此不会维护一份容易漂移的
-第二实现。
+该目录同时提供纯 TypeScript 的结构化 CRDT 和 Go RGA 的 Wasm 路径。`NativeDocument`
+提供 `NativeMap`（LWW）与 `NativeArray`（带墓碑、乱序待父节点处理的 RGA），适合所有
+参与者明确选择 `native-ts-v1` 的浏览器/WebView 结构化状态同步，因此不需要 Wasm 的下载和
+启动成本。它的更新是规范 JSON，和 Go 的 CRDT frame、TypeID、run-v2 完全不同；不能把
+native 更新送给 Go decoder，也不能把它伪装成已有复制组的一部分。
+
+`transact()` 将本地多个改动合成一个 update，`onUpdate()` 交给宿主网络层，
+`applyUpdate()` 在完整校验后才合并，因此重复与乱序投递可收敛。值为深拷贝 JSON，嵌套
+对象是原子 LWW 值；本版本不支持嵌套 shared type。默认上限为 1 MiB/update、10,000
+op/update、10,000 map entry、100,000 array node/墓碑、10,000 pending node、64 KiB/value
+与深度 32。宿主仍必须完成身份认证、授权、schema/limit 协商、传输 body 上限、重放治理和
+加密；canonical JSON 与 CRDT 合并都不提供这些安全能力。快照必须把 root 声明、`updates`
+与本地 `counter` 原子持久化，避免重启后复用 ID。
+
+对于必须与 Go、原生移动端或既有 RGA 数据互通的组，仍然使用下面的 Wasm run-v2 路径；它
+复用同一份 Go 编辑、乱序、墓碑和 HLC 语义，而不是维护一份隐式兼容的第二实现。
 
 RGA 仍需要显式协商：先认证 `replica.Manifest`（group、schema、epoch、codec、语义
 版本和能力），再接收 frame；校验和不等于身份验证。默认 Wasm 产物只接收/发出

@@ -126,13 +126,13 @@ func TestInternalValidationAndConflictPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := marshalState(richState{textState: textState, marks: map[text.Position]map[string]markValue{
-		position: {"": {tag: tag}},
+	if _, err := marshalState(richState{textState: textState, marks: map[text.Position]markSet{
+		position: {key: "bad", value: markValue{}},
 	}}, frame.DefaultLimits()); !errors.Is(err, ErrInvalidDelta) {
 		t.Fatalf("invalid state metadata = %v", err)
 	}
-	if err := document.preflightMarksLocked(map[text.Position]map[string]markValue{
-		position: {"bad": {tag: crdt.Tag{}}},
+	if err := document.preflightMarksLocked(map[text.Position]markSet{
+		position: {key: "bad", value: markValue{tag: crdt.Tag{}}},
 	}); !errors.Is(err, ErrInvalidDelta) {
 		t.Fatalf("invalid mark preflight = %v", err)
 	}
@@ -367,7 +367,7 @@ func TestMetadataTombstonesAndHelperBoundaries(t *testing.T) {
 
 	document.mu.Lock()
 	position := document.text.Positions()[0]
-	document.marks[position] = map[string]markValue{"bold": {tag: tag, value: "true"}}
+	document.marks[position] = markSet{key: "bold", value: markValue{tag: tag, value: "true"}}
 	document.markCount = 1
 	err = document.preflightOperationsLocked([]formatOperation{{tag: tag, targets: []text.Position{position}, changes: []AttributeChange{{Key: "bold", Value: "false"}}}})
 	document.mu.Unlock()
@@ -493,19 +493,19 @@ func TestMetadataPreflightCapacityAndOlderWrites(t *testing.T) {
 	first := text.Position{ReplicaID: "one", WallTime: 1}
 	second := text.Position{ReplicaID: "two", WallTime: 1}
 	newer := markValue{tag: crdt.Tag{ReplicaID: "writer", WallTime: 2}, value: "new"}
-	document.marks[first] = map[string]markValue{"bold": newer}
+	document.marks[first] = markSet{key: "bold", value: newer}
 	document.markCount = 1
-	if err := document.preflightMarksLocked(map[text.Position]map[string]markValue{
-		second: {"italic": {tag: crdt.Tag{ReplicaID: "writer", WallTime: 3}, value: "true"}},
+	if err := document.preflightMarksLocked(map[text.Position]markSet{
+		second: {key: "italic", value: markValue{tag: crdt.Tag{ReplicaID: "writer", WallTime: 3}, value: "true"}},
 	}); !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("metadata capacity = %v", err)
 	}
-	if err := document.applyMarksLocked(map[text.Position]map[string]markValue{
-		first: {"bold": {tag: crdt.Tag{ReplicaID: "writer", WallTime: 1}, value: "old"}},
+	if err := document.applyMarksLocked(map[text.Position]markSet{
+		first: {key: "bold", value: markValue{tag: crdt.Tag{ReplicaID: "writer", WallTime: 1}, value: "old"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := document.marks[first]["bold"].value; got != "new" {
+	if got := document.marks[first].value.value; got != "new" {
 		t.Fatalf("older mark overwrote newer value: %q", got)
 	}
 }

@@ -493,6 +493,174 @@ func TestORTreeHighCardinalityRecoveryAndBurstLimit(t *testing.T) {
 	}
 }
 
+func TestORTreeUnmarshalBinaryHonorsLocalDecodeBounds(t *testing.T) {
+	tests := []struct {
+		name    string
+		options Options
+		state   func(*testing.T) []byte
+	}{
+		{
+			name:    "nodes",
+			options: Options{MaxNodes: 1, MaxTombstones: 2, MaxValueBytes: 16},
+			state: func(t *testing.T) []byte {
+				t.Helper()
+				source, err := New("source-nodes")
+				if err != nil {
+					t.Fatal(err)
+				}
+				root, _, err := source.Add(NodeID{}, []byte("root"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := source.Add(root, []byte("child")); err != nil {
+					t.Fatal(err)
+				}
+				state, err := source.MarshalBinary()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return state
+			},
+		},
+		{
+			name:    "value",
+			options: Options{MaxNodes: 1, MaxTombstones: 1, MaxValueBytes: 3},
+			state: func(t *testing.T) []byte {
+				t.Helper()
+				source, err := New("source-value")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := source.Add(NodeID{}, []byte("oversized")); err != nil {
+					t.Fatal(err)
+				}
+				state, err := source.MarshalBinary()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return state
+			},
+		},
+		{
+			name:    "tombstones",
+			options: Options{MaxNodes: 2, MaxTombstones: 1, MaxValueBytes: 16},
+			state: func(t *testing.T) []byte {
+				t.Helper()
+				source, err := New("source-tombstones")
+				if err != nil {
+					t.Fatal(err)
+				}
+				first, _, err := source.Add(NodeID{}, []byte("first"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				second, _, err := source.Add(NodeID{}, []byte("second"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := source.Remove(first); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := source.Remove(second); err != nil {
+					t.Fatal(err)
+				}
+				state, err := source.MarshalBinary()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return state
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target, err := NewWithOptions("target-"+test.name, test.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			baseline, _, err := target.Add(NodeID{}, []byte("ok"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeClock := target.ClockState()
+			if err := target.UnmarshalBinary(test.state(t)); !errors.Is(err, ErrResourceLimit) {
+				t.Fatalf("UnmarshalBinary() = %v, want %v", err, ErrResourceLimit)
+			}
+			if target.ClockState() != beforeClock {
+				t.Fatalf("rejected state changed clock: got %#v, want %#v", target.ClockState(), beforeClock)
+			}
+			if nodes := target.Nodes(); len(nodes) != 1 || nodes[0].ID != baseline || string(nodes[0].Value) != "ok" {
+				t.Fatalf("rejected state changed receiver: %#v", nodes)
+			}
+		})
+	}
+}
+
+func TestORTreeUnmarshalBinaryDoesNotRetainFrameInput(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _, err := source.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, _, err := source.Add(root, []byte("child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := source.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.UnmarshalBinary(state); err != nil {
+		t.Fatal(err)
+	}
+	for index := range state {
+		state[index] = 0
+	}
+	if got := target.Nodes(); len(got) != 2 || got[0].ID != root || string(got[0].Value) != "root" || got[1].ID != child || got[1].Parent != root || string(got[1].Value) != "child" {
+		t.Fatalf("nodes retained mutated frame input: %#v", got)
+	}
+}
+
+func TestORTreeUnmarshalDeltaDoesNotRetainFrameInput(t *testing.T) {
+	source, err := New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, delta, err := source.Add(NodeID{}, []byte("root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range encoded {
+		encoded[index] = 0
+	}
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.Nodes(); len(got) != 1 || got[0].ID != root || string(got[0].Value) != "root" {
+		t.Fatalf("delta retained mutated frame input: %#v", got)
+	}
+}
+
 func TestORTreeDeltaWireAndErrorPaths(t *testing.T) {
 	if _, err := NewFromClock(clock.State{}); !errors.Is(err, ErrInvalidReplicaID) {
 		t.Fatalf("NewFromClock() = %v", err)

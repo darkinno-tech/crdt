@@ -1,8 +1,11 @@
-.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark wasm-benchmark sync-main
+.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark wasm-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
-FUZZ_TIME ?= 10s
+# A single fuzz worker avoids scheduler starvation in shared CI. Give it enough
+# time to finish corpus minimization and a bounded large-frame decode before
+# the fuzz context expires; 10s intermittently ended as context deadline.
+FUZZ_TIME ?= 20s
 FUZZ_PARALLEL ?= 1
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
@@ -15,7 +18,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./attachment ./clock ./counter ./delta ./durable ./encoding ./extensions ./list ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./xml ./cmd/crdt-analyze ./cmd/crdt-sync-probe ./examples/extensions-provider; do go test $$package; done
+	for package in . ./attachment ./clock ./counter ./delta ./durable ./encoding ./extensions ./list ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./xml ./cmd/crdt-analyze ./cmd/crdt-merkle-sync ./cmd/crdt-sync-probe ./examples/extensions-provider; do go test $$package; done
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -79,6 +82,9 @@ wasm-test: wasm
 
 typescript-benchmark:
 	$(NPM) --prefix clients/typescript run bench:frame
+
+typescript-native-benchmark:
+	$(NPM) --prefix clients/typescript run bench:native
 
 wasm-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts

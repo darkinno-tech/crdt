@@ -137,57 +137,85 @@ func UnmarshalDelta(data []byte) (Delta, error) {
 	return UnmarshalDeltaWithLimits(data, frame.DefaultLimits())
 }
 func UnmarshalDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, error) {
-	f, err := frame.UnmarshalFrame(data, limits)
+	return unmarshalTree(data, crdt.TypeIDORTreeDelta, limits, nil)
+}
+
+// unmarshalTree decodes one framed OR-Tree payload. State decoders pass their
+// retained-state options so resource limits are checked before the associated
+// map or value allocation. Delta decoders have no receiver-owned state budget
+// and therefore pass nil.
+func unmarshalTree(data []byte, typeID uint64, limits frame.DecoderLimits, options *Options) (Delta, error) {
+	// The tree parser copies every retained field, so a validated borrowed frame
+	// view avoids cloning an untrusted payload before receiver-local limits can
+	// reject it.
+	f, err := frame.UnmarshalFrameView(data, limits)
 	if err != nil {
 		return Delta{}, err
 	}
-	if f.TypeID != crdt.TypeIDORTreeDelta || f.CodecID != "" {
+	if f.TypeID != typeID || f.CodecID != "" {
 		return Delta{}, frame.ErrInvalidFrame
 	}
+	return unmarshalTreePayload(f.Payload, limits, options)
+}
+
+// unmarshalTreePayload decodes the shared state and delta payload layout. It
+// deliberately works from the validated frame payload instead of re-framing a
+// state payload as a delta: that avoids two full-payload copies during state
+// recovery while retaining the same canonical parser.
+func unmarshalTreePayload(payload []byte, limits frame.DecoderLimits, options *Options) (Delta, error) {
 	p := 0
-	count, next, ok := frame.ReadUvarint(f.Payload, p)
+	count, next, ok := frame.ReadUvarint(payload, p)
 	if !ok || count > uint64(limits.MaxElements) || count > uint64(limits.MaxTags) {
 		return Delta{}, frame.ErrInvalidFrame
+	}
+	if options != nil && count > uint64(options.MaxNodes) {
+		return Delta{}, ErrResourceLimit
 	}
 	p = next
 	nodes := make(map[NodeID]storedNode, int(count))
 	var previous NodeID
 	for i := uint64(0); i < count; i++ {
-		id, n, ok := frame.ReadTag(f.Payload, p, limits.MaxStringBytes)
+		id, n, ok := frame.ReadTag(payload, p, limits.MaxStringBytes)
 		if !ok || (i > 0 && previous.Compare(id) >= 0) {
 			return Delta{}, frame.ErrInvalidFrame
 		}
 		p = n
-		flag, n, ok := frame.ReadUvarint(f.Payload, p)
+		flag, n, ok := frame.ReadUvarint(payload, p)
 		if !ok || flag > 1 {
 			return Delta{}, frame.ErrInvalidFrame
 		}
 		p = n
 		parent := NodeID{}
 		if flag == 1 {
-			parent, n, ok = frame.ReadTag(f.Payload, p, limits.MaxStringBytes)
+			parent, n, ok = frame.ReadTag(payload, p, limits.MaxStringBytes)
 			if !ok {
 				return Delta{}, frame.ErrInvalidFrame
 			}
 			p = n
 		}
-		value, n, ok := frame.ReadBytes(f.Payload, p, limits.MaxStringBytes)
+		value, n, ok := frame.ReadBytes(payload, p, limits.MaxStringBytes)
 		if !ok {
 			return Delta{}, frame.ErrInvalidFrame
+		}
+		if options != nil && len(value) > options.MaxValueBytes {
+			return Delta{}, ErrResourceLimit
 		}
 		p = n
 		nodes[id] = storedNode{parent: parent, value: append([]byte(nil), value...)}
 		previous = id
 	}
-	tombs, next, ok := frame.ReadUvarint(f.Payload, p)
+	tombs, next, ok := frame.ReadUvarint(payload, p)
 	if !ok || tombs > uint64(limits.MaxTags-int(count)) {
 		return Delta{}, frame.ErrInvalidFrame
+	}
+	if options != nil && tombs > uint64(options.MaxTombstones) {
+		return Delta{}, ErrResourceLimit
 	}
 	p = next
 	tombstones := make(map[NodeID]struct{}, int(tombs))
 	var previousTomb NodeID
 	for i := uint64(0); i < tombs; i++ {
-		id, n, ok := frame.ReadTag(f.Payload, p, limits.MaxStringBytes)
+		id, n, ok := frame.ReadTag(payload, p, limits.MaxStringBytes)
 		if !ok || (i > 0 && previousTomb.Compare(id) >= 0) {
 			return Delta{}, frame.ErrInvalidFrame
 		}
@@ -196,7 +224,7 @@ func UnmarshalDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, e
 		previousTomb = id
 	}
 	delta := Delta{nodes: nodes, tombstones: tombstones}
-	if p != len(f.Payload) || validate(delta) != nil || !acyclic(nodes, nil) {
+	if p != len(payload) || validate(delta) != nil || !acyclic(nodes, nil) {
 		return Delta{}, frame.ErrInvalidFrame
 	}
 	return delta, nil
@@ -211,29 +239,9 @@ func (t *ORTree) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimi
 	if t == nil || t.clock == nil {
 		return ErrNilTree
 	}
-	f, err := frame.UnmarshalFrame(data, limits)
+	delta, err := unmarshalTree(data, crdt.TypeIDORTreeState, limits, &t.options)
 	if err != nil {
 		return err
-	}
-	if f.TypeID != crdt.TypeIDORTreeState || f.CodecID != "" {
-		return frame.ErrInvalidFrame
-	}
-	// Reuse the one delta parser: the payload layout is intentionally identical.
-	encoded, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDORTreeDelta, Payload: f.Payload})
-	if err != nil {
-		return err
-	}
-	delta, err := UnmarshalDeltaWithLimits(encoded, limits)
-	if err != nil {
-		return err
-	}
-	if len(delta.nodes) > t.options.MaxNodes || len(delta.tombstones) > t.options.MaxTombstones {
-		return ErrResourceLimit
-	}
-	for _, node := range delta.nodes {
-		if len(node.value) > t.options.MaxValueBytes {
-			return ErrResourceLimit
-		}
 	}
 	for _, node := range delta.nodes {
 		if node.parent.Valid() {

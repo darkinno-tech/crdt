@@ -13,7 +13,7 @@ import (
 
 type richState struct {
 	textState []byte
-	marks     map[text.Position]map[string]markValue
+	marks     map[text.Position]markSet
 }
 
 // MarshalBinary returns one canonical rich-text delta frame.
@@ -307,13 +307,13 @@ func (d *Document) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLi
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.text.UnmarshalRunBinaryWithLimits(state.textState, limits); err != nil {
+		return err
+	}
 	if tag, ok := greatestMarkTag(state.marks); ok {
 		if err := d.text.WitnessTag(tag); err != nil {
 			return err
 		}
-	}
-	if err := d.text.UnmarshalRunBinaryWithLimits(state.textState, limits); err != nil {
-		return err
 	}
 	d.marks = state.marks
 	d.markCount = countMarks(state.marks)
@@ -336,7 +336,7 @@ func unmarshalState(data []byte, limits frame.DecoderLimits) (richState, error) 
 		return richState{}, ErrInvalidDelta
 	}
 	position = next
-	marks := make(map[text.Position]map[string]markValue, int(count))
+	marks := make(map[text.Position]markSet, int(count))
 	var previousPosition text.Position
 	previousKey := ""
 	for index := uint64(0); index < count; index++ {
@@ -374,14 +374,11 @@ func unmarshalState(data []byte, limits frame.DecoderLimits) (richState, error) 
 			return richState{}, ErrInvalidDelta
 		}
 		entries := marks[markPosition]
-		if entries == nil {
-			entries = make(map[string]markValue)
-			marks[markPosition] = entries
-		}
-		if _, exists := entries[string(key)]; exists {
+		if _, exists := entries.get(string(key)); exists {
 			return richState{}, ErrInvalidDelta
 		}
-		entries[string(key)] = value
+		entries.put(string(key), value)
+		marks[markPosition] = entries
 		previousPosition, previousKey = markPosition, string(key)
 	}
 	state := richState{textState: append([]byte(nil), textState...), marks: marks}
@@ -431,11 +428,11 @@ func (d *Document) SnapshotCurrentStateWithLimits(limits frame.DecoderLimits) (s
 	}
 	frontier := textSnapshot.Frontier()
 	for _, entries := range d.marks {
-		for _, value := range entries {
+		entries.rangeValues(func(_ string, value markValue) {
 			if current, exists := frontier[value.tag.ReplicaID]; !exists || current.Compare(value.tag) < 0 {
 				frontier[value.tag.ReplicaID] = value.tag
 			}
-		}
+		})
 	}
 	return snapshot.NewValidatedWithClockState(state, frontier, d.text.ClockState(), validateRichTextState)
 }
@@ -457,12 +454,12 @@ type markEntry struct {
 	value    markValue
 }
 
-func sortedMarkEntries(marks map[text.Position]map[string]markValue) []markEntry {
+func sortedMarkEntries(marks map[text.Position]markSet) []markEntry {
 	entries := make([]markEntry, 0, countMarks(marks))
 	for position, attributes := range marks {
-		for key, value := range attributes {
+		attributes.rangeValues(func(key string, value markValue) {
 			entries = append(entries, markEntry{position: position, key: key, value: value})
-		}
+		})
 	}
 	sort.Slice(entries, func(left, right int) bool {
 		if comparison := entries[left].position.Compare(entries[right].position); comparison != 0 {
@@ -473,10 +470,10 @@ func sortedMarkEntries(marks map[text.Position]map[string]markValue) []markEntry
 	return entries
 }
 
-func countMarks(marks map[text.Position]map[string]markValue) int {
+func countMarks(marks map[text.Position]markSet) int {
 	count := 0
 	for _, entries := range marks {
-		count += len(entries)
+		count += entries.len()
 	}
 	return count
 }

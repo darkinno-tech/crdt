@@ -161,6 +161,24 @@ func markerRank(marker *sequenceMarker) int {
 	return rank
 }
 
+// visibleRank reports the number of visible entries strictly before marker.
+// Like markerRank, it follows parent links through the implicit treap rather
+// than scanning the document. Tombstoned entries still have a stable rank,
+// which is what lets local cursor anchors remain meaningful until compaction.
+func visibleRank(marker *sequenceMarker) int {
+	rank := visibleCount(marker.left)
+	for marker.parent != nil {
+		if marker == marker.parent.right {
+			rank += visibleCount(marker.parent.left)
+			if marker.parent.visible {
+				rank++
+			}
+		}
+		marker = marker.parent
+	}
+	return rank
+}
+
 func (index *sequenceIndex) entry(position Position) *sequenceMarker {
 	pair := index.pair(position)
 	if pair == nil {

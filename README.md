@@ -35,6 +35,8 @@ feature-parity, or performance claim.
   conflict rule.
 - Local, compensating **text Undo/Redo** that emits ordinary RGA deltas and
   never rolls back remote state.
+- Local **RGA cursor/selection anchors** that resolve without materializing a
+  full visible-position projection and fail closed after tombstone compaction.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -527,6 +529,16 @@ no durable HLC state, outbox, replay, recovery, or tombstone-GC authority.
 `run-v2` can compact linear same-replica frames, but canonical decoding is a
 separate CPU and allocation trade-off; benchmark both wire shapes on the target
 machine before selecting one.
+
+`crdt-merkle-sync` is a separate, bounded state-repair CLI for a dedicated
+directory of stable G-Counter frames. It compares authenticated Merkle roots,
+transfers only missing or divergent frames, joins them with G-Counter `Merge`,
+and verifies the final root on both sides. It fails closed for every other CRDT
+type: a valid frame TypeID is not evidence that this tool knows that type's
+state, codec, HLC recovery, or tombstone semantics. It is an offline repair
+tool: do not open the same state directory from a `serve`, `sync`, or
+`gcounter-add` process concurrently. See the
+[Merkle state-repair CLI runbook](docs/operations/merkle-sync-cli.md).
 
 Use `make test-unit` to run packages independently and `make test-integration`
 for the three-replica, recovery, batching, encoding, and anti-entropy flow.

@@ -124,6 +124,26 @@ func TestRGAExplicitWireAndRecoveryLimits(t *testing.T) {
 	if _, err := source.SnapshotRunCurrentStateWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
 		t.Fatalf("bounded run snapshot encoding error = %v, want %v", err, frame.ErrFrameLimit)
 	}
+	wholeFrameTight := frame.DefaultLimits()
+	wholeFrameTight.MaxFrameBytes = 1
+	if _, err := source.MarshalBinaryWithLimits(wholeFrameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded state encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := delta.MarshalBinaryWithLimits(wholeFrameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded delta encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := source.SnapshotCurrentStateWithLimits(wholeFrameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded snapshot encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := source.MarshalRunBinaryWithLimits(wholeFrameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded run state encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := delta.MarshalRunBinaryWithLimits(wholeFrameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded run delta encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := source.SnapshotRunCurrentStateWithLimits(wholeFrameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded run snapshot encoding error = %v, want %v", err, frame.ErrFrameLimit)
+	}
 
 	saved, err := source.SnapshotCurrentStateWithLimits(frame.DefaultLimits())
 	if err != nil {
@@ -177,6 +197,14 @@ func TestRGAMutationWithLimitsRejectsBeforeDocumentMutation(t *testing.T) {
 	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
 		t.Fatalf("rejected insert mutated document: text=%q state=%#v", got, value.State())
 	}
+	frameTight := frame.DefaultLimits()
+	frameTight.MaxFrameBytes = 1
+	if _, err := value.InsertWithLimits(0, "a", frameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("InsertWithLimits() whole-frame error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
+		t.Fatalf("whole-frame rejected insert mutated document: text=%q state=%#v", got, value.State())
+	}
 	if _, err := value.Insert(0, "a"); err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +230,14 @@ func TestRGARunMutationWithLimitsUsesRunFramesAndRejectsBeforeDocumentMutation(t
 	}
 	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
 		t.Fatalf("rejected run insert mutated document: text=%q state=%#v", got, value.State())
+	}
+	frameTight := frame.DefaultLimits()
+	frameTight.MaxFrameBytes = 1
+	if _, err := value.InsertRunBinaryWithLimits(0, "a", frameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("InsertRunBinaryWithLimits() whole-frame error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
+		t.Fatalf("whole-frame rejected run insert mutated document: text=%q state=%#v", got, value.State())
 	}
 
 	encoded, err := value.InsertRunBinaryWithLimits(0, "a", frame.DefaultLimits())
