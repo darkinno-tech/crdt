@@ -5,7 +5,5 @@ docs/*
 docs/protocol/*
 !docs/protocol/testdata/
 docs/protocol/testdata/*
-!docs/protocol/testdata/rga-run-v2-vectors.json
-!docs/protocol/testdata/richtext-v1-vectors.json
-!docs/protocol/testdata/or-tree-v1-vectors.json
+!docs/protocol/testdata/*.json
 coverage
