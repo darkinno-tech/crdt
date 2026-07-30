@@ -18,7 +18,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./attachment ./awareness ./clock ./counter ./delta ./durable ./encoding ./extensions ./list ./lww ./merkle ./persistence ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./xml ./cmd/crdt-analyze ./cmd/crdt-merkle-sync ./cmd/crdt-sync-probe ./examples/extensions-provider ./examples/persistent-replica; do go test $$package; done
+	go test $$(go list ./...)
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
