@@ -149,7 +149,8 @@ The probe demonstrates the boundary that a consuming application owns:
 5. Periodically exchange full state or Merkle summaries to discover missing
    history, then merge state to repair it. A retry queue alone cannot repair a
    delta lost before it entered that queue.
-6. Before exchanging experimental LWW-Set, LWW-Map, RGA, or OR-Tree frames, authenticate a
+6. Before exchanging experimental LWW-Set, LWW-Map, legacy scalar RGA v1, or
+   generic RGA list frames, authenticate a
    connection/setup capability advertisement built from
    `crdt.ProtocolPolicy{AllowExperimental: true}.FrameTypes()`. Both peers must
    advertise the same state/delta pair before either sends that type. Unknown,
@@ -187,17 +188,35 @@ outbox/receipt transaction. Restore a same-ID replica with
 `register.NewMVRegisterFromSnapshot`; state bytes alone omit its causal context.
 No experimental opt-in is required for G-Set or MV-Register frames.
 
-## 5. Experimental LWW-Set, LWW-Map, RGA, and OR-Tree integration
+## 5. Stable text, rich text, and observed-remove tree integration
 
-LWW-Set (`lww.Set`), LWW-Map (`lww.Map`), RGA (`text`), and OR-Tree (`tree`) are framed, HLC-backed
-experimental protocols. They are suitable only after the capability check above succeeds;
-the policy is local to a replication group and is not a dynamic plugin
-mechanism. Use each concrete decoder after the frame type is accepted—for
-example, `lww.UnmarshalSetDeltaWithLimits` for LWW-Set deltas,
-`text.UnmarshalRGADeltaWithLimits` for explicitly agreed v1 RGA deltas,
-`text.UnmarshalRGARunDeltaWithLimits` for explicitly agreed run-v2 RGA deltas, and
-`tree.UnmarshalDeltaWithLimits` for OR-Tree deltas. Do not dispatch an
-untrusted frame to a type merely because it has a valid checksum.
+Run-v2 RGA (`text`, TypeIDs 19/20) is a stable framed protocol included by the
+zero-value policy. Bind `text.StableFrameType()` and
+`text.RunV2SemanticsVersion` in the authenticated manifest, decode deltas with
+`text.UnmarshalRGARunDeltaWithLimits`, and never fall back to legacy v1 based
+on a frame that failed to match. The legacy scalar RGA v1 (`11/12`), LWW-Set
+(`lww.Set`), LWW-Map (`lww.Map`), and generic RGA list (`list.RGA`) remain
+experimental and require the capability check above. The policy is local to a replication group
+and is not a dynamic plugin mechanism. Do not dispatch an untrusted frame to a
+type merely because it has a valid checksum.
+
+Inline rich text (`richtext`, TypeIDs 23/24) is also stable under the zero-value
+policy. Bind `richtext.SemanticsVersion` and one exact application renderer /
+attribute `SchemaID` in its own manifest, decode with
+`richtext.UnmarshalDeltaWithLimits`, and persist its state, shared RGA HLC
+clock, delivery frontier, and outbox atomically. Attribute keys and values are
+not HTML or authorization claims: validate the manifest-selected schema and
+sanitize before rendering. The [rich-text v1 protocol](../protocol/richtext-v1.md)
+defines canonical vectors, limits, and exact-acknowledgement compaction.
+
+Observed-remove tree (`tree`, TypeIDs 17/18) is also stable under the zero-value
+policy. Bind `tree.SemanticsVersion` and an exact application node-value
+`SchemaID` in its own manifest, decode with `tree.UnmarshalDeltaWithLimits`,
+and persist its state, HLC clock, delivery frontier, and outbox atomically.
+Tree v1 uses immutable parent links with add/remove only: a move is a remove
+plus a new node instance, never a rewritten parent link. The
+[OR-Tree v1 protocol](../protocol/or-tree-v1.md) defines canonical vectors,
+limits, and exact-acknowledgement compaction.
 
 Persist a local LWW-Set, LWW-Map, RGA, or OR-Tree state frame and its HLC state atomically with the
 outbox/receipt transaction. Restore a same-ID replica only through
@@ -206,9 +225,11 @@ cannot prove the next locally emitted tag will be unique. RGA and OR-Tree retain
 delete tombstones for out-of-order delivery. RGA's `CompactTombstones` can
 remove only deleted leaves; the application must first establish an authenticated
 exact-acknowledgement epoch, durably save a post-compaction snapshot, and retire
-old deltas. LWW-Set, LWW-Map, and OR-Tree still have no exact-acknowledgement compaction,
-so integrations must budget, monitor, and retain their tombstones rather than
-calling a generic GC.
+old deltas. Tree's `CompactEligibleTombstones` can compact an already
+exact-acknowledged deleted branch leaf-to-root; an unselected or live child
+remains an anchor. LWW-Set and LWW-Map still have no exact-acknowledgement
+compaction, so integrations must budget, monitor, and retain their tombstones
+rather than calling a generic GC.
 
 ### 5.1 Attachment references
 
@@ -291,7 +312,7 @@ make test-integration
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
 | Business semantics | Product owners have accepted add-wins, grow-only G-Set and counter limits, and concurrent MV-Register value semantics. |
-| Experimental protocol agreement | LWW-Set/LWW-Map/legacy RGA v1/OR-Tree are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; HLC state is persisted and their tombstones are retained. |
+| Experimental protocol agreement | LWW-Set/LWW-Map/legacy RGA v1/generic RGA list are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; all HLC-backed protocols persist their clock state and retain tombstones until exact-ack compaction is authorized. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
 Passing `go test` proves the library and examples at this revision. It does not

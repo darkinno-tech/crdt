@@ -59,13 +59,13 @@ go test ./...
 
 - G-Counter、PN-Counter、G-Set、add-wins OR-Set 和因果 MV-Register。
 - 有界规范化 state/delta 帧、确定性 snapshot、恢复计划，以及可复用 replica ID 所需的 HLC 状态。
-- 默认使用稳定 run-v2 帧的 RGA 协作文本，以及 list、XML fragment 和有界 rich-text 层。
+- 默认使用稳定 run-v2 帧的 RGA 协作文本、稳定有界 rich-text 和 observed-remove tree 协议，以及 list、XML fragment 层。
 - Delta 批处理、Merkle 反熵、精确确认的 tombstone-GC 协调，以及 Manifest 绑定的 replica/inbox 恢复辅助能力。
 - 有界 live WebSocket provider、独立的 bbolt durable relay，以及本地 bbolt 检查点参考实现。
 - 可选、由 Manifest 协商的[压缩感知外层帧 v2](docs/protocol/frame-v2.md)，提供显式 v1 转换，但不改变 CRDT TypeID 或语义。
 - [RGA 诊断混淆](docs/integration/debug-obfuscation.zh-CN.md)：替换文本内容，同时保留隔离调试时间线的结构。
 
-实验协议（LWW-Set、LWW-Map、legacy scalar RGA v1、OR-Tree、list RGA、rich text）需要在每个参与边界显式启用 `ProtocolPolicy{AllowExperimental: true}`。帧类型本身从来不是已协商的协议、已认证的 peer，也不是 compact tombstone 的许可。
+实验协议（LWW-Set、LWW-Map、legacy scalar RGA v1、list RGA）需要在每个参与边界显式启用 `ProtocolPolicy{AllowExperimental: true}`。稳定 run-v2 RGA、rich-text v1 和 observed-remove tree v1 使用零值策略，但帧类型本身从来不是已协商的协议、已认证的 peer，也不是 compact tombstone 的许可。
 
 ## 按目标选择入口
 
@@ -78,6 +78,7 @@ go test ./...
 | 使用有界 live relay | [WebSocket provider 参考](docs/integration/websocket-provider.zh-CN.md) |
 | 在不复制媒体字节的前提下附加媒体 | [附件集成](docs/integration/attachment.zh-CN.md) |
 | 在 Go/Wasm 之外实现 run-v2 | [RGA run-v2 协议与向量](docs/protocol/rga-run-v2.zh-CN.md) |
+| 实现稳定格式化或树 | [rich-text v1](docs/protocol/richtext-v1.md) 和 [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
 
 [文档索引](docs/README.md) 将入门、集成、协议/设计、运维资料分层。详细性能证据和部署手册放在对应文档中，而不是让入口 README 变成操作手册。
 

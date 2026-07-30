@@ -1,7 +1,7 @@
 # CRDT collection extension design
 
 This document defines the collection boundary after the stable v1 core.
-LWW-Set, LWW-Map, legacy scalar RGA v1, and OR-Tree have framed codecs, bounded
+LWW-Set, LWW-Map, and legacy scalar RGA v1 have framed codecs, bounded
 decoders, HLC snapshots, and fuzz coverage, but remain experimental until their
 exact tombstone-GC lifecycle ships. New Go RGA groups use compact run-v2 frames
 (TypeIDs 19/20) through `crdt.DefaultRGAFrameType()`. Run-v2 retains scalar
@@ -21,18 +21,19 @@ than infer a format from Go internals.
 ## Experimental protocol policy
 
 `crdt.ProtocolPolicy` is the per-replication-group opt-in boundary. Its zero
-value advertises G-Counter, OR-Set, PN-Counter, G-Set, MV-Register, and default
-RGA run-v2 frames. Setting `AllowExperimental` additionally advertises LWW-Set,
-LWW-Map, legacy scalar RGA v1, and OR-Tree. Peers must compare the advertised
+value advertises G-Counter, OR-Set, PN-Counter, G-Set, MV-Register, default RGA
+run-v2, stable inline rich-text, and stable observed-remove tree v1 frames.
+Setting `AllowExperimental` additionally advertises LWW-Set, LWW-Map, legacy
+scalar RGA v1, and generic RGA list frames. Peers must compare the advertised
 `FrameTypes` before sending frames; this is capability negotiation, not a
 dynamic plugin registry and not a replacement for authentication,
 authorization, decoder limits, or application-level schema validation.
 
 The policy does not change frame parsing or make an unknown type acceptable.
 Callers that opt in must persist the associated HLC state and retain all
-LWW-Set, LWW-Map, legacy RGA v1, or OR-Tree tombstones. RGA run-v2 uses the
-same HLC recovery and tombstone-retention discipline. Exact acknowledgement and
-compaction for these HLC-backed types remain application responsibilities.
+LWW-Set, LWW-Map, legacy RGA v1, or generic RGA list tombstones. Stable
+HLC-backed protocols use the same recovery and tombstone-retention discipline.
+Exact acknowledgement and compaction remain application responsibilities.
 
 ## Semantics
 
@@ -91,12 +92,13 @@ An application using either protocol must therefore:
   `CompactEligibleTombstones` only to process an already proven batch in
   child-before-parent order; pending state and unacknowledged tags still block
   collection.
-- OR-Tree has the same lifecycle boundary. `tree.Options` bounds node,
-  tombstone, and value retention on both mutation and recovery; its compactor
-  removes only requested tombstoned leaves and refuses any retained structural
-  anchor. `tombstonegc.Coordinator.AcknowledgeAndCompactTarget` can reuse the
-  exact-acknowledgement epoch, but cannot substitute for durable checkpointing
-  and epoch-bound retirement of old frames.
+- Stable OR-Tree v1 has the same lifecycle boundary. `tree.Options` bounds
+  node, tombstone, and value retention on mutation and recovery; its ordinary
+  compactor removes only requested tombstoned leaves, while its eligible
+  compactor makes leaf-to-root progress only through an already exact-
+  acknowledged deleted branch. `tombstonegc.Coordinator.AcknowledgeAndCompactTarget`
+  can reuse the exact-acknowledgement epoch, but cannot substitute for durable
+  checkpointing and epoch-bound retirement of old frames.
 - Bound document nodes, operation bytes, sibling fan-out, and retained
   tombstones at the transport/application boundary. Checksums detect corruption
   only; authentication, authorization, encryption, rate limits, and quotas
@@ -143,11 +145,12 @@ observed-remove rooted forest with these rules:
 
 This keeps merge a set union plus tombstone subtraction, preserving
 commutativity, associativity, idempotence, and a mechanically testable no-cycle
-invariant. Tree framing, bounded decode, snapshot/HLC recovery, and leaf-only
-compaction are implemented experimentally. Before calling
-`CompactTombstones`, an application must collect exact authenticated
-acknowledgements from every current member in one epoch, persist a
-post-compaction checkpoint, and reject or retire every old-epoch frame. The
-leaf restriction is deliberately stricter than an acknowledgement proof: a
-known child makes its deleted parent a required structural anchor. These
-requirements remain a stable-promotion gate.
+invariant. Tree framing, bounded decode, snapshot/HLC recovery, canonical
+cross-language vectors, and exact-acknowledgement leaf-to-root compaction are
+stable v1; [the normative protocol](../protocol/or-tree-v1.md) fixes that
+contract. Before calling `CompactTombstones` or `CompactEligibleTombstones`, an
+application must collect exact authenticated acknowledgements from every
+current member in one epoch, persist a post-compaction checkpoint, and reject
+or retire every old-epoch frame. The structural restriction is deliberately
+stricter than an acknowledgement proof: an unselected or live child makes its
+deleted parent a required anchor.

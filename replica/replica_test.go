@@ -648,8 +648,8 @@ func TestInboxRejectsChangesFromAnotherEpoch(t *testing.T) {
 func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 	policy := crdt.ProtocolPolicy{AllowExperimental: true}
 	protocol := Protocol{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1}
-	oldManifest := mustExperimentalManifest(t, "text", "example.com/text/v1", 1, protocol, policy)
-	newManifest := mustExperimentalManifest(t, "text", "example.com/text/v1", 2, protocol, policy)
+	oldManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 1, protocol, policy)
+	newManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 2, protocol, policy)
 
 	oldAnchor, err := text.New("old-anchor")
 	if err != nil {
@@ -695,9 +695,9 @@ func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 		name   string
 		change Change
 	}{
-		{"compacted old anchor", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 1}, mustMarshalRGADelta(t, anchorDelta), policy)},
-		{"old anchor tombstone", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 2}, mustMarshalRGADelta(t, tombstoneDelta), policy)},
-		{"old parent reference", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-parent", Counter: 2}, mustMarshalRGADelta(t, childDelta), policy)},
+		{"compacted old anchor", mustPolicyChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 1}, mustMarshalRGADelta(t, anchorDelta), policy)},
+		{"old anchor tombstone", mustPolicyChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 2}, mustMarshalRGADelta(t, tombstoneDelta), policy)},
+		{"old parent reference", mustPolicyChange(t, oldManifest, Dot{Actor: "old-parent", Counter: 2}, mustMarshalRGADelta(t, childDelta), policy)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := inbox.Receive(test.change); !errors.Is(err, ErrManifestMismatch) {
@@ -719,7 +719,7 @@ func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change := mustExperimentalChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalRGADelta(t, future), policy)
+	change := mustPolicyChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalRGADelta(t, future), policy)
 	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
 		t.Fatalf("Receive(new epoch) = %#v, %v", delivery, err)
 	}
@@ -729,10 +729,10 @@ func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 }
 
 func TestCheckpointRebaseRejectsOldEpochORTreeAnchorsAndParents(t *testing.T) {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
-	protocol := Protocol{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, SemanticsVersion: 1}
-	oldManifest := mustExperimentalManifest(t, "tree", "example.com/tree/v1", 1, protocol, policy)
-	newManifest := mustExperimentalManifest(t, "tree", "example.com/tree/v1", 2, protocol, policy)
+	policy := crdt.ProtocolPolicy{}
+	protocol := Protocol{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, SemanticsVersion: tree.SemanticsVersion}
+	oldManifest := mustPolicyManifest(t, "tree", "example.com/tree/v1", 1, protocol, policy)
+	newManifest := mustPolicyManifest(t, "tree", "example.com/tree/v1", 2, protocol, policy)
 
 	old, err := tree.New("old")
 	if err != nil {
@@ -767,9 +767,9 @@ func TestCheckpointRebaseRejectsOldEpochORTreeAnchorsAndParents(t *testing.T) {
 		name   string
 		change Change
 	}{
-		{"old anchor", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 1}, mustMarshalORTreeDelta(t, oldRootDelta), policy)},
-		{"old parent reference", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 2}, mustMarshalORTreeDelta(t, oldChildDelta), policy)},
-		{"old anchor tombstone", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 3}, mustMarshalORTreeDelta(t, oldRemoveDelta), policy)},
+		{"old anchor", mustPolicyChange(t, oldManifest, Dot{Actor: "old", Counter: 1}, mustMarshalORTreeDelta(t, oldRootDelta), policy)},
+		{"old parent reference", mustPolicyChange(t, oldManifest, Dot{Actor: "old", Counter: 2}, mustMarshalORTreeDelta(t, oldChildDelta), policy)},
+		{"old anchor tombstone", mustPolicyChange(t, oldManifest, Dot{Actor: "old", Counter: 3}, mustMarshalORTreeDelta(t, oldRemoveDelta), policy)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := inbox.Receive(test.change); !errors.Is(err, ErrManifestMismatch) {
@@ -788,7 +788,7 @@ func TestCheckpointRebaseRejectsOldEpochORTreeAnchorsAndParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change := mustExperimentalChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalORTreeDelta(t, future), policy)
+	change := mustPolicyChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalORTreeDelta(t, future), policy)
 	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
 		t.Fatalf("Receive(new epoch) = %#v, %v", delivery, err)
 	}
@@ -960,7 +960,7 @@ func testCheckpoint(t *testing.T) (Manifest, Checkpoint) {
 	return manifest, checkpoint
 }
 
-func mustExperimentalManifest(t testing.TB, groupID, schemaID string, epoch uint64, protocol Protocol, policy crdt.ProtocolPolicy) Manifest {
+func mustPolicyManifest(t testing.TB, groupID, schemaID string, epoch uint64, protocol Protocol, policy crdt.ProtocolPolicy) Manifest {
 	t.Helper()
 	manifest, err := NewManifest(groupID, schemaID, epoch, protocol, policy)
 	if err != nil {
@@ -969,7 +969,7 @@ func mustExperimentalManifest(t testing.TB, groupID, schemaID string, epoch uint
 	return manifest
 }
 
-func mustExperimentalChange(t testing.TB, manifest Manifest, dot Dot, delta []byte, policy crdt.ProtocolPolicy) Change {
+func mustPolicyChange(t testing.TB, manifest Manifest, dot Dot, delta []byte, policy crdt.ProtocolPolicy) Change {
 	t.Helper()
 	change, err := NewChangeWithPolicy(manifest, dot, delta, policy)
 	if err != nil {

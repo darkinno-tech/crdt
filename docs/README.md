@@ -36,6 +36,8 @@ be committed.
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
 - [Awareness / presence v1](protocol/awareness-v1.md)
 - [Awareness / presence v1 协议](protocol/awareness-v1.zh-CN.md)
+- [Rich-text v1 wire protocol](protocol/richtext-v1.md)
+- [Observed-remove tree v1 wire protocol](protocol/or-tree-v1.md)
 - [Bounded rich-text inline-format design](design/rich-text.md)
 
 ## Operations and architecture

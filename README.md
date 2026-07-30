@@ -59,13 +59,13 @@ go test ./...
 
 - G-Counter, PN-Counter, G-Set, add-wins OR-Set, and causal MV-Register.
 - Bounded canonical state/delta frames, deterministic snapshots, recovery plans, and persisted HLC state for reusable replica identities.
-- RGA collaborative text with stable run-v2 frames by default, plus list, XML-fragment, and bounded rich-text layers.
+- RGA collaborative text with stable run-v2 frames by default; stable bounded rich-text and observed-remove tree protocols; plus list and XML-fragment layers.
 - Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
 - A bounded live WebSocket provider, a separate bbolt-backed durable relay, and a local bbolt checkpoint reference.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
 - [RGA diagnostic obfuscation](docs/integration/debug-obfuscation.md) that replaces text content while retaining an isolated debug timeline structure.
 
-Experimental protocols—LWW-Set, LWW-Map, legacy scalar RGA v1, OR-Tree, list RGA, and rich text—need explicit `ProtocolPolicy{AllowExperimental: true}` at every participating boundary. A frame type alone is never a negotiated protocol, authenticated peer, or permission to compact tombstones.
+Experimental protocols—LWW-Set, LWW-Map, legacy scalar RGA v1, and list RGA—need explicit `ProtocolPolicy{AllowExperimental: true}` at every participating boundary. Stable run-v2 RGA, rich-text v1, and observed-remove tree v1 use the zero policy, but a frame type alone is never a negotiated protocol, authenticated peer, or permission to compact tombstones.
 
 ## Choose a path
 
@@ -78,6 +78,7 @@ Experimental protocols—LWW-Set, LWW-Map, legacy scalar RGA v1, OR-Tree, list R
 | Use a bounded live relay | [WebSocket provider reference](docs/integration/websocket-provider.md) |
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
 | Implement run-v2 outside Go/Wasm | [RGA run-v2 protocol and vectors](docs/protocol/rga-run-v2.md) |
+| Implement stable formatting or trees | [Rich-text v1](docs/protocol/richtext-v1.md) and [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
 
 The [documentation index](docs/README.md) separates getting-started, integration, protocol/design, and operational material. Detailed performance evidence and deployment runbooks live there instead of making this entry page a manual.
 

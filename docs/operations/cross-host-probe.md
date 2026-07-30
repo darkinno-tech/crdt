@@ -133,13 +133,14 @@ Repeat from host B and the local machine with distinct IDs and elements. The
 returned JSON from both targets must have identical counter component maps and
 the same sorted element set.
 
-### Optional experimental RGA path
+### Optional explicit RGA diagnostic path
 
 The probe does **not** negotiate a `replica.Manifest` or `ProtocolPolicy`.
 Treat RGA as an explicit controlled test only: start every receiver and sender
-with the same `-rga-protocol` (`v1` or `run-v2`). Without that flag `/rga` is
-disabled. Do not mix the two wire shapes; a mismatched receiver rejects the
-frame before its RGA changes.
+with the same `-rga-protocol` (`v1` or stable `run-v2`). Without that flag
+`/rga` is disabled. Do not mix the two wire shapes; a mismatched receiver
+rejects the frame before its RGA changes. This route does not establish the
+manifest authentication required by a production run-v2 group.
 
 ```sh
 # Add the same flag on both host receivers in step 4.

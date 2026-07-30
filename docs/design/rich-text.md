@@ -2,10 +2,10 @@
 
 ## Decision
 
-Add rich text as a new **experimental, manifest-bound** CRDT instead of
-changing either RGA v1 (`11/12`) or RGA run-v2 (`19/20`). The proposed wire
-pair is `23/24`, with semantic version `1` and an explicit
-`crdt.ProtocolPolicy{AllowExperimental: true}` at every replication boundary.
+Rich text is a stable, manifest-bound CRDT instead of a change to either RGA
+v1 (`11/12`) or RGA run-v2 (`19/20`). Its immutable wire pair is `23/24` with
+semantic version `1`; the zero-value `crdt.ProtocolPolicy` accepts it. The
+[rich-text v1 wire protocol](../protocol/richtext-v1.md) is normative.
 
 The first version deliberately supports **inline attributes** only: bold,
 italic, colour tokens, links, comments, and application-defined string
@@ -88,7 +88,7 @@ richtext.Document
        Type 23/24 canonical outer frame
              |
              v
- authenticated replica.Manifest + experimental policy
+ authenticated replica.Manifest + stable policy
 ```
 
 The outer payload contains one canonical nested run-v2 RGA frame and either
@@ -110,7 +110,7 @@ can recover exactly.
 | Concurrency | A document-level mutex makes a compound text-plus-format delta atomic to public callers; RGA retains its own synchronization. |
 | Security | Attributes are UTF-8 strings, not HTML, CSS, JSON, URLs, or executable values. Rendering policy, link allowlists, sanitization, authorization, rate limits, and identity remain application-owned. CRC-32C detects corruption, not attackers. |
 | Persistence | Save the rich-text state frame and its shared RGA HLC state atomically. Keep removed attributes and text tombstones until the same authenticated epoch/exact-ack checkpoint rule permits retirement. |
-| Compatibility | Frames `23/24` are rejected by the zero policy. A rich-text manifest cannot be mixed with raw RGA `19/20` frames in one replication group. |
+| Compatibility | Frames `23/24` are accepted by the zero policy. A manifest's exact `SchemaID` binds the renderer/attribute schema; a rich-text manifest cannot be mixed with raw RGA `19/20` frames in one replication group. |
 
 ## API contract
 
@@ -147,9 +147,12 @@ benchmarks for 10K-character formatted selections and realistic multi-editor
 documents. Results are a local production-like simulation, not proof of a
 live deployment.
 
-## Promotion gates
+## Stable boundary
 
-This remains experimental until it has cross-language vectors, a renderer
-schema/interoperability contract, measured large-document profiles, a
-format-metadata GC bridge tied to exact acknowledgements, and an
-intent-preservation evaluation for boundary spans and concurrent formatting.
+The stable surface is intentionally limited to inline attributes selected by
+exact RGA positions. Canonical cross-language vectors, schema-bound manifests,
+large-document benchmarks, exact-acknowledgement metadata compaction, and
+concurrent formatting simulations are part of the contract. Boundary
+inheritance, paragraphs, lists, tables, embeds, HTML/CSS values, and tree
+structure remain out of scope; any of them requires a separately negotiated
+protocol instead of changing v1 semantics.
