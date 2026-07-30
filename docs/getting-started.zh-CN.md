@@ -5,30 +5,40 @@
 这是一条从新检出代码到实现一个可复制功能的最短安全路径：先用稳定 CRDT 和可执行示例
 建立认知，再明确真实网络边界仍需由应用补齐的能力。它不会把本库或示例描述成托管同步服务。
 
-## 1. 验证检出代码
+## 1. 跑通一条完整、安全的投递路径
 
-模块的 Go 语言最低版本为 1.21。新检出后在仓库根目录运行：
+模块的 Go 语言最低版本为 1.21。在已有 Go 应用中，先加入最新稳定模块：
+
+```sh
+go get github.com/DarkInno/crdt@latest
+```
+
+然后从本地检出中查看并运行最小的完整参考：
 
 ```sh
 git clone https://github.com/DarkInno/crdt.git
 cd crdt
 go version
-go test ./...
-go run ./examples/collaborative-board
+go run ./examples/getting-started
+go test ./examples/getting-started
 ```
 
-建议先运行协作任务看板示例。它会序列化并解码 delta，故意重复投递和乱序投递一条更新，
-模拟分区期间的 add-wins 冲突，并从快照恢复同一 OR-Set 副本 ID。预期最终状态为：
+期望输出：
 
 ```text
-completed-inspections=5
-open-tasks=[close-shift inspect-pump replace-filter]
+left=5
+right=5
+converged=true
 ```
 
-若要在另一个 Go 项目中使用本模块，执行：
+该示例只使用稳定的 G-Counter 协议。它将本地修改、编码后的 outbox 记录、有界接收解码器和
+`ApplyDelta` 保持分离，使应用边界清晰可见；其中一条记录会被故意重复投递，两个副本仍会收敛。
+这里的小限额用于教学，不是生产容量建议。
+
+若是修改库本身而不是接入库，请单独验证整个检出：
 
 ```sh
-go get github.com/DarkInno/crdt@latest
+go test ./...
 ```
 
 ## 2. 先选数据类型，再写传输代码
@@ -53,7 +63,21 @@ go get github.com/DarkInno/crdt@latest
 go test -run '^Example(GCounter|PNCounter|ORSet|GSet|MVRegister)$' .
 ```
 
-要运行包含 framed G-Set、MV-Register、重复投递和恢复的真实流程：
+完成最小流程后，建议运行协作任务看板这一真实场景。它使用有界的 G-Counter 和 OR-Set 解码器，
+故意重复/乱序投递更新，模拟分区中的 add-wins 冲突，并从快照恢复相同 OR-Set 副本 ID：
+
+```sh
+go run ./examples/collaborative-board
+```
+
+预期最终状态：
+
+```text
+completed-inspections=5
+open-tasks=[close-shift inspect-pump replace-filter]
+```
+
+要运行包含 framed G-Set、MV-Register、重复投递和恢复的流程：
 
 ```sh
 go run ./examples/warehouse-replication
@@ -109,7 +133,8 @@ if err := remote.ApplyDelta(received); err != nil {
 HTTP/WebSocket body，并在重试前持久化 mutation/outbox 记录。
 [端到端集成教程](integration/overview.zh-CN.md)给出了完整本地投递演练；
 [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)给出了有界、
-Manifest 绑定的 Go 接入模式。
+Manifest 绑定的 Go 接入模式。这个拆分的完整、可编译 G-Counter 版本见
+[`examples/getting-started`](../examples/getting-started)；应复用其结构，而不是照搬示例限额。
 
 ## 4. 持久化完整的恢复记录
 

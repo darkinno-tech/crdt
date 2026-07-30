@@ -38,8 +38,8 @@ completed-inspections=5
 open-tasks=[close-shift inspect-pump replace-filter]
 ```
 
-The program serializes and decodes every delta before applying it. It delivers
-one counter delta and one reopened-task delta twice. While the field van is
+The program serializes every delta and decodes it with an explicit receive
+budget before applying it. It delivers one counter delta and one reopened-task delta twice. While the field van is
 partitioned, it removes `inspect-pump` after observing it while dispatch
 independently adds that task again. The new add has a different tag, so it
 survives the observed remove: this is add-wins. It then creates

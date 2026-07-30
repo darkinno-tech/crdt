@@ -205,6 +205,13 @@ go test ./...
 
 ## Quick start
 
+If this is your first CRDT integration, start with the [developer
+getting-started guide](docs/getting-started.md) and run
+`go run ./examples/getting-started` from a checkout. It is a complete stable
+G-Counter delivery path: local mutation, encoded outbox record, bounded receive
+decode, and duplicate-safe application. The small in-memory examples below are
+API references; they intentionally do not replace that receive boundary.
+
 ### G-Counter
 
 Each replica increments only its own component. `Merge` takes the per-replica

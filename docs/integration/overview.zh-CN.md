@@ -35,7 +35,7 @@ completed-inspections=5
 open-tasks=[close-shift inspect-pump replace-filter]
 ```
 
-程序在应用前会序列化并解码每个 delta；其中一个 counter delta 和一个重新开放
+程序会序列化每个 delta，并在应用前使用显式接收限额解码；其中一个 counter delta 和一个重新开放
 任务的 delta 都被投递两次。现场车辆网络分区时，在已经观察到 `inspect-pump`
 后将其移除；调度端同时再次添加同一任务。新 add 带有不同标签，因而能在已观察
 到的 remove 后保留，这就是 add-wins。随后程序通过 `SnapshotCurrentState` 保存

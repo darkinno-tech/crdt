@@ -8,6 +8,8 @@ be committed.
 
 - [Developer getting-started guide](getting-started.md)
 - [开发者入门指南](getting-started.zh-CN.md)
+- [Minimal bounded-delivery example](../examples/getting-started)
+- [最小有界投递示例](../examples/getting-started)
 
 ## Integration
 

@@ -152,6 +152,11 @@ go test ./...
 
 ## 快速开始
 
+如果这是你的第一次 CRDT 集成，先阅读[开发者入门指南](docs/getting-started.zh-CN.md)，并在本地检出目录运行
+`go run ./examples/getting-started`。它是完整、稳定的 G-Counter 投递路径：本地修改、编码 outbox
+记录、接收端有界解码，以及重复投递的安全应用。下方的内存内示例是 API 参考；它们有意不替代
+这一接收边界。
+
 ### G-Counter
 
 每个副本仅递增自己的分量。`Merge` 取每个副本分量的最大值，因此满足
