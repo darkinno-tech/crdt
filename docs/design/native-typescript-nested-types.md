@@ -34,7 +34,9 @@ root NativeMap / NativeArray
   would require reusing a live immutable ID.
 - The nested validator rejects marker-shaped JSON at every non-reference depth,
   type mismatches, reference-ID mismatches, active aliases, malformed IDs, and
-  capacity excess before native state changes.
+  capacity excess before native state changes. Local child creation builds an
+  operation without advancing the replica counter, preflights the nested
+  metadata and native envelope, and only then commits both together.
 - A child operation received before its parent reference is retained as one
   bounded canonical update. It is replayed only after the parent makes the
   expected child type known. Snapshots reject while such traffic is pending.

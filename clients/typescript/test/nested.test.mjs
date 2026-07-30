@@ -124,6 +124,25 @@ test("nested references reject ID mismatch, aliasing, and malformed marker value
   assert.equal(root.has("second"), false);
 });
 
+test("rejected local child creation leaves nested metadata and counters unchanged", () => {
+  const byteBounded = new NativeNestedDocument("alice", { maxUpdateBytes: 1, maxValueBytes: 1 });
+  const root = byteBounded.getMap("root");
+  assertCode(() => root.createMap("too-large"), "resource_limit");
+  assert.equal(root.size, 0);
+  assert.equal(byteBounded.snapshot().native.counter, 0);
+  assert.deepEqual(byteBounded.snapshot().containers, []);
+
+  const capacityBounded = new NativeNestedDocument("bob", { maxNestedTypes: 1 });
+  const limitedRoot = capacityBounded.getMap("root");
+  limitedRoot.createMap("first");
+  assertCode(() => limitedRoot.createArray("second"), "resource_limit");
+  const snapshot = capacityBounded.snapshot();
+  assert.equal(snapshot.native.counter, 1);
+  assert.equal(snapshot.containers.length, 1);
+  assert.ok(limitedRoot.get("first") instanceof NativeNestedMap);
+  assert.equal(limitedRoot.get("second"), undefined);
+});
+
 test("nested update admission fuzzes malformed bytes without non-domain failures", () => {
   const document = new NativeNestedDocument("fuzz-target");
   document.getMap("root");

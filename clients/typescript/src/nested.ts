@@ -474,9 +474,8 @@ export class NativeNestedDocument {
   /** @internal */
   _setMapChild(target: string, key: string, type: NativeNestedType): NativeNestedMap | NativeNestedArray {
     this.#assertTargetType(target, "map");
-    const id = this.#native._nextID();
+    const id = this.#native._peekNextID();
     const reference = makeReference(id, type, this.limits);
-    this.#registerContainer(id, type);
     this.#applyLocal({ kind: "map-set", target, key, id, value: reference as unknown as NativeValue });
     return this.#wrapper(targetFor(id, this.limits), type);
   }
@@ -506,10 +505,9 @@ export class NativeNestedDocument {
   /** @internal */
   _insertArrayChild(target: string, index: number, type: NativeNestedType): NativeNestedMap | NativeNestedArray {
     this.#assertTargetType(target, "array");
-    const id = this.#native._nextID();
-    this.#registerContainer(id, type);
-    const operation = this._rawArray(target)._insertWithIDs(index, [{ id, value: makeReference(id, type, this.limits) as unknown as NativeValue }]);
-    this.#commitLocal(operation);
+    const id = this.#native._peekNextID();
+    const operation = this._rawArray(target)._planInsertWithIDs(index, [{ id, value: makeReference(id, type, this.limits) as unknown as NativeValue }]);
+    this.#applyLocal(operation);
     return this.#wrapper(targetFor(id, this.limits), type);
   }
 
@@ -523,17 +521,26 @@ export class NativeNestedDocument {
   }
 
   #applyLocal(operation: NativeOperation): void {
-    const applied = this.#native._applyLocal(operation);
-    this.#commitLocal(applied);
-  }
-
-  #commitLocal(operation: NativeOperation): void {
-    const update: NativeUpdate = { version: NATIVE_UPDATE_VERSION, actor: this.replicaID, operations: [operation] };
+    const update = normalizedUpdate({
+      version: NATIVE_UPDATE_VERSION,
+      actor: this.replicaID,
+      operations: [operation],
+    }, this.limits);
     const staged = this.#stageMetadata(update);
     if (staged === undefined) {
       throw new NativeCRDTError("state_conflict");
     }
-    this.#installMetadata(staged);
+    const applied = this.#native._applyLocal(operation);
+    this.#commitLocal(applied, staged);
+  }
+
+  #commitLocal(operation: NativeOperation, staged?: Metadata): void {
+    const update: NativeUpdate = { version: NATIVE_UPDATE_VERSION, actor: this.replicaID, operations: [operation] };
+    const resolved = staged ?? this.#stageMetadata(update);
+    if (resolved === undefined) {
+      throw new NativeCRDTError("state_conflict");
+    }
+    this.#installMetadata(resolved);
     this.#localOperations.push(operation);
     if (this.#transactionDepth === 0) {
       this.#flushLocal();
