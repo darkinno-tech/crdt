@@ -1,4 +1,4 @@
-.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark wasm-benchmark sync-main
+.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark wasm-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -79,6 +79,9 @@ wasm-test: wasm
 
 typescript-benchmark:
 	$(NPM) --prefix clients/typescript run bench:frame
+
+typescript-native-benchmark:
+	$(NPM) --prefix clients/typescript run bench:native
 
 wasm-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts

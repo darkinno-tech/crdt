@@ -123,6 +123,7 @@ From the repository root:
 make wasm
 make wasm-v1 # optional legacy scalar-v1 artifact in .tmp/crdt-rga-v1-wasm/
 make typescript-test
+make typescript-native-benchmark
 make wasm-test
 make wasm-v1-test # verifies the separately built legacy artifact
 make typescript-benchmark
@@ -135,9 +136,10 @@ different Go release with the generated module. The Node test loads the actual
 Wasm artifact, checks Go-to-TypeScript frame decoding, and simulates three
 replicas with duplicate, reordered delivery and snapshot recovery.
 
-The two benchmark targets report raw five-sample decoder throughput and actual
-Node-to-Go-Wasm insert/apply latency. Treat them as a baseline for the local
-machine and Go/Node versions, not a mobile-device SLA.
+The native benchmark reports append, middle insert, shuffled replication, and
+state-update samples; the existing targets report raw decoder throughput and
+actual Node-to-Go-Wasm insert/apply latency. Treat all of them as controlled
+baselines for the local machine and Node/Go versions, not a mobile-device SLA.
 
 The current controlled local sample, including all five values and frame sizes,
 is recorded in the [2026-07-29 benchmark report](../../docs/operations/benchmark-2026-07-29.md).
