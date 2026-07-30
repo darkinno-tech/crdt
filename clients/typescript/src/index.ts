@@ -24,3 +24,33 @@ export type {
   RGATag,
   RGAProtocol,
 } from "./wasm.js";
+export {
+  decodeNativeUpdate,
+  DEFAULT_NATIVE_LIMITS,
+  encodeNativeUpdate,
+  NativeArray,
+  NativeCRDTError,
+  NativeDocument,
+  NativeMap,
+  NATIVE_UPDATE_VERSION,
+} from "./native.js";
+export type {
+  NativeArrayDeleteOperation,
+  NativeArrayEntry,
+  NativeArrayInsertOperation,
+  NativeCRDTErrorCode,
+  NativeDocumentLimits,
+  NativeDocumentOptions,
+  NativeID,
+  NativeMapDeleteOperation,
+  NativeMapSetOperation,
+  NativeOperation,
+  NativeRoot,
+  NativeSnapshot,
+  NativeTypeEvent,
+  NativeTypeListener,
+  NativeUpdate,
+  NativeUpdateEvent,
+  NativeUpdateListener,
+  NativeValue,
+} from "./native.js";

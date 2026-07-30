@@ -3,10 +3,11 @@
   "version": "0.0.0-development",
   "private": true,
   "type": "module",
-  "description": "Bounded CRDT frame decoding and the RGA Wasm browser client",
+  "description": "Bounded CRDT frame decoding, native TS shared types, and the RGA Wasm browser client",
   "exports": {
     ".": "./dist/index.js",
     "./frame": "./dist/frame.js",
+    "./native": "./dist/native.js",
     "./wasm": "./dist/wasm.js"
   },
   "files": [
