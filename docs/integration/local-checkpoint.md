@@ -69,6 +69,40 @@ if err != nil {
 defer store.Close()
 ```
 
+### Load bounded settings explicitly
+
+Host applications can build the same typed configuration from the immutable
+layered `config.Loader`; constructors still do not read environment variables
+themselves. Every capacity is deliberately required, while the bbolt lock
+timeout and format policy have documented defaults. For an environment source
+with prefix `CRDT_`, provide `CRDT_PERSISTENCE_MAX_RECORD_BYTES`,
+`CRDT_PERSISTENCE_MAX_STATE_BYTES`, `CRDT_PERSISTENCE_MAX_FRONTIER_ENTRIES`,
+`CRDT_PERSISTENCE_MAX_REPLICA_ID_BYTES`, `CRDT_PERSISTENCE_MAX_OUTBOX_BYTES`,
+and `CRDT_PERSISTENCE_MAX_NAME_BYTES`.
+
+```go
+environment, err := config.NewEnvironment("CRDT_")
+if err != nil {
+	return err
+}
+loader, err := config.New(environment)
+if err != nil {
+	return err
+}
+config, err := persistence.ConfigFrom(loader, validateTasks)
+if err != nil {
+	return err
+}
+store, err := persistence.Open("/var/lib/myapp/tasks.db", config)
+```
+
+For `FileStore`, also require `CRDT_PERSISTENCE_MAX_STORE_BYTES` and call
+`persistence.FileConfigFrom`. `PERSISTENCE_FORMAT_VERSION`,
+`PERSISTENCE_FORMAT_COMPATIBILITY` (`current` or `current-and-previous`), and
+`PERSISTENCE_MIGRATE_ON_LOAD` are optional. Validators and executable
+migrations remain code-owned arguments to `ConfigFrom`/`FileConfigFrom`; never
+encode or source them from environment data.
+
 ## Record-format compatibility and migration
 
 `Config.Format` is the single policy for the local checkpoint envelope. New
@@ -204,7 +238,7 @@ go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
 ```
 
 These checks cover local restart, corruption rejection, concurrent access, and

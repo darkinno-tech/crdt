@@ -65,6 +65,37 @@ if err != nil {
 defer store.Close()
 ```
 
+### 显式加载有界配置
+
+宿主应用可以通过不可变、分层的 `config.Loader` 构造同一份强类型配置；构造函数自身仍不会
+隐式读取环境变量。所有容量仍必须显式提供；bbolt 锁超时和格式策略才有文档化默认值。若环境
+source 使用 `CRDT_` 前缀，则必须提供 `CRDT_PERSISTENCE_MAX_RECORD_BYTES`、
+`CRDT_PERSISTENCE_MAX_STATE_BYTES`、`CRDT_PERSISTENCE_MAX_FRONTIER_ENTRIES`、
+`CRDT_PERSISTENCE_MAX_REPLICA_ID_BYTES`、`CRDT_PERSISTENCE_MAX_OUTBOX_BYTES` 与
+`CRDT_PERSISTENCE_MAX_NAME_BYTES`。
+
+```go
+environment, err := config.NewEnvironment("CRDT_")
+if err != nil {
+	return err
+}
+loader, err := config.New(environment)
+if err != nil {
+	return err
+}
+config, err := persistence.ConfigFrom(loader, validateTasks)
+if err != nil {
+	return err
+}
+store, err := persistence.Open("/var/lib/myapp/tasks.db", config)
+```
+
+`FileStore` 还必须提供 `CRDT_PERSISTENCE_MAX_STORE_BYTES` 并调用
+`persistence.FileConfigFrom`。`PERSISTENCE_FORMAT_VERSION`、
+`PERSISTENCE_FORMAT_COMPATIBILITY`（`current` 或 `current-and-previous`）以及
+`PERSISTENCE_MIGRATE_ON_LOAD` 可省略。validator 和可执行 migration 仍应作为
+`ConfigFrom`/`FileConfigFrom` 的代码参数；绝不能从环境配置中读取或编码它们。
+
 ## 记录格式兼容与迁移
 
 `Config.Format` 是本地 checkpoint 外层记录格式的唯一策略入口。新 Store 默认写入
@@ -179,7 +210,7 @@ go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
 ```
 
 这些检查覆盖本地重启、损坏拒绝、并发访问和 fuzz 解码；它们不证明宿主备份、磁盘写满、
