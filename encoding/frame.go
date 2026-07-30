@@ -83,13 +83,32 @@ type PayloadWriter func([]byte) error
 // computes a checksum matching the completed payload.
 func MarshalFrameWithPayload(typeID uint64, codecID string, payloadLength int, writePayload PayloadWriter) ([]byte, error) {
 	limits := DefaultLimits()
-	if typeID == 0 || payloadLength < 0 || len(codecID) > limits.MaxCodecID || payloadLength > limits.MaxPayload {
+	return MarshalFrameWithPayloadAndLimits(typeID, codecID, payloadLength, limits, writePayload)
+}
+
+// MarshalFrameWithPayloadAndLimits returns the canonical v1 frame for a
+// payload written directly into its final output buffer while enforcing every
+// supplied output limit. This lets protocol encoders preflight a local change
+// against the exact frame budget their peer will enforce before mutating local
+// CRDT state.
+func MarshalFrameWithPayloadAndLimits(typeID uint64, codecID string, payloadLength int, limits Limits, writePayload PayloadWriter) ([]byte, error) {
+	if !limits.valid() || typeID == 0 || payloadLength < 0 || len(codecID) > limits.MaxCodecID || payloadLength > limits.MaxPayload {
 		return nil, ErrFrameLimit
 	}
 	if writePayload == nil {
 		return nil, ErrInvalidFrame
 	}
-	buf := make([]byte, 0, 4+binary.MaxVarintLen64*4+len(codecID)+payloadLength+4)
+	// Check the final envelope before allocating it. payloadLength is bounded by
+	// MaxPayload, but a caller may deliberately set a smaller MaxFrameBytes.
+	// Keep the arithmetic subtraction-based so even adversarially large limits
+	// cannot overflow an int while bypassing the frame budget.
+	envelopeBytes := 4 + UvarintSize(FormatVersion) + UvarintSize(typeID) +
+		UvarintSize(uint64(len(codecID))) + len(codecID) +
+		UvarintSize(uint64(payloadLength)) + 4
+	if envelopeBytes > limits.MaxFrameBytes || payloadLength > limits.MaxFrameBytes-envelopeBytes {
+		return nil, ErrFrameLimit
+	}
+	buf := make([]byte, 0, envelopeBytes+payloadLength)
 	buf = append(buf, 'C', 'R', 'D', 'T')
 	buf = binary.AppendUvarint(buf, FormatVersion)
 	buf = binary.AppendUvarint(buf, typeID)

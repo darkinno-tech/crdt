@@ -82,6 +82,28 @@ func TestUnmarshalFrameViewBorrowsPayloadWhileUnmarshalFrameOwnsIt(t *testing.T)
 	}
 }
 
+func TestMarshalFrameWithPayloadAndLimitsHonorsWholeFrameBudget(t *testing.T) {
+	t.Parallel()
+	payload := []byte("state")
+	limits := DefaultLimits()
+	encoded, err := MarshalFrameWithPayloadAndLimits(1, "", len(payload), limits, func(destination []byte) error {
+		copy(destination, payload)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("MarshalFrameWithPayloadAndLimits() error = %v", err)
+	}
+	if _, err := UnmarshalFrame(encoded, limits); err != nil {
+		t.Fatalf("UnmarshalFrame() error = %v", err)
+	}
+
+	tight := limits
+	tight.MaxFrameBytes = len(encoded) - 1
+	if _, err := MarshalFrameWithPayloadAndLimits(1, "", len(payload), tight, func([]byte) error { return nil }); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("whole-frame limit error = %v, want %v", err, ErrFrameLimit)
+	}
+}
+
 func TestFrameRejectsLimitsAndMalformedBytes(t *testing.T) {
 	t.Parallel()
 	encoded, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("x")})
