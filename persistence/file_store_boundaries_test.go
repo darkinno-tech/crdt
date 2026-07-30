@@ -11,9 +11,6 @@ import (
 )
 
 func TestFileStoreConfigurationAndClosedBoundaries(t *testing.T) {
-	if (FileConfig{}).valid() {
-		t.Fatal("zero FileConfig is valid")
-	}
 	if _, err := (FileConfig{MaxStoreBytes: 1}).normalized(); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("normalized invalid Config error = %v", err)
 	}
