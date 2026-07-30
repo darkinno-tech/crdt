@@ -44,6 +44,32 @@ func TestRGAConcurrentInsertsConverge(t *testing.T) {
 	}
 }
 
+func TestRGAVisibleRunesReturnsOneIndependentProjection(t *testing.T) {
+	value, err := New("projection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := value.Insert(0, "a界b"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := value.Len(), 3; got != want {
+		t.Fatalf("Len() = %d, want %d", got, want)
+	}
+	positions, runes := value.VisibleRunes()
+	if len(positions) != 3 || string(runes) != "a界b" {
+		t.Fatalf("VisibleRunes() = %#v, %q", positions, string(runes))
+	}
+	positions[0], runes[0] = Position{}, 'x'
+	againPositions, againRunes := value.VisibleRunes()
+	if !againPositions[0].Valid() || string(againRunes) != "a界b" {
+		t.Fatalf("VisibleRunes exposed RGA state: %#v, %q", againPositions, string(againRunes))
+	}
+	var nilValue *RGA
+	if positions, runes := nilValue.VisibleRunes(); positions != nil || runes != nil {
+		t.Fatalf("nil VisibleRunes() = %#v, %#v", positions, runes)
+	}
+}
+
 func TestRGADeleteBeforeInsertAndInputBounds(t *testing.T) {
 	source, err := New("source")
 	if err != nil {

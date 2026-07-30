@@ -23,6 +23,30 @@ func BenchmarkRichTextFormatTenThousandRunes(b *testing.B) {
 	}
 }
 
+func BenchmarkRichTextApplyFormattedSelectionTenThousandRunes(b *testing.B) {
+	source := mustDocument(b, "format-source")
+	seed, err := source.Insert(0, strings.Repeat("a", benchmarkRichTextRunes))
+	if err != nil {
+		b.Fatal(err)
+	}
+	format, err := source.Format(0, benchmarkRichTextRunes, []AttributeChange{{Key: "highlight", Value: "yellow"}})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for iteration := 0; iteration < b.N; iteration++ {
+		b.StopTimer()
+		document := mustDocument(b, "format-receiver")
+		if err := document.ApplyDelta(seed); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		if err := document.ApplyDelta(format); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkRichTextMarshalStateTenThousandFormattedRunes(b *testing.B) {
 	document := mustDocument(b, "marshal")
 	if _, err := document.Insert(0, strings.Repeat("a", benchmarkRichTextRunes)); err != nil {

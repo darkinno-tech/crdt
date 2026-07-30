@@ -3,6 +3,8 @@ package richtext
 import (
 	"math/rand"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -51,6 +53,107 @@ func TestEditorialReviewOverUnreliableNetwork(t *testing.T) {
 		}
 	}
 	saved, err := bob.SnapshotCurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := NewFromSnapshot(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recovered.Spans(); !reflect.DeepEqual(got, wantSpans) {
+		t.Fatalf("recovered spans = %#v, want %#v", got, wantSpans)
+	}
+}
+
+// TestMultiEditorFormattingWorkloadConvergesAfterReconnect models a longer
+// document-review session. Each editor makes local insert, format, and delete
+// decisions from its own stale projection; reconnect replays every canonical
+// frame twice in a different order. This verifies CRDT convergence rather than
+// a presentation order that a concurrent RGA sibling insertion does not promise.
+func TestMultiEditorFormattingWorkloadConvergesAfterReconnect(t *testing.T) {
+	const editors = 4
+	baseText := strings.Repeat("review paragraph ", 48)
+	documents := make([]*Document, editors)
+	for index := range documents {
+		documents[index] = mustDocument(t, "editor-"+strconv.Itoa(index))
+	}
+	base, err := documents[0].Insert(0, baseText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, document := range documents[1:] {
+		if err := document.ApplyDelta(base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changes := []Delta{base}
+	for editor, document := range documents {
+		for step := 0; step < 72; step++ {
+			length := document.Len()
+			switch step % 4 {
+			case 0:
+				offset := (editor*31 + step*17) % length
+				count := 1 + (editor+step)%7
+				if count > length-offset {
+					count = length - offset
+				}
+				delta, err := document.Format(offset, count, []AttributeChange{{Key: "bold", Value: "true"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				changes = append(changes, delta)
+			case 1:
+				offset := (editor*19 + step*13) % (length + 1)
+				delta, err := document.InsertWithAttributes(offset, " +", Attributes{"author": strconv.Itoa(editor), "italic": "true"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				changes = append(changes, delta)
+			case 2:
+				offset := (editor*23 + step*11) % length
+				count := 1 + (editor*step)%5
+				if count > length-offset {
+					count = length - offset
+				}
+				delta, err := document.Format(offset, count, []AttributeChange{{Key: "review", Value: strconv.Itoa(step)}, {Key: "color", Value: "accent"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				changes = append(changes, delta)
+			case 3:
+				offset := (editor*29 + step*7) % length
+				delta, err := document.Delete(offset, 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				changes = append(changes, delta)
+			}
+		}
+	}
+	for index, document := range documents {
+		deliverRichTextChanges(t, document, changes, int64(2026073000+index))
+	}
+	wantText, wantSpans := documents[0].String(), documents[0].Spans()
+	wantState, err := documents[0].MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, document := range documents[1:] {
+		if got := document.String(); got != wantText {
+			t.Fatalf("String() = %q, want %q", got, wantText)
+		}
+		if got := document.Spans(); !reflect.DeepEqual(got, wantSpans) {
+			t.Fatalf("Spans() = %#v, want %#v", got, wantSpans)
+		}
+		state, err := document.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(state) != string(wantState) {
+			t.Fatal("converged documents produced different canonical state frames")
+		}
+	}
+	saved, err := documents[editors-1].SnapshotCurrentState()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,10 +4,12 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/DarkInno/crdt"
 	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/text"
 )
 
 func TestFormatProducesPresentationSpans(t *testing.T) {
@@ -71,6 +73,46 @@ func TestSpansLargeUniformRunAndAttributeDifference(t *testing.T) {
 	}
 }
 
+func TestFormattingUsesInlinePrimaryAttributeUntilNeeded(t *testing.T) {
+	document := mustDocument(t, "author")
+	if _, err := document.Insert(0, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Format(0, 3, []AttributeChange{{Key: "bold", Value: "true"}}); err != nil {
+		t.Fatal(err)
+	}
+	if document.markCount != 3 || len(document.marks) != 3 {
+		t.Fatalf("single attribute marks = %d across %d positions", document.markCount, len(document.marks))
+	}
+	for position, entries := range document.marks {
+		if entries.key != "bold" || len(entries.extra) != 0 || entries.value.value != "true" {
+			t.Fatalf("inline mark at %#v = %#v", position, entries)
+		}
+	}
+	if _, err := document.Format(0, 3, []AttributeChange{{Key: "color", Value: "blue"}, {Key: "italic", Value: "true"}}); err != nil {
+		t.Fatal(err)
+	}
+	if document.markCount != 9 {
+		t.Fatalf("multi-attribute mark count = %d, want 9", document.markCount)
+	}
+	for position, entries := range document.marks {
+		if entries.key != "bold" || len(entries.extra) != 2 {
+			t.Fatalf("expanded mark at %#v = %#v", position, entries)
+		}
+	}
+	state, err := document.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := mustDocument(t, "restored")
+	if err := restored.UnmarshalBinary(state); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := restored.Spans(), document.Spans(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored spans = %#v, want %#v", got, want)
+	}
+}
+
 func TestApplyDeltaBoundsTargetAttributeProduct(t *testing.T) {
 	options := DefaultOptions()
 	options.MaxMarkEntries = 2
@@ -98,6 +140,154 @@ func TestApplyDeltaBoundsTargetAttributeProduct(t *testing.T) {
 	}
 	if got := document.Spans(); !reflect.DeepEqual(got, before) {
 		t.Fatalf("rejected delta changed spans: %#v, want %#v", got, before)
+	}
+}
+
+func TestOneDeltaAllowsLaterFormattingOperationToWin(t *testing.T) {
+	source := mustDocument(t, "source")
+	insert, err := source.Insert(0, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := source.text.Positions()[0]
+	delta := Delta{operations: []formatOperation{
+		{tag: crdt.Tag{ReplicaID: "writer", WallTime: 1}, targets: []text.Position{position}, changes: []AttributeChange{{Key: "color", Value: "blue"}}},
+		{tag: crdt.Tag{ReplicaID: "writer", WallTime: 2}, targets: []text.Position{position}, changes: []AttributeChange{{Key: "color", Value: "red"}}},
+	}}
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustDocument(t, "target")
+	if err := target.ApplyDelta(insert); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := target.AttributesAt(0); !ok || !reflect.DeepEqual(got, Attributes{"color": "red"}) {
+		t.Fatalf("later operation attributes = %#v, %t", got, ok)
+	}
+}
+
+func TestFormatCanonicalizesTargetsAfterConcurrentInsertions(t *testing.T) {
+	seed := mustDocument(t, "seed")
+	base, err := seed.Insert(0, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, right := mustDocument(t, "left"), mustDocument(t, "right")
+	for _, document := range []*Document{left, right} {
+		if err := document.ApplyDelta(base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leftInsert, err := left.Insert(1, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightInsert, err := right.Insert(1, "y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustDocument(t, "target")
+	for _, delta := range []Delta{base, leftInsert, rightInsert} {
+		if err := target.ApplyDelta(delta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	positions := target.text.Positions()
+	unsorted := false
+	for index := 1; index < len(positions); index++ {
+		if positions[index-1].Compare(positions[index]) > 0 {
+			unsorted = true
+			break
+		}
+	}
+	if !unsorted {
+		t.Fatalf("concurrent visible positions unexpectedly sorted: %#v", positions)
+	}
+	if _, err := target.Format(0, target.Len(), []AttributeChange{{Key: "bold", Value: "true"}}); err != nil {
+		t.Fatalf("Format on concurrent selection = %v", err)
+	}
+	if got := target.Spans(); len(got) != 1 || got[0].Text != target.String() || !reflect.DeepEqual(got[0].Attributes, Attributes{"bold": "true"}) {
+		t.Fatalf("formatted concurrent spans = %#v", got)
+	}
+}
+
+func TestRejectedTextResourceDoesNotChangeMetadataOrClock(t *testing.T) {
+	source := mustDocument(t, "source")
+	delta, err := source.InsertWithAttributes(0, "ab", Attributes{"bold": "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := source.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := DefaultOptions()
+	options.Text.MaxNodes = 1
+	target, err := NewWithOptions("target", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := target.ClockState()
+	if err := target.ApplyDelta(delta); !errors.Is(err, text.ErrResourceLimit) {
+		t.Fatalf("ApplyDelta resource error = %v", err)
+	}
+	if target.ClockState() != before || target.String() != "" || target.markCount != 0 || target.Spans() != nil {
+		t.Fatalf("rejected delta mutated target: clock=%#v text=%q marks=%d spans=%#v", target.ClockState(), target.String(), target.markCount, target.Spans())
+	}
+	if err := target.UnmarshalBinary(state); !errors.Is(err, text.ErrResourceLimit) {
+		t.Fatalf("UnmarshalBinary resource error = %v", err)
+	}
+	if target.ClockState() != before || target.String() != "" || target.markCount != 0 || target.Spans() != nil {
+		t.Fatalf("rejected state mutated target: clock=%#v text=%q marks=%d spans=%#v", target.ClockState(), target.String(), target.markCount, target.Spans())
+	}
+}
+
+func TestDocumentConcurrentRenderingAndFormatting(t *testing.T) {
+	document := mustDocument(t, "author")
+	if _, err := document.Insert(0, strings.Repeat("a", 128)); err != nil {
+		t.Fatal(err)
+	}
+	var group sync.WaitGroup
+	errors := make(chan error, 2)
+	for writer := 0; writer < 2; writer++ {
+		group.Add(1)
+		go func(writer int) {
+			defer group.Done()
+			for index := 0; index < 96; index++ {
+				if _, err := document.Format((writer*37+index)%document.Len(), 1, []AttributeChange{{Key: "color", Value: "accent"}}); err != nil {
+					errors <- err
+					return
+				}
+			}
+		}(writer)
+	}
+	for reader := 0; reader < 4; reader++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for index := 0; index < 128; index++ {
+				_ = document.String()
+				_ = document.Len()
+				_ = document.Spans()
+				_, _ = document.AttributesAt(index % 128)
+			}
+		}()
+	}
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		t.Fatal(err)
+	}
+	if document.String() != strings.Repeat("a", 128) || document.Len() != 128 {
+		t.Fatalf("concurrent formatting changed text: %q (%d)", document.String(), document.Len())
 	}
 }
 
