@@ -59,6 +59,21 @@ linear bytes in the selection but avoid making an unproven inheritance rule
 part of the initial wire contract. `InsertWithAttributes` is the explicit way
 to style newly inserted text.
 
+### Hot-path representation
+
+The wire and logical model remain one LWW register per `(position, key)`, but
+the in-memory representation stores a position's first attribute inline and
+allocates an overflow map only when a second key is present. Ordinary range
+formatting (for example, `bold` over a selection) therefore does not allocate
+one Go map per character. The state encoder still sorts every logical register
+by position then key, so this is an implementation optimization rather than a
+wire or snapshot change.
+
+`Spans()` obtains positions and runes from one RGA projection. It must not
+compose separate position and string reads: doing so both traverses a large
+document twice and weakens the useful invariant that the two slices describe
+the same visible version.
+
 ## Architecture
 
 ```text
@@ -91,6 +106,7 @@ can recover exactly.
 | --- | --- |
 | Correctness | Validate every complete outer and nested frame before mutation; reject non-canonical order, duplicate targets/keys, invalid UTF-8, invalid tags, equal-tag conflicts, and wrong TypeIDs. |
 | Resource safety | Bound text nodes with `text.Options`; separately bound retained mark registers and attributes per operation. One delta may perform no more target/key updates than the document's retained-mark budget, so a repeated overwrite cannot multiply decoder work without limit. Decoder limits cap frames, elements, tags, and strings before allocation. |
+| Atomic rejection | Preflight metadata before applying it. A nested RGA delta performs its own limit check before the rich-text document witnesses formatting tags; a rejected text resource limit therefore leaves visible text, marks, and HLC state unchanged. |
 | Concurrency | A document-level mutex makes a compound text-plus-format delta atomic to public callers; RGA retains its own synchronization. |
 | Security | Attributes are UTF-8 strings, not HTML, CSS, JSON, URLs, or executable values. Rendering policy, link allowlists, sanitization, authorization, rate limits, and identity remain application-owned. CRC-32C detects corruption, not attackers. |
 | Persistence | Save the rich-text state frame and its shared RGA HLC state atomically. Keep removed attributes and text tombstones until the same authenticated epoch/exact-ack checkpoint rule permits retirement. |
@@ -120,7 +136,7 @@ has these expected costs:
 | Operation | Time | Additional retained memory |
 | --- | --- | --- |
 | Apply one format op | `O(targets * changes)` | one register per new `(position,key)` |
-| Render spans | `O(visible characters + live attributes)` | result only; maps are copied once per emitted span, not once per rune |
+| Render spans | `O(visible characters + live attributes)` | one text projection plus result; maps are copied once per emitted span, not once per rune |
 | Encode one format delta | `O(targets + changes)` | output only |
 | Encode state | `O(retained registers log retained registers)` | sorted output plan |
 
