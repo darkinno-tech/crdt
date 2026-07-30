@@ -1,166 +1,18 @@
 # crdt
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+[English](README.md)
 
-`crdt` 是一个小巧、可组合的 Go 状态型 CRDT 库。
-它提供确定性的二进制状态帧与增量帧，使副本能在重复投递、乱序和暂时
-网络分区的情况下收敛。
+> 面向收敛状态、增量复制、恢复与明确协议边界的有界 Go CRDT 库。
 
-> 状态：稳定版本由 `main` 分支发布；API 遵循语义化版本规范。
+`crdt` 提供确定性的 CRDT 原语和二进制帧编码，使副本在重复、乱序或延迟投递下仍能收敛。它是一个库，不是完整的协作服务：身份、授权、存储、传输、成员关系、保留策略和业务不变量仍由宿主应用负责。
 
-## 架构概览
+## 三分钟开始
 
-![crdt 与 Yjs 的概念性架构对比](assets/crdt_vs_yjs_architecture.svg)
-
-此图仅说明集成边界的概念性差异，不代表 wire 兼容、功能对等或性能结论。
-
-## 特性
-
-- 基于状态的 **G-Counter**，具有可合并且类型隔离的增量。
-- 使用调用方自定义元素编解码器、带可合并增量的仅增长 **G-Set**。
-- 支持调用方自定义元素编解码器的加法胜出（add-wins）观察移除 **OR-Set**。
-- 处于实验阶段、支持 Delta 复制的 **LWW-Set**，使用调用方定义的元素编解码器和确定性的 HLC 冲突决议。
-- 因果复制的 **MV-Register**：保留并发的不透明字节写入，而非用墙上时钟裁决。
-- 处于实验阶段、支持 Delta 复制的 **LWW-Map**，使用不透明字节值和确定性的 HLC 冲突决议。
-- 实验性的**附件引用**：用于图片、音频、视频和数据，仅复制受限元数据，媒体对象由经过认证的应用存储管理。
-- 混合逻辑时钟（HLC）标签和可持久化的时钟状态，支持副本重启。
-- 规范化、带校验和的二进制帧；解码有边界且编码确定。
-- 增量批处理/合并、版本化快照与用于反熵的 Merkle 摘要。
-- 本地 **RGA 光标/选区锚点**：无需创建完整可见 Position 投影即可解析；墓碑回收后明确失败。
-- 带成员纪元的可选精确确认墓碑回收。
-- 所提供 CRDT 实现均支持安全的并发访问。
-- 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
-- 单写者 durable WebSocket relay 参考实现：带 bbolt 操作日志、精确 Dot 绑定、有界重放与重连。
-- 实验性、带帧的 LWW-Set、LWW-Map、旧标量 RGA v1、OR-Tree 与行内富文本格式化；仅能通过每个复制组的
-  显式协议策略启用。新的 Go RGA 复制组使用紧凑的 run-v2 帧；RGA 墓碑生命周期仍要求谨慎
-  留存和精确确认处理。
-
-## 范围
-
-核心库提供 CRDT 数据类型和线协议基础组件，不负责选择成员协议、认证方案、存储后端或
-重试策略。可选的 [`extensions`](docs/integration/extensions.zh-CN.md) 包提供显式启用的
-WebSocket 与 HTTP/SSE live relay 参考端点；它不启动 listener，也不提供持久化、重放、重连、
-TLS、反熵或身份/session 管理，这些仍由应用负责。可选的
-[WebSocket Provider 参考实现](docs/integration/websocket-provider.zh-CN.md) 是有边界、绑定
-Manifest 的集成适配器；它不提供持久投递、恢复、TLS、成员管理、授权策略或生产运维。只有当
-应用提供权威且经过认证的活跃成员视图后，
-`tombstonegc.Coordinator` 才会安全地执行自动回收；它不发现、认证或持久化该成员视图。
-校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
-独立的 [`durable`](docs/integration/durable-provider.zh-CN.md) 参考实现为一个进程和一个受保护持久卷提供操作日志、重放与重连；它仍不提供集群存储、应用 CRDT checkpoint 事务、TLS、身份/session 生命周期、成员权威或墓碑 GC。
-
-## 实验性 LWW-Set、LWW-Map、旧版 RGA v1、OR-Tree 与富文本协议
-
-LWW-Set（`lww.Set`，TypeID 7/8）通过应用提供的规范化 `lww.ElementCodec`
-编码泛型元素，并保留删除元数据。必须原子持久化
-`SnapshotCurrentState(codec)`（或 `Snapshot(codec, frontier)`）并仅通过
-`NewSetFromSnapshot` 恢复使用同一 ID 的副本；新 wire 格式仍需显式协商。
-
-RGA 文本 v1（`text`，TypeID 11/12）通过有边界的延迟集成队列处理乱序 delta，拒绝
-不完整快照，并以增量索引替代每次编辑后的全量可见投影重建；在完整墓碑生命周期经过
-验证前仍为实验性协议。必须原子持久化其带 HLC 的快照。
-
-新的 Go RGA 复制组通过 `crdt.DefaultRGAFrameType()` 选择紧凑的 run-v2 帧（TypeID
-19/20）。run-v2 组必须用 `Delta.MarshalRunBinary` 编码 delta、用
-`RGA.MarshalRunBinary` 和 `RGA.SnapshotRunCurrentState` 生成完整状态，并在 Manifest
-中绑定相同 TypeID。run 编码保留标量 RGA position 语义，但一个 Manifest 仍只表示一种
-wire 协议：不能与旧 v1 客户端或帧流混用。
-
-实验性的 `richtext.Document`（TypeID 23/24）在 run-v2 RGA 外组合有界的、按稳定位置保存的
-LWW 行内属性。它支持粗体、斜体、链接、评论等不透明 UTF-8 属性字符串；不承载 HTML、CSS、块级
-结构或媒体字节。必须使用独立 Manifest、`richtext.SemanticsVersion` 和
-`AllowExperimental`，并将状态和共享的 RGA 时钟原子持久化；属性校验与安全渲染由应用负责。详见
-[富文本设计](docs/design/rich-text.md)。
-
-`CompactTombstones` 有意保持保守：只有在经过认证的精确确认纪元已持久化回收后快照
-并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Set、LWW-Map、
-旧标量 RGA v1（TypeID 11/12）和 OR-Tree 仍为实验性能力，必须显式启用：
-
-```go
-policy := crdt.ProtocolPolicy{AllowExperimental: true}
-for _, kind := range policy.FrameTypes() {
-	// 这只是本地能力白名单，不是完整的握手协商。
-	_ = kind
-}
-```
-
-接收实验帧之前，必须在经过认证的握手中将其绑定到 `replica.Manifest`。Manifest
-包含 group、schema、epoch、codec 与语义版本。为在构造同一个 group 的本地 replica
-对象时只显式 opt-in 一次，可创建 `replica.NewSessionBuilder(..., policy)`，再调用其
-`NewChange`、`NewInbox`、`NewCheckpoint` 与 `NewSession`。Builder 只是本地封装，
-不是握手：零值 Policy 仍会拒绝实验 Manifest，且仅凭 Frame Type ID 不能证明线协议
-语义兼容。需要单独使用时，原有的 `*WithPolicy` 构造函数仍然可用。
-
-零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter 与默认 RGA run-v2
-协议。该策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
-旧版 RGA v1、OR-Tree 与富文本的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
-
-## 浏览器与 JavaScript 移动端客户端
-
-仓库在 [`clients/typescript`](clients/typescript/README.md) 中提供了有边界的
-TypeScript frame 外层解码器，以及 Go/Wasm RGA 客户端 runtime。默认 artifact 使用 run-v2
-TypeID 19/20 和语义版本 2，与 `crdt.DefaultRGAFrameType()` 一致。Wasm 层直接复用 Go 的
-RGA 合并、乱序、墓碑和 HLC 语义，因此浏览器或兼容 WebView 可以本地合并，而不是等待服务端仲裁。
-
-构建和验证命令：
-
-```sh
-make wasm
-make typescript-test
-make wasm-test
-```
-
-收到帧之前必须认证精确的 Manifest（包括协议 ID 与语义版本）；CRC-32C 不能认证对端。
-客户端快照的 state、clock 与 frontier 必须原子持久化。没有兼容 WebAssembly runtime 的原生
-移动端，加入 run-v2 组前必须遵循 [RGA run-v2 线协议](docs/protocol/rga-run-v2.zh-CN.md)
-及其向量。单次本地编辑超过 64 KiB 或 16,384 rune 时应先按顺序拆分。
-
-## 实验性附件引用
-
-`attachment.Register` 将文档中的图片、音频、视频或其他二进制数据表示为一个有边界的
-LWW-Map 不可变引用。每条引用仅包含不透明对象 ID、规范 MIME 类型、声明字节长度和
-SHA-256 摘要；CRDT delta、快照、日志和诊断信息中均不携带媒体原始字节。用户可协作编辑
-的文本仍应使用 `text.RGA`；普通结构化数据则按冲突语义选择 `lww.Map`、OR-Set 或 OR-Tree。
-
-附件引用复用实验性 LWW-Map 帧 TypeID 9/10。每个复制组必须在 `replica.Manifest` 中绑定
-schema ID `github.com/DarkInno/crdt/attachment-reference/v1`、空 codec ID 和
-`attachment.SemanticsVersion`，并在所有边界显式启用 `AllowExperimental`。必须将
-`SnapshotCurrentState()` 与 HLC 状态原子持久化，并在满足 LWW 墓碑生命周期前保留删除元数据。
-
-应用负责授权、对象存储生命周期、内容扫描、限流和下载策略。下载完成后、解码或渲染前必须调用
-`Reference.Verify`：它以流式方式校验对象，不缓冲原始媒体，并拒绝截断、超长或摘要不匹配的响应。
-不得把签名 URL、凭据、个人数据或媒体原始内容放入 `Reference.ObjectID`。
-
-## 要求
-
-- Go 1.21 或更高版本
-
-## 安装
-
-安装最新稳定版本：
+要求 Go 1.21 或更高版本。
 
 ```sh
 go get github.com/DarkInno/crdt@latest
 ```
-
-本地开发请使用检出副本：
-
-```sh
-git clone https://github.com/DarkInno/crdt.git
-cd crdt
-go test ./...
-```
-
-## 快速开始
-
-如果这是你的第一次 CRDT 集成，先阅读[开发者入门指南](docs/getting-started.zh-CN.md)，并在本地检出目录运行
-`go run ./examples/getting-started`。它是完整、稳定的 G-Counter 投递路径：本地修改、编码 outbox
-记录、接收端有界解码，以及重复投递的安全应用。下方的内存内示例是 API 参考；它们有意不替代
-这一接收边界。
-
-### G-Counter
-
-每个副本仅递增自己的分量。`Merge` 取每个副本分量的最大值，因此满足
-可交换性、结合性和幂等性。
 
 ```go
 package main
@@ -181,372 +33,113 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	if _, err := left.Increment(2); err != nil {
+	if _, err := left.Increment(3); err != nil {
 		log.Fatal(err)
 	}
-	if _, err := right.Increment(3); err != nil {
+	if err := right.Merge(left); err != nil {
 		log.Fatal(err)
 	}
-	if err := left.Merge(right); err != nil { // 投递顺序不影响结果。
-		log.Fatal(err)
-	}
-
-	value, err := left.Value()
+	value, err := right.Value()
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(value)
-	// Output: 5
+	fmt.Println(value) // 3
 }
 ```
 
-### PN-Counter
-
-PN-Counter 支持独立递增与递减。它将每个副本的正、负分量分别保存为
-G-Counter，因此合并仍满足可交换性、结合性和幂等性。`Value` 返回精确的
-`*big.Int`；需要有界机器整数时使用 `ValueInt64`。
-
-```go
-counter, err := counter.NewPNCounter("cart")
-if err != nil {
-	log.Fatal(err)
-}
-if _, err := counter.Increment(7); err != nil {
-	log.Fatal(err)
-}
-if _, err := counter.Decrement(2); err != nil {
-	log.Fatal(err)
-}
-value, err := counter.Value()
-if err != nil {
-	log.Fatal(err)
-}
-fmt.Println(value)
-// Output: 5
-```
-
-### OR-Set 增量复制
-
-OR-Set 使用稳定的编解码器 ID 和稳定的元素编码字节，以便在不同副本间识别
-同一元素类型。
-
-```go
-package main
-
-import (
-	"fmt"
-	"log"
-
-	"github.com/DarkInno/crdt/set"
-)
-
-type stringCodec struct{}
-
-func (stringCodec) ID() string                            { return "example.com/string/v1" }
-func (stringCodec) Marshal(value string) ([]byte, error)  { return []byte(value), nil }
-func (stringCodec) Unmarshal(data []byte) (string, error) { return string(data), nil }
-
-func main() {
-	codec := stringCodec{}
-	left, err := set.NewORSet("left", codec)
-	if err != nil {
-		log.Fatal(err)
-	}
-	right, err := set.NewORSet("right", codec)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	delta, err := left.Add("item")
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := right.ApplyDelta(delta); err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println(right.Contains("item"))
-	// Output: true
-}
-```
-
-要使移除操作被其他副本观察到，应发送返回的移除增量或合并状态。未观察到某个
-标签的移除与该标签的新增并发时，元素仍然存在（加法胜出语义）。
-
-## 端到端集成
-
-可复现的本地 HTTP 投递演练、生产集成检查清单、快照/重启指引，以及应当采集的
-收敛证据，见[端到端集成教程](docs/integration/overview.zh-CN.md)。
-[可运行的协作任务看板示例](examples/collaborative-board)演示重复投递、网络分区期间
-的 add/remove 冲突，以及从 OR-Set 快照恢复：
+本地检出：
 
 ```sh
-go run ./examples/collaborative-board
+git clone https://github.com/DarkInno/crdt.git
+cd crdt
+go test ./...
 ```
 
-[仓库复制示例](examples/warehouse-replication)演示 G-Set 和 MV-Register 的帧化增量、
-重复投递、Register 并发值，以及在复用副本 ID 前安全恢复 MV-Register：
+## 包含的能力
 
-```sh
-go run ./examples/warehouse-replication
-```
+- G-Counter、PN-Counter、G-Set、add-wins OR-Set 和因果 MV-Register。
+- 有界规范化 state/delta 帧、确定性 snapshot、恢复计划，以及可复用 replica ID 所需的 HLC 状态。
+- 默认使用稳定 run-v2 帧的 RGA 协作文本，以及 list、XML fragment 和有界 rich-text 层。
+- Delta 批处理、Merkle 反熵、精确确认的 tombstone-GC 协调，以及 Manifest 绑定的 replica/inbox 恢复辅助能力。
+- 有界 live WebSocket provider、独立的 bbolt durable relay，以及本地 bbolt 检查点参考实现。
+- 可选、由 Manifest 协商的[压缩感知外层帧 v2](docs/protocol/frame-v2.md)，提供显式 v1 转换，但不改变 CRDT TypeID 或语义。
+- [RGA 诊断混淆](docs/integration/debug-obfuscation.zh-CN.md)：替换文本内容，同时保留隔离调试时间线的结构。
 
-[实验协作示例](examples/experimental-collaboration)为 LWW-Map、RGA 和 OR-Tree 使用
-明确且较小的接收帧/RGA 留存上限。仅在复制组已完成上文所述的、经过认证的实验协议握手后运行：
+实验协议（LWW-Set、LWW-Map、legacy scalar RGA v1、OR-Tree、list RGA、rich text）需要在每个参与边界显式启用 `ProtocolPolicy{AllowExperimental: true}`。帧类型本身从来不是已协商的协议、已认证的 peer，也不是 compact tombstone 的许可。
 
-```sh
-go run ./examples/experimental-collaboration
-```
+## 按目标选择入口
 
-[附件协作示例](examples/attachment-collaboration)为同一文档分别建立 Manifest 绑定的
-RGA 文本组和附件引用组，使用快照恢复两个接收状态，并在接受对象前通过
-`Reference.Verify` 流式校验已授权下载：
-
-```sh
-go run ./examples/attachment-collaboration
-```
-
-[可选传输扩展指南](docs/integration/extensions.zh-CN.md)及其[可运行 provider 示例]
-(examples/extensions-provider)展示将 WebSocket 与 HTTP/SSE 同时挂载到应用自有 mux 的方式。
-示例先演示 WebSocket 到 HTTP 的投递，再演示 HTTP 到 WebSocket 的投递；它是有边界的
-live relay，不是持久化复制服务：
-
-```sh
-go run ./examples/extensions-provider
-```
-
-持久操作重放与断线重连请使用独立的[durable WebSocket relay 参考实现](docs/integration/durable-provider.zh-CN.md)。它针对单写者 bbolt 部署形态并限制重放窗口，不能替代复制数据库或应用 checkpoint 事务。
-
-Manifest 字段、限制、存储边界、删除留存和校验要求见[附件引用集成文档](docs/integration/attachment.zh-CN.md)。
-
-英文版本见 [integration tutorial](docs/integration/overview.md)。
-
-## 在分布式系统中的正确使用方式
-
-- 为每个存活逻辑副本提供全局唯一且非空的副本 ID。
-- 原子地持久化 OR-Set 快照及其 HLC 状态。当集合自身 frontier 已足够时使用
-  `ORSet.SnapshotCurrentState()`；当复制层具有更广泛的确认 frontier 时使用
-  `ORSet.Snapshot(frontier)`；通过 `NewORSetFromSnapshot` 恢复。不要仅从字节
-  恢复一个使用相同 ID 的 OR-Set。
-- 若要自动回收墓碑，请使用稳定的复制组 ID 创建协调器。每个活跃成员都必须在
-  该 ID 与当前 `tombstonegc.Coordinator` 成员纪元下报告精确的
-  `ORSet.TombstoneTags()`；对每个收到的报告，将两个值传给
-  `AcknowledgeAndCompact`。当增量可能乱序投递时，不要从 `Frontier()` 推导
-  确认：最大标签并不能证明更早墓碑已经收到。移除成员前必须让其退出复制；重新
-  加入的成员必须从回收后的快照启动。
-- `ORSet.Compact` 仅适用于传输层能够独立证明所提供 frontier 对每个副本都是
-  无缺口因果前缀的场景。
-- 在复用 MV-Register 的副本 ID 前持久化其状态快照。其版本向量而非墙上时钟可证明
-  后续 `Set` 已观察哪些写入；使用 `register.NewMVRegisterFromSnapshot` 恢复。
-- 将 `ProtocolPolicy.FrameTypes()` 作为本地能力白名单；经过认证的连接/建链必须
-  使用 `replica.Manifest` 比较 group、schema、epoch、codec 与语义版本。只有两端都
-  显式选择实验协议时才能发送 LWW-Set、LWW-Map、RGA 或 OR-Tree 帧。必须原子持久化带 HLC 的
-  快照；RGA 墓碑回收还需要经过认证的精确确认纪元并淘汰旧 delta。
-- 保持 `ElementCodec.ID`、`Marshal` 与 `Unmarshal` 确定性，并确保它们可安全
-  并发调用。编码值必须以规范形式往返。
-- 将收到的字节视为不可信数据。请根据传输环境使用带合适限制的
-  `UnmarshalBinaryWithLimits` 与 `Unmarshal*DeltaWithLimits`。
-- 在外围应用中完成消息认证、授权、加密、重试和持久化。CRDT 收敛本身不提供
-  这些保证。
-
-## JSON 诊断输出
-
-具体 CRDT 状态和 delta 对象实现了 `json.Marshaler`，可用于结构化日志和人工查看。例如：
-
-```json
-{"type":"gcounter","replica_id":"left","element_count":2,"tombstone_count":0}
-```
-
-该输出刻意不包含应用值、元素键、标签、时钟状态或二进制帧。JSON 诊断结果不能恢复
-或应用 CRDT 状态/delta，也不是复制格式；复制和持久化仍应使用有界、规范的二进制编码。
-
-## 包
-
-| 包 | 作用 |
+| 目标 | 阅读或运行 |
 | --- | --- |
-| `crdt` | 通用契约、状态摘要与变更标签。 |
-| `clock` | 混合逻辑时钟和持久化 HLC 状态。 |
-| `counter` | G-Counter、PN-Counter 及其增量编解码器。 |
-| `set` | G-Set、加法胜出 OR-Set 与元素编解码器契约。 |
-| `lww` | 实验性的、带帧 LWW-Set 与 LWW-Map。 |
-| `attachment` | 实验性的、有边界媒体/数据引用，带流式长度与 SHA-256 校验。 |
-| `text` | 实验性、带帧 RGA 协作文本和 run-v2 编解码器。 |
-| `richtext` | 基于 run-v2 RGA 文本的实验性、有界行内格式化。 |
-| `tree` | 实验性、带帧的观察移除树。 |
-| `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |
-| `encoding` | 带边界的版本化二进制帧。 |
-| `delta` | 带边界的增量批处理和合并器。 |
-| `snapshot` | 不可变状态快照与恢复计划。 |
-| `merkle` | 用于反熵的确定性摘要。 |
-| `tombstonegc` | 精确墓碑确认和纪元范围的 GC 协调。 |
+| 学习基础 API | [入门指南](docs/getting-started.zh-CN.md) 与[可运行示例](examples) |
+| 构建完整客户端流程 | [端到端集成](docs/integration/overview.zh-CN.md) |
+| 安全跨越本地重启 | [本地 bbolt 检查点](docs/integration/local-checkpoint.zh-CN.md) 与 `go run ./examples/persistent-replica` |
+| 增加重放与重连 | [durable relay 参考](docs/integration/durable-provider.zh-CN.md) |
+| 使用有界 live relay | [WebSocket provider 参考](docs/integration/websocket-provider.zh-CN.md) |
+| 在不复制媒体字节的前提下附加媒体 | [附件集成](docs/integration/attachment.zh-CN.md) |
+| 在 Go/Wasm 之外实现 run-v2 | [RGA run-v2 协议与向量](docs/protocol/rga-run-v2.zh-CN.md) |
 
-## 开发与验证
+[文档索引](docs/README.md) 将入门、集成、协议/设计、运维资料分层。详细性能证据和部署手册放在对应文档中，而不是让入口 README 变成操作手册。
+
+## 持久化与恢复
+
+对于 HLC CRDT，只保存状态字节不足以恢复 replica。复用 replica ID 前，必须原子保存 state frame、HLC 状态和应用的投递 frontier/outbox。`persistence` 为一种有类型的 CRDT schema 和一个 active process 提供本地 bbolt 参考：保存前和每次加载时都会校验具体状态。
+
+```sh
+go run ./examples/persistent-replica
+# recovered=true cursor=41 outbox_bytes=24
+```
+
+它不是集群数据库、已认证传输或通用业务事务管理器。静态加密、备份/恢复、远端授权、租户隔离、成员关系和 tombstone 生命周期仍由宿主负责。
+
+`durable` 有意只持久化 relay 操作日志和重放 cursor。客户端必须先持久化具体 CRDT checkpoint，才能推进该 cursor；请配合阅读[本地检查点](docs/integration/local-checkpoint.zh-CN.md)和 [durable relay](docs/integration/durable-provider.zh-CN.md)。
+
+## 包地图
+
+| 包 | 职责 |
+| --- | --- |
+| `counter`、`set`、`register` | Counter、Set、Register CRDT。 |
+| `lww`、`tree`、`text`、`list`、`xml`、`richtext` | 基于 HLC 的有序协作结构。 |
+| `encoding`、`delta`、`snapshot`、`clock` | 帧、受限批次、snapshot 与 HLC 状态。 |
+| `replica`、`membership`、`tombstonegc`、`merkle` | 投递连续性、成员关系、安全 GC 协调与反熵。 |
+| `persistence` | 本地有界 bbolt CRDT checkpoint 参考。 |
+| `durable`、`extensions`、`observe` | Durable relay、有界 live relay、进程内观察。 |
+| `attachment` | 不可变媒体引用元数据，绝不保存原始媒体字节。 |
+
+## 验证与测量
+
+修改单个包时先运行聚焦检查：
+
+```sh
+go test ./persistence ./examples/persistent-replica
+go test -race ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
+go test -run='^$' -bench='BenchmarkStore(Save|Load|SaveParallel)$' -benchmem -benchtime=2s ./persistence
+```
+
+仓库门禁：
 
 ```sh
 go test ./...
 go test -race ./...
 go vet ./...
 make coverage
-```
-
-`make verify` 还会运行 fuzz、`staticcheck` 和 `golangci-lint`。这两个工具
-必须已安装在本地 `PATH` 中；GitHub Actions 会安装固定版本。要在 Docker 中
-复现覆盖率门禁：
-
-```sh
-make docker-test
-```
-
-### 诊断与同步探针
-
-`crdt-analyze` 在输出 JSON 元数据（类型、编解码器、负载大小和 SHA-256 指纹）
-前，会先校验一个有边界的帧：
-
-```sh
-go run ./cmd/crdt-analyze -file ./state.frame
-```
-
-`crdt-sync-probe` 是用于跨主机验证重复增量投递的短生命周期 HTTP 测试工具，
-不是生产复制服务。其默认监听地址仅为回环地址；每个端点都要求非空令牌。优先
-使用 `-token-file`（权限 `0600`）而非 `-token`，且仅在受控测试窗口内绑定
-公网地址。非回环监听还必须显式指定 `-allow-non-loopback`，且只能用于受防火墙
-限制的短期测试窗口。
-
-```sh
-# 在每个接收端执行。
-go run ./cmd/crdt-sync-probe -mode serve -replica receiver -token-file ./probe.token
-
-# 生成一个增量，并将完全相同的字节序列发送至每个目标。
-go run ./cmd/crdt-sync-probe -mode send \
-  -target http://receiver-a:49511,http://receiver-b:49511 \
-  -replica sender -token-file ./probe.token -duplicates 3
-```
-
-探针也可以验证 RGA delta 投递，但它不执行 Manifest 或能力协商。`/rga` 默认使用稳定的
-run-v2（TypeID 19/20）。旧标量 v1（11/12）仍是实验性格式，只有接收端和发送端均显式选择
-`-rga-protocol=v1` 时才可使用；格式不匹配的帧会在修改文本前被拒绝。变更请求返回带
-`X-CRDT-Apply-Micros` 的空 `204`；应使用最终的认证 `/state` 响应比较 `text.protocol`、
-可见 rune 数、SHA-256 和未决依赖。
-
-```sh
-# 新建探针会话无需传协议参数，默认就是 run-v2。
-go run ./cmd/crdt-sync-probe -mode serve -replica receiver -token-file ./probe.token
-
-go run ./cmd/crdt-sync-probe -mode send \
-  -target http://receiver-a:49511,http://receiver-b:49511 \
-  -replica text-sender -token-file ./probe.token \
-  -counter-increment 0 -element '' \
-  -rga-runes 4096 -rga-rune 'λ' -duplicates 3
-```
-
-RGA 探针对每个生成 delta 限制为 16 MiB 和 200,000 个 rune；这是诊断上限，不是生产
-容量建议。它没有持久化 HLC 状态、outbox、重放、恢复或墓碑 GC 权威。`run-v2` 能压缩
-同副本的线性 frame，但规范化解码会带来独立的 CPU 与分配成本；选择前必须在目标机器上
-测量两种 wire shape。
-
-`crdt-merkle-sync` 是独立的、有边界的状态修复 CLI，用于只包含稳定 G-Counter 帧的专用目录。
-它比较已认证的 Merkle 根，只传输缺失或不同的帧，以 G-Counter `Merge` 合并，并在双方验证最终根。
-其他 CRDT 类型一律 fail-closed：一个可解析的 TypeID 并不能证明该工具理解此类型的状态、codec、
-HLC 恢复或墓碑语义。它是离线修复工具：同一个状态目录不能同时被 `serve`、`sync` 或
-`gcounter-add` 进程打开。详见 [Merkle 状态修复 CLI 手册](docs/operations/merkle-sync-cli.zh-CN.md)。
-
-使用 `make test-unit` 分别运行各包；使用 `make test-integration` 运行三副本、
-恢复、批处理、编码和反熵流程。
-
-CI 工作流会强制执行格式化、单元测试、竞态检测、vet、解码器 fuzz、静态分析、
-每个包至少 90% 的覆盖率，以及 Go 1.26 容器验证。
-
-### 质量与性能快照 — 2026-07-28
-
-这份预发布快照在 Go 1.26.5 上采集。它是该修订的历史记录，而不是适用于所有
-工作负载的延迟或吞吐保证；本次文档更新没有重新执行以下检查。
-
-- 记录中的 `make verify` 已通过：格式化、独立包测试、集成与极限场景、竞态检测、vet、
-  四个各 10 秒的解码器 fuzz、`staticcheck`、`golangci-lint`，以及每包至少
-  90% 的覆盖率门禁。
-- 记录中的 `make docker-test` 已在 Go 1.26 上通过；`govulncheck ./...` 未发现已知漏洞。
-- 受控的三主机投递探针验证了重复投递幂等性，并拒绝了未授权、格式错误和超限
-  请求。
-- 提供的基准覆盖 G-Counter、PN-Counter、G-Set、OR-Set 和 MV-Register 的
-  `Merge`、`ApplyDelta` 与 `MarshalBinary`。在确定容量限制前，请在目标硬件上运行
-  `make benchmark`。
-
-本 README 底部的不同场景测评记录了当前本地样本：重复投递、存活状态序列化和
-墓碑密集状态序列化。精确结果取决于 CPU、Go 版本、元素编解码器、集合大小和
-变更组合。
-
-运行 `make test-extreme` 可在普通和 race 插桩模式下重现高基数场景。内部分析数据
-和部署运行手册刻意保留在公开发布树之外。
-
-## 发布版本
-
-将 `beta` 合并到 `main` 前，请运行以上验证命令、审阅公开 API，并确保仓库可通过
-模块路径公开访问。`main` 的 push 工作流会创建下一个不可变语义版本标签，并生成
-带自动生成说明的 GitHub Release；不要手工创建可能冲突的稳定标签。
-
-```sh
-go mod tidy
 make verify
-# 合并审核通过的 beta -> main PR，然后等待 main 工作流完成。
-GOPROXY=proxy.golang.org go list -m github.com/DarkInno/crdt@latest
 ```
 
-不要移动或复用已发布标签。对于 Go 模块，首个稳定版之后的破坏性变更需要新的主
-版本模块路径，例如 `github.com/DarkInno/crdt/v2`。
+`make verify` 还会运行有界 fuzz、静态分析、lint、集成与极限场景。`make benchmark` 是受控开发测量，不是生产容量承诺；设置限制前，请在目标磁盘、CPU、Go 版本、网络和工作负载上重跑聚焦基准。
 
-## 贡献
+## 关键边界
 
-请先创建 issue 再提出 API 扩展。贡献应包含聚焦的测试，保持线协议编码确定性，
-限制不可信输入，并通过上述验证命令。
+- CRC-32C、SHA-256 和帧类型只能发现格式损坏，不能认证 peer。请在认证握手中绑定精确 Manifest 和协议策略。
+- 最大已观察 tag 不是连续投递的证明，也不是删除 tombstone 的许可。请使用对应的 frontier、inbox 和 membership 契约。
+- bbolt 只有一个 writer 且持有本地文件独占锁。不要让 active pod 共享其文件，也不要把本地 checkpoint 当作 HA 存储。
+- 库不会强制业务不变量。身份、租户、值权限、限流、保留策略和备份访问都必须由宿主校验。
 
-## 不同场景性能测评 — 2026-07-28
+## 贡献与发布
 
-在 Apple M4 Pro、Go 1.26.5（`darwin/arm64`）本地测得。夹具包含 128 个字符串
-元素；每项结果为三次、每次两秒采样的四舍五入均值。各次采样的分配数据保持稳定。
-
-| 场景 | `GOMAXPROCS=1` | `GOMAXPROCS=4` | 每操作分配 |
-| --- | ---: | ---: | ---: |
-| `Merge` | 56.0 µs/op | 42.9 µs/op | 57,768 B；259 allocs |
-| 重复 `ApplyDelta` | 131 ns/op | 131 ns/op | 0 B；0 allocs |
-| 并行重复 `ApplyDelta` | 132 ns/op | 105 ns/op | 0 B；0 allocs |
-| `MarshalBinary`（128 个存活元素） | 36.8 µs/op | 26.6 µs/op | 29,952 B；132 allocs |
-| `MarshalBinary`（墓碑密集） | 24.8 µs/op | 17.4 µs/op | 15,616 B；2 allocs |
-
-`Merge`、普通 `ApplyDelta` 与 `MarshalBinary` 使用串行基准循环；它们的
-`GOMAXPROCS=4` 数据仅是运行时设置样本，并非四核吞吐量测量。只有“并行重复
-`ApplyDelta`”一行使用了 `RunParallel`。与采用同一存活状态夹具和方法的早期本地
-样本相比，`MarshalBinary` 现为每操作 29,952 B、132 次分配，低于原先的
-96,312 B、778 次分配。这些是本地预发布测量，不是容量规划或 SLA 保证；设置限制
-前请在部署目标上重新运行 `make benchmark`。
-
-## PN-Counter 性能测评 — 2026-07-28
-
-在两台独立的 Debian 13（`linux/amd64`）主机上测得；每台均为 4 个 Intel Xeon
-Platinum 8272CL vCPU、3.8 GiB 内存。基准二进制由当前修订以 Go 1.26.5 构建，
-每项设置执行 3 次、每次 `-benchtime=2s`；下表为四舍五入均值。夹具在正、负
-计数图中各有 128 个副本分量。`MarshalBinary` 括号中为其报告的编码吞吐量；三次
-采样的分配数据完全一致。
-
-| 匿名主机 | `GOMAXPROCS` | `Merge` | `ApplyDelta` | `Value` | `MarshalBinary` |
-| --- | ---: | --- | --- | --- | --- |
-| 主机 A | 1 | 24.9 µs/op；13,136 B；6 allocs | 149.1 ns/op；0 B；0 allocs | 7.51 µs/op；232 B；10 allocs | 69.4 µs/op（55.3 MB/s）；25,680 B；10 allocs |
-| 主机 A | 4 | 18.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.29 µs/op；232 B；10 allocs | 53.6 µs/op（71.7 MB/s）；25,680 B；10 allocs |
-| 主机 B | 1 | 25.6 µs/op；13,136 B；6 allocs | 151.8 ns/op；0 B；0 allocs | 7.49 µs/op；232 B；10 allocs | 70.4 µs/op（54.6 MB/s）；25,680 B；10 allocs |
-| 主机 B | 4 | 18.5 µs/op；13,136 B；6 allocs | 153.5 ns/op；0 B；0 allocs | 7.31 µs/op；232 B；10 allocs | 53.3 µs/op（72.1 MB/s）；25,680 B；10 allocs |
-
-`GOMAXPROCS=4` 的各行仍是串行基准测量，不是四核汇总吞吐量。这些受控主机样本
-是当前修订的公开回归证据，不是容量上限或 SLA 承诺；确定生产限制前，请在部署
-目标上用相同命令复测：
-
-```sh
-GOMAXPROCS=4 go test -run='^$' \
-  -bench='^BenchmarkPNCounter(Merge|ApplyDelta|Value|MarshalBinary)$' \
-  -benchmem -benchtime=2s ./counter
-```
+贡献应包含聚焦测试、保持规范化编码、在分配或变异前限制不可信输入，并更新最贴近的文档。请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；beta 变更应走经过评审的 beta-to-main 发布路径，不能手动移动已发布 tag。
 
 ## 许可证
 
-SPDX-License-Identifier: MIT
-
-依据 [MIT License](LICENSE) 授权。Copyright (c) 2026 DarkInno.
+SPDX-License-Identifier: MIT。见 [LICENSE](LICENSE)。
