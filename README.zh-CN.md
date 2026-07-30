@@ -59,11 +59,12 @@ RGA 文本 v1（`text`，TypeID 11/12）通过有边界的延迟集成队列处�
 不完整快照，并以增量索引替代每次编辑后的全量可见投影重建；在完整墓碑生命周期经过
 验证前仍为实验性协议。必须原子持久化其带 HLC 的快照。
 
-新的 Go RGA 复制组通过 `crdt.DefaultRGAFrameType()` 选择紧凑的 run-v2 帧（TypeID
-19/20）。run-v2 组必须用 `Delta.MarshalRunBinary` 编码 delta、用
+新的 Go RGA 复制组通过 `text.StableFrameType()`（等价于
+`crdt.DefaultRGAFrameType()`）选择稳定的紧凑 run-v2 帧（TypeID 19/20）。run-v2
+组必须用 `Delta.MarshalRunBinary` 编码 delta、用
 `RGA.MarshalRunBinary` 和 `RGA.SnapshotRunCurrentState` 生成完整状态，并在 Manifest
-中绑定相同 TypeID。run 编码保留标量 RGA position 语义，但一个 Manifest 仍只表示一种
-wire 协议：不能与旧 v1 客户端或帧流混用。
+中绑定相同 TypeID 与 `text.RunV2SemanticsVersion`。run 编码保留标量 RGA position
+语义，但一个 Manifest 仍只表示一种 wire 协议：不能与旧 v1 客户端或帧流混用。
 
 实验性的 `richtext.Document`（TypeID 23/24）在 run-v2 RGA 外组合有界的、按稳定位置保存的
 LWW 行内属性。它支持粗体、斜体、链接、评论等不透明 UTF-8 属性字符串；不承载 HTML、CSS、块级
@@ -366,7 +367,7 @@ Manifest 字段、限制、存储边界、删除留存和校验要求见[附件�
 | `set` | G-Set、加法胜出 OR-Set 与元素编解码器契约。 |
 | `lww` | 实验性的、带帧 LWW-Set 与 LWW-Map。 |
 | `attachment` | 实验性的、有边界媒体/数据引用，带流式长度与 SHA-256 校验。 |
-| `text` | 实验性、带帧 RGA 协作文本和 run-v2 编解码器。 |
+| `text` | 稳定的 run-v2 带帧 RGA 文本；旧标量 v1 帧仍为实验性。 |
 | `richtext` | 基于 run-v2 RGA 文本的实验性、有界行内格式化。 |
 | `tree` | 实验性、带帧的观察移除树。 |
 | `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |

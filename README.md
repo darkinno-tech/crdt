@@ -90,13 +90,14 @@ incremental indexed sequence rather than rebuilding the full visible projection
 after each edit. It remains experimental while its full tombstone lifecycle is
 validated. Persist its HLC-backed snapshot atomically.
 
-New Go RGA groups select compact run-v2 frames (TypeIDs 19/20) through
-`crdt.DefaultRGAFrameType()`. A run-v2 group must encode with
+New Go RGA groups select the stable compact run-v2 frames (TypeIDs 19/20)
+through `text.StableFrameType()` (equivalent to `crdt.DefaultRGAFrameType()`).
+A run-v2 group must encode with
 `Delta.MarshalRunBinary`, use `RGA.MarshalRunBinary` and
 `RGA.SnapshotRunCurrentState` for complete state, and bind those same IDs in
-its manifest. The run encoding preserves scalar RGA position semantics, but a
-manifest still represents exactly one wire protocol: do not mix it with a
-legacy v1 client or frame stream.
+its manifest with `text.RunV2SemanticsVersion`. The run encoding preserves
+scalar RGA position semantics, but a manifest still represents exactly one
+wire protocol: do not mix it with a legacy v1 client or frame stream.
 
 Experimental `richtext.Document` (TypeIDs 23/24) wraps a run-v2 RGA with
 bounded per-position LWW inline attributes. It supports opaque UTF-8 attribute
@@ -451,7 +452,7 @@ encoders for that.
 | `set` | G-Set, add-wins OR-Set, and element-codec contract. |
 | `lww` | Experimental framed LWW-Set and LWW-Map. |
 | `attachment` | Experimental bounded media/data references with streaming size and SHA-256 verification. |
-| `text` | Experimental framed RGA collaborative text and run-v2 codec. |
+| `text` | Stable run-v2 framed RGA text; legacy scalar-v1 frames remain experimental. |
 | `richtext` | Experimental bounded inline formatting over run-v2 RGA text. |
 | `tree` | Experimental framed observed-remove tree. |
 | `register` | In-memory LWW/max registers and framed causal MV-Register. |
