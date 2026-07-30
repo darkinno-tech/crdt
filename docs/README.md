@@ -34,6 +34,8 @@ be committed.
 - [Membership protocol](protocol/membership.md)
 - [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
+- [Awareness / presence v1](protocol/awareness-v1.md)
+- [Awareness / presence v1 协议](protocol/awareness-v1.zh-CN.md)
 - [Bounded rich-text inline-format design](design/rich-text.md)
 
 ## Operations and architecture
