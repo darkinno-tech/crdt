@@ -94,14 +94,14 @@ func TestFileStoreRejectsCorruptionAndUnsafePaths(t *testing.T) {
 func TestFileStoreValidatesConfigurationAndOperationBoundaries(t *testing.T) {
 	root := t.TempDir()
 	valid := testFileConfig()
-	if !valid.valid() {
-		t.Fatal("valid FileConfig was rejected")
+	if _, err := valid.normalized(); err != nil {
+		t.Fatalf("valid FileConfig was rejected: %v", err)
 	}
 	for _, config := range []FileConfig{
 		{Config: valid.Config},
 		{Config: Config{MaxRecordBytes: valid.MaxRecordBytes}, MaxStoreBytes: valid.MaxStoreBytes},
 	} {
-		if config.valid() {
+		if _, err := config.normalized(); err == nil {
 			t.Fatalf("invalid FileConfig was accepted: %+v", config)
 		}
 	}
