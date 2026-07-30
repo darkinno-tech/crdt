@@ -20,11 +20,11 @@ canonical JSON validation/encoding, and convergence assertions.
 
 | Workload | What it verifies | Payload / reads | Samples (ms/op) | Median (ms/op) |
 | --- | --- | ---: | --- | ---: |
-| cold append + encoded merge, 4,096 values | one batch RGA insert, canonical encode/decode, remote merge | 475,977 | 44.529, 44.209, 43.507, 47.748, 43.623 | 44.209 |
-| cold middle insert + encoded merge, 4,096 base values | base synchronization, index projection, middle insert, remote merge | 219 delta bytes | 30.062, 29.486, 29.649, 29.461, 29.714 | 29.649 |
-| shuffled duplicate three-editor session | 192 offline edits/deletes, reverse delivery, periodic duplicate delivery, convergence | 33,588 total bytes | 7.166, 7.144, 7.736, 7.236, 7.123 | 7.166 |
-| cold state encode + restore, 4,096 object values | state chunking, canonical updates, same-actor counter recovery | 519,109 | 83.022, 81.556, 79.596, 81.158, 82.101 | 81.556 |
-| cached visible projection reads, 4,096 values | 262,144 alternating `length`/`get` pairs after one outside-timer projection | 262,144 read pairs | 4.505, 4.385, 4.189, 4.437, 4.205 | 4.385 |
+| cold append + encoded merge, 4,096 values | one batch RGA insert, canonical encode/decode, remote merge | 475,977 | 45.977, 44.065, 44.491, 42.271, 47.179 | 44.491 |
+| cold middle insert + encoded merge, 4,096 base values | base synchronization, index projection, middle insert, remote merge | 219 delta bytes | 29.641, 29.911, 29.820, 31.364, 31.554 | 29.911 |
+| shuffled duplicate three-editor session | 192 offline edits/deletes, reverse delivery, periodic duplicate delivery, convergence | 33,588 total bytes | 7.573, 9.626, 7.895, 7.462, 7.091 | 7.573 |
+| cold state encode + restore, 4,096 object values | state chunking, canonical updates, same-actor counter recovery | 519,109 | 87.901, 82.596, 82.972, 81.786, 81.522 | 82.596 |
+| cached visible projection reads, 4,096 values | 262,144 alternating `length`/`get` pairs after one outside-timer projection | 262,144 read pairs | 4.334, 4.487, 4.426, 4.606, 4.396 | 4.426 |
 
 The `cold` labels intentionally include fixture creation and validation, so they
 represent an end-to-end local operation rather than an isolated inner-loop
