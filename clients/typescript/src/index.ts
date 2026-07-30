@@ -74,6 +74,22 @@ export type {
   NativeBrowserTransport,
   NativeBrowserUpdateEvent,
 } from "./browser.js";
+export {
+  bindMonacoPlainText,
+  bindProseMirrorPlainText,
+  bindQuillPlainText,
+  bindRGAPlainText,
+  bindSlatePlainText,
+  RGAPlainTextBinding,
+} from "./bindings.js";
+export type {
+  BindRGAPlainTextOptions,
+  MonacoTextPort,
+  PlainTextEditorPort,
+  QuillTextPort,
+  RGAFrameListener,
+} from "./bindings.js";
+export {
   NativeNestedArray,
   NativeNestedDocument,
   NativeNestedMap,

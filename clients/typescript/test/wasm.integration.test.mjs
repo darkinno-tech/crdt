@@ -6,6 +6,7 @@ import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
 import { decodeFrame } from "../dist/frame.js";
+import { bindRGAPlainText } from "../dist/bindings.js";
 import {
   CRDTRuntimeError,
   RGA_PROTOCOL_RUN_V2,
@@ -41,6 +42,38 @@ test("TypeScript loader starts the real Go Wasm module over application/wasm", (
   assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
   assert.equal(document.text(), "loader local merge");
   assert.equal(document.close(), true);
+});
+
+test("plain-text binding exchanges actual Go Wasm RGA frames without echoing remote updates", () => {
+  const aliceDocument = loaderRuntime.create("binding-alice");
+  const bobDocument = loaderRuntime.create("binding-bob");
+  const aliceEditor = new TestTextPort("Hello");
+  const bobEditor = new TestTextPort("");
+  const aliceFrames = [];
+  const bobFrames = [];
+  const alice = bindRGAPlainText(aliceDocument, aliceEditor, {
+    initialContent: "editor",
+    onLocalFrame: (frame) => aliceFrames.push(frame),
+  });
+  const bob = bindRGAPlainText(bobDocument, bobEditor, {
+    onLocalFrame: (frame) => bobFrames.push(frame),
+  });
+  for (const frame of aliceFrames) {
+    bob.applyRemote(frame);
+  }
+  assert.equal(bobEditor.readText(), "Hello");
+  assert.equal(bobFrames.length, 0);
+
+  bobEditor.userWrite("Hello collaborative world");
+  for (const frame of bobFrames) {
+    alice.applyRemote(frame);
+  }
+  assert.equal(aliceEditor.readText(), "Hello collaborative world");
+  assert.equal(aliceFrames.length, 1);
+  assert.equal(alice.destroy(), true);
+  assert.equal(bob.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
 });
 
 test("TypeScript loader rejects a Wasm artifact whose expected protocol does not match", async () => {
@@ -225,4 +258,32 @@ function protocolForArtifact(value) {
     return RGA_PROTOCOL_V1;
   }
   throw new Error("CRDT_RGA_PROTOCOL must be run-v2 or v1");
+}
+
+class TestTextPort {
+  #listeners = new Set();
+
+  constructor(value) {
+    this.value = value;
+  }
+
+  readText() {
+    return this.value;
+  }
+
+  writeText(value) {
+    this.value = value;
+    for (const listener of [...this.#listeners]) {
+      listener();
+    }
+  }
+
+  observeText(listener) {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  userWrite(value) {
+    this.writeText(value);
+  }
 }

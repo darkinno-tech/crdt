@@ -86,6 +86,12 @@ export class RGAWasmDocument {
     private readonly limits: RGAProtocol,
   ) {}
 
+  /** Exact negotiated limits used by editor bindings to split local edits. */
+  get protocol(): RGAProtocol {
+    this.assertOpen();
+    return this.limits;
+  }
+
   /** Inserts UTF-8 text before the visible rune offset and returns a negotiated RGA delta frame. */
   insert(offset: number, value: string): Uint8Array {
     this.assertOpen();
