@@ -169,7 +169,7 @@ type counterClient struct {
 	inbox  *replica.Inbox
 }
 
-func newCounterServer(t *testing.T) (*httptest.Server, *Group, replica.Manifest, *counter.GCounter) {
+func newCounterServer(t testing.TB) (*httptest.Server, *Group, replica.Manifest, *counter.GCounter) {
 	t.Helper()
 	manifest, err := replica.NewManifest("example-counter", "example.com/counter/v1", 1, replica.Protocol{
 		StateID:          crdt.TypeIDGCounterState,
@@ -223,7 +223,7 @@ func newCounterServer(t *testing.T) (*httptest.Server, *Group, replica.Manifest,
 	return server, group, manifest, state
 }
 
-func newCounterClient(t *testing.T, endpoint string, manifest replica.Manifest, actor string) counterClient {
+func newCounterClient(t testing.TB, endpoint string, manifest replica.Manifest, actor string) counterClient {
 	t.Helper()
 	state, err := counter.NewGCounter(actor)
 	if err != nil {
@@ -261,7 +261,7 @@ func newCounterClient(t *testing.T, endpoint string, manifest replica.Manifest, 
 	return counterClient{client: client, state: state, inbox: inbox}
 }
 
-func newCounterChange(t *testing.T, manifest replica.Manifest, actor string, sequence uint64, delta counter.GCounterDelta) replica.Change {
+func newCounterChange(t testing.TB, manifest replica.Manifest, actor string, sequence uint64, delta counter.GCounterDelta) replica.Change {
 	t.Helper()
 	encoded, err := delta.MarshalBinary()
 	if err != nil {
@@ -274,7 +274,7 @@ func newCounterChange(t *testing.T, manifest replica.Manifest, actor string, seq
 	return change
 }
 
-func counterValue(t *testing.T, state *counter.GCounter) uint64 {
+func counterValue(t testing.TB, state *counter.GCounter) uint64 {
 	t.Helper()
 	value, err := state.Value()
 	if err != nil {

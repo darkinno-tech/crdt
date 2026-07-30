@@ -15,7 +15,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./attachment ./clock ./counter ./delta ./durable ./encoding ./extensions ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./cmd/crdt-analyze ./cmd/crdt-sync-probe ./examples/extensions-provider; do go test $$package; done
+	for package in . ./attachment ./clock ./counter ./delta ./durable ./encoding ./extensions ./list ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./xml ./cmd/crdt-analyze ./cmd/crdt-sync-probe ./examples/extensions-provider; do go test $$package; done
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -46,6 +46,9 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
 	go test -run=^$$ -fuzz=FuzzRGARunUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
+	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./list
+	go test -run=^$$ -fuzz=FuzzParseDocument -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./xml
+	go test -run=^$$ -fuzz=FuzzUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./richtext
 	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./tree
 
 coverage:

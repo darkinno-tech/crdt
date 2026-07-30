@@ -33,6 +33,11 @@ var (
 	// ErrResourceLimit indicates that accepting a delta would exceed the
 	// receiver's configured in-memory safety limits.
 	ErrResourceLimit = errors.New("text: RGA resource limit exceeded")
+	// ErrUndoAnchorGone indicates that a local undo/redo operation can no
+	// longer preserve its original insertion intent because the structural
+	// predecessor was compacted. Callers must clear local history after a
+	// compaction boundary rather than silently placing content elsewhere.
+	ErrUndoAnchorGone = errors.New("text: undo anchor is no longer retained")
 )
 
 // Position is a stable, opaque identifier for one Unicode scalar value.
@@ -309,6 +314,46 @@ func (r *RGA) Insert(offset int, value string) (Delta, error) {
 	return delta, err
 }
 
+// insertAfter inserts value after an exact retained predecessor. It is used by
+// the local undo manager to replay editing intent without treating a CRDT
+// tombstone as reversible state. The predecessor may be deleted, because a
+// retained tombstone remains an RGA ordering anchor; a compacted predecessor
+// fails closed instead of falling back to an unrelated current offset.
+func (r *RGA) insertAfter(predecessor Position, value string) (Delta, error) {
+	if r == nil || r.clock == nil {
+		return Delta{}, ErrNilText
+	}
+	if predecessor.Valid() {
+		r.mu.RLock()
+		_, retained := r.nodes[predecessor]
+		r.mu.RUnlock()
+		if !retained {
+			return Delta{}, ErrUndoAnchorGone
+		}
+	}
+	if !utf8.ValidString(value) {
+		return Delta{}, ErrInvalidText
+	}
+	runes := []rune(value)
+	delta := Delta{nodes: make(map[Position]node, len(runes)), tombstones: make(map[Position]struct{})}
+	parent := predecessor
+	for _, valueRune := range runes {
+		id, err := r.clock.Now()
+		if err != nil {
+			return Delta{}, err
+		}
+		delta.nodes[id] = node{parent: parent, rune: valueRune}
+		parent = id
+	}
+	if len(delta.nodes) == 0 {
+		return delta, nil
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, err
+	}
+	return delta, nil
+}
+
 // InsertWithLimits inserts text only when its complete canonical delta fits
 // limits. A rejected output frame does not add nodes or tombstones to the RGA,
 // which lets a transport-facing caller fail the local edit before it becomes
@@ -334,7 +379,27 @@ func (r *RGA) InsertRunBinaryWithLimits(offset int, value string, limits frame.D
 	return encoded, err
 }
 
+// PrepareInsertRunBinaryWithLimits returns a canonical run-v2 insertion delta
+// without adding its nodes to r. It reserves HLC tags, so a failed enclosing
+// transaction may leave safely skipped tags in ClockState. Callers that need
+// an atomic composed CRDT operation can encode and validate their outer frame
+// before applying the returned delta with ApplyDelta.
+func (r *RGA) PrepareInsertRunBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareInsert(offset, value, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
 func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
+	delta, encoded, err := r.prepareInsert(offset, value, limits, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
+}
+
+func (r *RGA) prepareInsert(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
 	if r == nil || r.clock == nil {
 		return Delta{}, nil, ErrNilText
 	}
@@ -384,9 +449,6 @@ func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, enco
 			return Delta{}, nil, err
 		}
 	}
-	if err := r.ApplyDelta(delta); err != nil {
-		return Delta{}, nil, err
-	}
 	return delta, encoded, nil
 }
 
@@ -421,7 +483,25 @@ func (r *RGA) DeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderL
 	return encoded, err
 }
 
+// PrepareDeleteRunBinaryWithLimits returns a canonical run-v2 deletion delta
+// without applying its tombstones. It is intended for a composed CRDT that
+// must preflight an enclosing frame before committing local text changes.
+func (r *RGA) PrepareDeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareDelete(offset, count, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
 func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
+	delta, encoded, err := r.prepareDelete(offset, count, limits, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
+}
+
+func (r *RGA) prepareDelete(offset, count int, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
 	if r == nil {
 		return Delta{}, nil, ErrNilText
 	}
@@ -452,10 +532,39 @@ func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits, encode delt
 			return Delta{}, nil, err
 		}
 	}
-	if err := r.ApplyDelta(delta); err != nil {
-		return Delta{}, nil, err
-	}
 	return delta, encoded, nil
+}
+
+// NextTag reserves a local HLC tag without creating an RGA node. It exists
+// for composed CRDTs that persist their formatting metadata with this RGA's
+// clock state. A reserved but un-emitted tag is safe to skip.
+func (r *RGA) NextTag() (Position, error) {
+	if r == nil || r.clock == nil {
+		return Position{}, ErrNilText
+	}
+	return r.clock.Now()
+}
+
+// WitnessTag advances the RGA clock beyond a remote composed-CRDT tag without
+// changing text content. Callers must persist the resulting ClockState with
+// their enclosing state before reusing the replica ID.
+func (r *RGA) WitnessTag(tag Position) error {
+	if r == nil || r.clock == nil {
+		return ErrNilText
+	}
+	return r.clock.Witness(tag)
+}
+
+// NodePositions returns sorted stable IDs for the nodes carried by d. It does
+// not expose their text or parent links, and is useful when an enclosing CRDT
+// needs to attach metadata to an insertion before it applies the delta.
+func (d Delta) NodePositions() []Position {
+	positions := make([]Position, 0, len(d.nodes))
+	for position := range d.nodes {
+		positions = append(positions, position)
+	}
+	sortPositions(positions)
+	return positions
 }
 
 func (r *RGA) String() string {

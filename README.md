@@ -28,6 +28,13 @@ feature-parity, or performance claim.
   bounded metadata only, backed by an authenticated application object store.
 - Causally replicated **MV-Register** that preserves concurrent opaque-byte
   writes instead of resolving them by wall clock.
+- Experimental generic **RGA list** values with caller-defined canonical
+  codecs, bounded framed state/deltas, and stable element positions.
+- Experimental strict **XML fragments** backed by immutable XML-node list
+  values; XML subtree replacement is explicit rather than a hidden attribute
+  conflict rule.
+- Local, compensating **text Undo/Redo** that emits ordinary RGA deltas and
+  never rolls back remote state.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic
@@ -40,8 +47,8 @@ feature-parity, or performance claim.
   disabled unless an application explicitly enables them.
 - A single-writer durable WebSocket relay reference with a bbolt operation log,
   exact-dot binding, bounded replay, and reconnect support.
-- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, and OR-Tree
-  collections, enabled only by an explicit per-replication-group protocol
+- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, OR-Tree, and
+  inline rich-text formatting, enabled only by an explicit per-replication-group protocol
   policy. New Go RGA groups use compact run-v2 frames; the RGA tombstone
   lifecycle still requires careful retention and exact-acknowledgement handling.
 
@@ -67,7 +74,7 @@ application supplies an authoritative, authenticated active-membership view.
 It does not discover, authenticate, or persist that view. A checksum detects
 accidental frame corruption; it is not an authenticity or encryption mechanism.
 
-## Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree protocols
+## Experimental LWW-Set, LWW-Map, legacy RGA v1, OR-Tree, and rich-text protocols
 
 LWW-Set (`lww.Set`, TypeIDs 7/8) encodes generic elements through an
 application-supplied canonical `lww.ElementCodec`. It retains remove metadata,
@@ -88,6 +95,14 @@ New Go RGA groups select compact run-v2 frames (TypeIDs 19/20) through
 its manifest. The run encoding preserves scalar RGA position semantics, but a
 manifest still represents exactly one wire protocol: do not mix it with a
 legacy v1 client or frame stream.
+
+Experimental `richtext.Document` (TypeIDs 23/24) wraps a run-v2 RGA with
+bounded per-position LWW inline attributes. It supports opaque UTF-8 attribute
+strings for formatting such as bold, italics, links, and comments; it does not
+carry HTML, CSS, block structure, or media bytes. Use a distinct manifest with
+`richtext.SemanticsVersion` and `AllowExperimental`, persist its state with the
+shared RGA clock atomically, and render only through application-owned attribute
+validation. See the [rich-text design](docs/design/rich-text.md).
 
 `CompactTombstones` is intentionally conservative: it can collect only deleted
 leaves after an authenticated exact-acknowledgement epoch has durably saved a
@@ -116,7 +131,7 @@ individual `*WithPolicy` constructors remain available for isolated use.
 The zero-value policy advertises G-Counter, G-Set, OR-Set, MV-Register,
 PN-Counter, and default RGA run-v2 protocols. The policy is neither a global
 switch nor a plugin registry: unknown and reserved frame types remain
-unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree replicas
+unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, OR-Tree, and rich-text replicas
 must persist HLC state with snapshots and retain their tombstones.
 
 ## Browser and JavaScript mobile clients
@@ -435,6 +450,7 @@ encoders for that.
 | `lww` | Experimental framed LWW-Set and LWW-Map. |
 | `attachment` | Experimental bounded media/data references with streaming size and SHA-256 verification. |
 | `text` | Experimental framed RGA collaborative text and run-v2 codec. |
+| `richtext` | Experimental bounded inline formatting over run-v2 RGA text. |
 | `tree` | Experimental framed observed-remove tree. |
 | `register` | In-memory LWW/max registers and framed causal MV-Register. |
 | `encoding` | Versioned bounded binary frames. |
@@ -486,22 +502,22 @@ go run ./cmd/crdt-sync-probe -mode send \
   -replica sender -token-file ./probe.token -duplicates 3
 ```
 
-The probe can also exercise experimental RGA delta delivery, but it does not
-perform manifest or capability negotiation. `/rga` is disabled unless each
-receiver and sender explicitly select the **same** `-rga-protocol` (`v1` or
-`run-v2`). A mutation response is an empty `204` with
+The probe also exercises RGA delta delivery, but it does not perform manifest
+or capability negotiation. `/rga` defaults to stable run-v2 (TypeIDs 19/20).
+Legacy scalar v1 (11/12) remains an experimental, explicit
+`-rga-protocol=v1` opt-in for both endpoints; mismatched frames are rejected
+before text mutates. A mutation response is an empty `204` with
 `X-CRDT-Apply-Micros`; use the final authenticated `/state` response to compare
 `text.protocol`, visible rune count, SHA-256, and pending dependencies.
 
 ```sh
-# Both receivers use the same explicitly selected experimental wire shape.
-go run ./cmd/crdt-sync-probe -mode serve -replica receiver \
-  -rga-protocol run-v2 -token-file ./probe.token
+# New probe sessions use run-v2 without an extra protocol flag.
+go run ./cmd/crdt-sync-probe -mode serve -replica receiver -token-file ./probe.token
 
 go run ./cmd/crdt-sync-probe -mode send \
   -target http://receiver-a:49511,http://receiver-b:49511 \
   -replica text-sender -token-file ./probe.token \
-  -counter-increment 0 -element '' -rga-protocol run-v2 \
+  -counter-increment 0 -element '' \
   -rga-runes 4096 -rga-rune 'λ' -duplicates 3
 ```
 

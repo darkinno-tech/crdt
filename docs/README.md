@@ -19,6 +19,8 @@ be committed.
 - [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
 - [Attachment reference integration](integration/attachment.md)
 - [附件引用集成](integration/attachment.zh-CN.md)
+- [Application change observation](integration/observe.md)
+- [应用层变更观察](integration/observe.zh-CN.md)
 
 ## Design and protocol
 
@@ -28,6 +30,7 @@ be committed.
 - [Membership protocol](protocol/membership.md)
 - [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
+- [Bounded rich-text inline-format design](design/rich-text.md)
 
 ## Operations and architecture
 
@@ -35,6 +38,10 @@ be committed.
 - [跨机器同步探针部署手册](operations/cross-host-probe.zh-CN.md)
 - [Durable relay benchmark](operations/durable-benchmark-2026-07-29.md)
 - [Durable relay 基准测试](operations/durable-benchmark-2026-07-29.zh-CN.md)
+- [Controlled benchmark evidence — 2026-07-29](operations/benchmark-2026-07-29.md)
+- [受控压测记录 — 2026-07-29](operations/benchmark-2026-07-29.zh-CN.md)
+- [Historical cross-device RGA baseline — 2026-07-29](operations/cross-device-rga-2026-07-29.md)
+- [WebSocket batch latency evidence — 2026-07-29](operations/websocket-batch-latency-2026-07-29.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 

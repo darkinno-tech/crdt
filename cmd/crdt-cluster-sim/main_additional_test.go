@@ -155,7 +155,7 @@ func TestClusterServerRejectsMalformedAndIncompleteState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := second.MarshalBinaryWithLimits(frameLimits())
+	encoded, err := second.MarshalRunBinaryWithLimits(frameLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

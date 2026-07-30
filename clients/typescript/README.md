@@ -52,6 +52,9 @@ The two benchmark targets report raw five-sample decoder throughput and actual
 Node-to-Go-Wasm insert/apply latency. Treat them as a baseline for the local
 machine and Go/Node versions, not a mobile-device SLA.
 
+The current controlled local sample, including all five values and frame sizes,
+is recorded in the [2026-07-29 benchmark report](../../docs/operations/benchmark-2026-07-29.md).
+
 For a browser deployment, copy both generated files into your asset pipeline,
 serve `.wasm` as `application/wasm`, and allow Wasm compilation in your CSP.
 Use a Web Worker for long documents so local merges do not block the UI thread.

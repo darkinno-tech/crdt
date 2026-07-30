@@ -1,5 +1,5 @@
-// Command crdt-cluster-sim exercises multi-device RGA synchronization over
-// real HTTP links. It is a short-lived test utility, not a production relay.
+// Command crdt-cluster-sim exercises run-v2 RGA synchronization over real HTTP
+// links. It is a short-lived test utility, not a production relay.
 package main
 
 import (
@@ -234,7 +234,7 @@ func (server *clusterServer) applyRGA(writer http.ResponseWriter, request *http.
 	encoded, err := readRequest(request, maxRequestBytes)
 	if err == nil {
 		var delta text.Delta
-		delta, err = text.UnmarshalRGADeltaWithLimits(encoded, frameLimits())
+		delta, err = text.UnmarshalRGARunDeltaWithLimits(encoded, frameLimits())
 		if err == nil {
 			err = server.rga.ApplyDelta(delta)
 		}
@@ -248,7 +248,7 @@ func (server *clusterServer) applyRGA(writer http.ResponseWriter, request *http.
 }
 
 func (server *clusterServer) state() (clusterState, error) {
-	encoded, err := server.rga.MarshalBinary()
+	encoded, err := server.rga.MarshalRunBinary()
 	if err != nil {
 		return clusterState{}, err
 	}
@@ -332,11 +332,11 @@ func buildDeliveries(replicaPrefix string, users, insertRunes, duplicates int) (
 		if err != nil {
 			return nil, err
 		}
-		insertData, err := insert.MarshalBinaryWithLimits(frameLimits())
+		insertData, err := insert.MarshalRunBinaryWithLimits(frameLimits())
 		if err != nil {
 			return nil, err
 		}
-		cutData, err := cut.MarshalBinaryWithLimits(frameLimits())
+		cutData, err := cut.MarshalRunBinaryWithLimits(frameLimits())
 		if err != nil {
 			return nil, err
 		}

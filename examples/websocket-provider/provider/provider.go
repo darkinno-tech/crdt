@@ -27,10 +27,16 @@ const (
 	// Subprotocol identifies the reference provider's control and binary-change
 	// envelope. It is not a CRDT frame format version.
 	Subprotocol = "crdt-sync-v1"
+	// BatchSubprotocol adds a bounded batch envelope while retaining a complete
+	// Dot and canonical CRDT delta for every contained change. It is opt-in so
+	// v1 peers retain their original wire contract.
+	BatchSubprotocol = "crdt-sync-v2"
 
 	defaultMaxMessageBytes   = 1 << 20
 	defaultMaxActorBytes     = 128
 	defaultMaxQueuedMessages = 64
+	defaultMaxBatchChanges   = 32
+	maximumBatchChanges      = 1 << 10
 	defaultHandshakeTimeout  = 10 * time.Second
 	defaultWriteTimeout      = 10 * time.Second
 )
@@ -42,6 +48,11 @@ var (
 	ErrUnauthorized = errors.New("websocket provider: unauthorized")
 	// ErrClosed reports use of a closed client.
 	ErrClosed = errors.New("websocket provider: client is closed")
+	// ErrBatchUnsupported reports a batch operation on a v1 connection.
+	ErrBatchUnsupported = errors.New("websocket provider: batch subprotocol is not enabled")
+	// ErrBatchLimit reports a batch that exceeds the configured item or message
+	// limit before it reaches the network.
+	ErrBatchLimit = errors.New("websocket provider: batch limit exceeded")
 )
 
 // Peer is the authenticated identity returned by Authenticate. ID should be a
@@ -147,6 +158,7 @@ type Config struct {
 	MaxMessageBytes   int
 	MaxActorBytes     int
 	MaxQueuedMessages int
+	MaxBatchChanges   int
 	HandshakeTimeout  time.Duration
 	WriteTimeout      time.Duration
 }
@@ -163,6 +175,7 @@ type Handler struct {
 	maxMessageBytes   int
 	maxActorBytes     int
 	maxQueuedMessages int
+	maxBatchChanges   int
 	handshakeTimeout  time.Duration
 	writeTimeout      time.Duration
 }
@@ -178,6 +191,7 @@ func NewHandler(config Config) (*Handler, error) {
 		config.MaxMessageBytes,
 		config.MaxActorBytes,
 		config.MaxQueuedMessages,
+		config.MaxBatchChanges,
 		config.HandshakeTimeout,
 		config.WriteTimeout,
 	)
@@ -206,6 +220,7 @@ func NewHandler(config Config) (*Handler, error) {
 		maxMessageBytes:   limits.maxMessageBytes,
 		maxActorBytes:     limits.maxActorBytes,
 		maxQueuedMessages: limits.maxQueuedMessages,
+		maxBatchChanges:   limits.maxBatchChanges,
 		handshakeTimeout:  limits.handshakeTimeout,
 		writeTimeout:      limits.writeTimeout,
 	}, nil
@@ -224,14 +239,15 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	conn, err := websocket.Accept(writer, request, &websocket.AcceptOptions{
-		Subprotocols:    []string{Subprotocol},
+		Subprotocols:    []string{BatchSubprotocol, Subprotocol},
 		OriginPatterns:  h.origins,
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return
 	}
-	if conn.Subprotocol() != Subprotocol {
+	batchEnabled := conn.Subprotocol() == BatchSubprotocol
+	if !batchEnabled && conn.Subprotocol() != Subprotocol {
 		_ = conn.CloseNow()
 		return
 	}
@@ -246,11 +262,13 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	conn.SetReadLimit(int64(h.maxMessageBytes))
 	connectionContext, cancelConnection := context.WithCancel(context.Background())
 	peerConnection := &connection{
-		context:      connectionContext,
-		cancel:       cancelConnection,
-		conn:         conn,
-		outbound:     make(chan []byte, h.maxQueuedMessages),
-		writeTimeout: h.writeTimeout,
+		context:         connectionContext,
+		cancel:          cancelConnection,
+		conn:            conn,
+		outbound:        make(chan []byte, h.maxQueuedMessages),
+		writeTimeout:    h.writeTimeout,
+		batchEnabled:    batchEnabled,
+		maxBatchChanges: h.maxBatchChanges,
 	}
 	// Register before confirming the handshake. Dial returns once it receives
 	// response, so acknowledging first would allow an immediately published
@@ -305,36 +323,89 @@ func (g *Group) receive(peer Peer, authorize Authorize, data []byte, maxMessageB
 	if err != nil {
 		return err
 	}
-	change, err := replica.NewChangeWithPolicy(g.manifest, dot, delta, g.policy)
-	if err != nil {
-		return fmt.Errorf("validate change: %w", err)
-	}
-	if err := authorize(peer, g.manifest, change.Dot); err != nil {
-		return ErrUnauthorized
-	}
-	encoded, err := marshalChange(change)
+	return g.receiveChanges(peer, authorize, []wireChange{{dot: dot, delta: delta}})
+}
+
+func (g *Group) receiveBatch(peer Peer, authorize Authorize, data []byte, maxMessageBytes, maxActorBytes, maxChanges int) error {
+	changes, err := unmarshalChangeBatch(data, maxMessageBytes, maxActorBytes, maxChanges)
 	if err != nil {
 		return err
 	}
+	return g.receiveChanges(peer, authorize, changes)
+}
+
+func (g *Group) receiveChanges(peer Peer, authorize Authorize, incoming []wireChange) error {
+	if len(incoming) == 0 {
+		return errInvalidWireMessage
+	}
+	changes := make([]replica.Change, 0, len(incoming))
+	encoded := make([][]byte, 0, len(incoming))
+	for _, wire := range incoming {
+		change, err := replica.NewChangeWithPolicy(g.manifest, wire.dot, wire.delta, g.policy)
+		if err != nil {
+			return fmt.Errorf("validate change: %w", err)
+		}
+		if err := authorize(peer, g.manifest, change.Dot); err != nil {
+			return ErrUnauthorized
+		}
+		data, err := marshalChange(change)
+		if err != nil {
+			return err
+		}
+		changes = append(changes, change)
+		encoded = append(encoded, data)
+	}
 	g.receiveMu.Lock()
 	defer g.receiveMu.Unlock()
-	delivery, err := g.inbox.Receive(change)
-	if err != nil {
-		return fmt.Errorf("receive change: %w", err)
+	accepted := make([][]byte, 0, len(changes))
+	for index, change := range changes {
+		delivery, err := g.inbox.Receive(change)
+		if err != nil {
+			return fmt.Errorf("receive change: %w", err)
+		}
+		// A known dot is not broadcast again. Inbox deliberately does not retain
+		// already installed payload bytes, so a relay cannot prove that a later
+		// same-dot payload is identical. Suppressing it contains a conflicting retry
+		// instead of exposing peers to a payload that may not be the original change.
+		// Durable production relays must also persist the actor/counter-to-payload
+		// binding with the CRDT state and frontier transaction.
+		if delivery.Accepted() {
+			accepted = append(accepted, encoded[index])
+		}
 	}
-	// A known dot is not broadcast again. Inbox deliberately does not retain
-	// already installed payload bytes, so a relay cannot prove that a later
-	// same-dot payload is identical. Suppressing it contains a conflicting retry
-	// instead of exposing peers to a payload that may not be the original change.
-	// Durable production relays must also persist the actor/counter-to-payload
-	// binding with the CRDT state and frontier transaction.
-	if delivery.Accepted() {
-		g.broadcast(encoded)
+	if len(accepted) == 1 {
+		g.broadcast(accepted[0])
+	} else if len(accepted) > 1 {
+		g.broadcastBatch(accepted)
 	}
 	return nil
 }
 
 func (g *Group) broadcast(data []byte) {
+	g.broadcastToPeers(func(peer *connection) bool {
+		return peer.enqueue(data)
+	})
+}
+
+func (g *Group) broadcastBatch(data [][]byte) {
+	batch, err := marshalEncodedChangeBatch(data)
+	if err != nil {
+		return
+	}
+	g.broadcastToPeers(func(peer *connection) bool {
+		if peer.batchEnabled {
+			return peer.enqueue(batch)
+		}
+		for _, item := range data {
+			if !peer.enqueue(item) {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+func (g *Group) broadcastToPeers(enqueue func(*connection) bool) {
 	g.peersMu.Lock()
 	peers := make([]*connection, 0, len(g.peers))
 	for peer := range g.peers {
@@ -342,7 +413,7 @@ func (g *Group) broadcast(data []byte) {
 	}
 	g.peersMu.Unlock()
 	for _, peer := range peers {
-		if !peer.enqueue(data) {
+		if !enqueue(peer) {
 			peer.close()
 		}
 	}
@@ -352,11 +423,12 @@ type transportLimits struct {
 	maxMessageBytes   int
 	maxActorBytes     int
 	maxQueuedMessages int
+	maxBatchChanges   int
 	handshakeTimeout  time.Duration
 	writeTimeout      time.Duration
 }
 
-func normalizeLimits(messageBytes, actorBytes, queuedMessages int, handshakeTimeout, writeTimeout time.Duration) (transportLimits, error) {
+func normalizeLimits(messageBytes, actorBytes, queuedMessages, batchChanges int, handshakeTimeout, writeTimeout time.Duration) (transportLimits, error) {
 	if messageBytes == 0 {
 		messageBytes = defaultMaxMessageBytes
 	}
@@ -365,6 +437,9 @@ func normalizeLimits(messageBytes, actorBytes, queuedMessages int, handshakeTime
 	}
 	if queuedMessages == 0 {
 		queuedMessages = defaultMaxQueuedMessages
+	}
+	if batchChanges == 0 {
+		batchChanges = defaultMaxBatchChanges
 	}
 	if handshakeTimeout == 0 {
 		handshakeTimeout = defaultHandshakeTimeout
@@ -377,25 +452,28 @@ func normalizeLimits(messageBytes, actorBytes, queuedMessages int, handshakeTime
 		return transportLimits{}, ErrInvalidConfig
 	}
 	maxWireBytes := frameLimits.MaxFrameBytes + actorBytes + 1 + 3*binary.MaxVarintLen64
-	if messageBytes < 1024 || messageBytes > maxWireBytes || queuedMessages <= 0 || handshakeTimeout <= 0 || writeTimeout <= 0 {
+	if messageBytes < 1024 || messageBytes > maxWireBytes || queuedMessages <= 0 || batchChanges <= 0 || batchChanges > maximumBatchChanges || handshakeTimeout <= 0 || writeTimeout <= 0 {
 		return transportLimits{}, ErrInvalidConfig
 	}
 	return transportLimits{
 		maxMessageBytes:   messageBytes,
 		maxActorBytes:     actorBytes,
 		maxQueuedMessages: queuedMessages,
+		maxBatchChanges:   batchChanges,
 		handshakeTimeout:  handshakeTimeout,
 		writeTimeout:      writeTimeout,
 	}, nil
 }
 
 type connection struct {
-	context      context.Context
-	cancel       context.CancelFunc
-	conn         *websocket.Conn
-	outbound     chan []byte
-	writeTimeout time.Duration
-	closeOnce    sync.Once
+	context         context.Context
+	cancel          context.CancelFunc
+	conn            *websocket.Conn
+	outbound        chan []byte
+	writeTimeout    time.Duration
+	batchEnabled    bool
+	maxBatchChanges int
+	closeOnce       sync.Once
 }
 
 func (connection *connection) readLoop(peer Peer, group *Group, authorize Authorize, maxMessageBytes, maxActorBytes int) {
@@ -406,6 +484,12 @@ func (connection *connection) readLoop(peer Peer, group *Group, authorize Author
 		}
 		if messageType != websocket.MessageBinary {
 			return
+		}
+		if connection.batchEnabled && isChangeBatch(data) {
+			if err := group.receiveBatch(peer, authorize, data, maxMessageBytes, maxActorBytes, connection.maxBatchChanges); err != nil {
+				return
+			}
+			continue
 		}
 		if err := group.receive(peer, authorize, data, maxMessageBytes, maxActorBytes); err != nil {
 			return

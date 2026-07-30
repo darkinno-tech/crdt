@@ -265,10 +265,69 @@ func TestSendBroadcastsExplicitRGADeltaAndRejectsProtocolMismatch(t *testing.T) 
 	if disabledResponse.Code != http.StatusNotFound || disabled.rga.String() != "" {
 		t.Fatalf("disabled RGA endpoint status=%d text=%q", disabledResponse.Code, disabled.rga.String())
 	}
-	if err := run([]string{
-		"-mode", "send", "-target", "http://127.0.0.1:1", "-token", "secret", "-replica", "sender", "-counter-increment", "0", "-element", "", "-rga-runes", "1",
-	}); err == nil {
-		t.Fatal("run accepted RGA delivery without an explicit protocol")
+	if defaultRGAProtocol != rgaProtocolRunV2 {
+		t.Fatalf("default RGA protocol = %q, want %q", defaultRGAProtocol, rgaProtocolRunV2)
+	}
+	if protocol, err := parseRGAProtocol(string(defaultRGAProtocol)); err != nil || protocol != rgaProtocolRunV2 {
+		t.Fatalf("default RGA protocol parse = %q, %v", protocol, err)
+	}
+}
+
+func TestProbeDefaultRunV2RejectsExperimentalScalarRGAFrames(t *testing.T) {
+	receiver, err := newProbe("receiver", "secret", defaultRGAProtocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := text.New("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := source.Insert(0, "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := delta.MarshalBinaryWithLimits(rgaTransportLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/rga", bytes.NewReader(encoded))
+	request.Header.Set("X-CRDT-Probe-Token", "secret")
+	response := httptest.NewRecorder()
+	receiver.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || receiver.rga.String() != "" {
+		t.Fatalf("stable run-v2 receiver accepted scalar v1 frame: status=%d text=%q", response.Code, receiver.rga.String())
+	}
+}
+
+func TestSendBroadcastsDefaultRunV2AtBoundAndDeduplicates(t *testing.T) {
+	left, err := newProbe("left", "secret", defaultRGAProtocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := newProbe("right", "secret", defaultRGAProtocol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftServer := httptest.NewServer(left)
+	defer leftServer.Close()
+	rightServer := httptest.NewServer(right)
+	defer rightServer.Close()
+
+	if err := send(leftServer.URL+","+rightServer.URL, "rga-sender", "secret", defaultRGAProtocol, 0, "", maxRGARunesPerDelivery, "λ", 3, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Repeat("λ", maxRGARunesPerDelivery)
+	for _, receiver := range []*probe{left, right} {
+		if got := receiver.rga.String(); got != want {
+			t.Fatalf("RGA text length = %d, want %d", len([]rune(got)), maxRGARunesPerDelivery)
+		}
+		state := receiver.state()
+		if state.Text.Protocol != string(defaultRGAProtocol) || state.Text.Runes != maxRGARunesPerDelivery || state.Text.Pending != 0 {
+			t.Fatalf("RGA state = %+v", state.Text)
+		}
+	}
+	if _, err := newRGADelta("rga-sender", defaultRGAProtocol, maxRGARunesPerDelivery+1, "x"); err == nil {
+		t.Fatal("newRGADelta accepted a rune count above the stable run-v2 limit")
 	}
 }
 
