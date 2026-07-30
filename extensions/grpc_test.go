@@ -519,6 +519,9 @@ func TestGRPCRelayRejectsInvalidFirstMessageAndForgedActor(t *testing.T) {
 }
 
 func TestGRPCRelayConfigurationAndQueueBoundaries(t *testing.T) {
+	if status.Code((*GRPCRelay)(nil).Sync(nil)) != codes.Unavailable {
+		t.Fatal("nil gRPC relay did not report unavailable")
+	}
 	if _, err := NewGRPCRelay(GRPCConfig{}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("empty gRPC config = %v", err)
 	}
@@ -585,10 +588,10 @@ func TestGRPCRelayConfigurationAndQueueBoundaries(t *testing.T) {
 	if _, ok := subscriber.dequeueContext(context.Background()); ok {
 		t.Fatal("closed gRPC queue dequeued data")
 	}
-	if grpcReceiveStatus(io.EOF) != nil || status.Code(grpcReceiveStatus(errors.New("read"))) != codes.Unavailable {
+	if grpcReceiveStatus(nil) != nil || grpcReceiveStatus(io.EOF) != nil || status.Code(grpcReceiveStatus(errors.New("read"))) != codes.Unavailable {
 		t.Fatal("receive status mapping mismatch")
 	}
-	if status.Code(grpcSendStatus(errors.New("write"))) != codes.Unknown {
+	if grpcSendStatus(nil) != nil || status.Code(grpcSendStatus(errors.New("write"))) != codes.Unknown {
 		t.Fatal("send status mapping mismatch")
 	}
 	if status.Code(grpcReceiveStatus(status.Error(codes.InvalidArgument, "status"))) != codes.InvalidArgument || status.Code(grpcSendStatus(status.Error(codes.InvalidArgument, "status"))) != codes.InvalidArgument {
@@ -597,6 +600,9 @@ func TestGRPCRelayConfigurationAndQueueBoundaries(t *testing.T) {
 	var nilSubscriber *grpcSubscriber
 	if nilSubscriber.enqueue(nil) || nilSubscriber.enqueueAll(nil) {
 		t.Fatal("nil gRPC subscriber accepted data")
+	}
+	if _, ok := nilSubscriber.dequeueContext(context.Background()); ok {
+		t.Fatal("nil gRPC subscriber dequeued data")
 	}
 	nilSubscriber.close()
 }
