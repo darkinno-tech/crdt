@@ -94,11 +94,11 @@ type Group struct {
 // Group or block on a transport callback.
 func NewGroup(config GroupConfig) (*Group, error) {
 	if config.MaxPendingChanges <= 0 || config.MaxPendingBytes <= 0 || config.Apply == nil {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("extensions.new_group", ErrInvalidConfig)
 	}
 	hello, err := marshalHello(config.Manifest)
 	if err != nil || len(hello) > maxControlBytes {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("extensions.new_group", ErrInvalidConfig)
 	}
 	inbox, err := replica.NewInboxWithPolicy(
 		config.Manifest,
@@ -109,7 +109,7 @@ func NewGroup(config GroupConfig) (*Group, error) {
 		config.Policy,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("create replica inbox: %w", err)
+		return nil, crdt.WrapError(crdt.ErrorCodeInvalidConfig, "extensions.new_group", fmt.Errorf("create replica inbox: %w", err))
 	}
 	return &Group{
 		manifest: config.Manifest,
@@ -117,6 +117,10 @@ func NewGroup(config GroupConfig) (*Group, error) {
 		inbox:    inbox,
 		peers:    make(map[subscriber]struct{}),
 	}, nil
+}
+
+func invalidConfig(operation string, cause error) error {
+	return crdt.WrapError(crdt.ErrorCodeInvalidConfig, operation, cause)
 }
 
 // Manifest returns the immutable-by-convention manifest negotiated by g.

@@ -423,6 +423,17 @@ export class NativeArray<T extends NativeValue = NativeValue> {
    * @internal
    */
   _insertWithIDs(index: number, values: readonly { readonly id: NativeID; readonly value: NativeValue }[]): NativeArrayInsertOperation {
+    return this.document._applyLocal(this._planInsertWithIDs(index, values)) as NativeArrayInsertOperation;
+  }
+
+  /**
+   * Validates and constructs one insert without changing the array. It lets a
+   * document extension preflight associated metadata before one atomic local
+   * submission.
+   *
+   * @internal
+   */
+  _planInsertWithIDs(index: number, values: readonly { readonly id: NativeID; readonly value: NativeValue }[]): NativeArrayInsertOperation {
     this.document._assertOpen();
     const visible = this.#visibleNodes();
     assertArrayIndex(index, visible.length, true);
@@ -444,7 +455,7 @@ export class NativeArray<T extends NativeValue = NativeValue> {
       entries.push({ id, after, value: this.document._copyValue(value.value) });
       after = copyID(id);
     }
-    return this.document._applyLocal({ kind: "array-insert", target: this.name, entries }) as NativeArrayInsertOperation;
+    return { kind: "array-insert", target: this.name, entries };
   }
 
   push(values: readonly T[]): void {
@@ -869,6 +880,20 @@ export class NativeDocument {
     }
     this.#counter += 1;
     return { actor: this.replicaID, counter: this.#counter };
+  }
+
+  /**
+   * Returns the next local ID without advancing the counter. Document-owned
+   * extensions use this to preflight their own metadata before submitting an
+   * operation that advances the counter only after admission.
+   *
+   * @internal
+   */
+  _peekNextID(): NativeID {
+    if (this.#counter >= Number.MAX_SAFE_INTEGER) {
+      throw resourceLimit();
+    }
+    return { actor: this.replicaID, counter: this.#counter + 1 };
   }
 
   /** @internal */

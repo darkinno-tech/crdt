@@ -14,9 +14,13 @@ var (
 	ErrLimit        = errors.New("delta: batch limit exceeded")
 	ErrInvalid      = errors.New("delta: invalid batch")
 	ErrTypeMismatch = errors.New("delta: frame type mismatch")
+	ErrMergeRetry   = errors.New("delta: merge retry limit exceeded")
 )
 
-const batchMagic = "DBAT"
+const (
+	batchMagic      = "DBAT"
+	maxMergeRetries = 16
+)
 
 // Batch contains immutable copies of encoded delta frames.
 type Batch struct{ items [][]byte }
@@ -148,7 +152,7 @@ func (c *Coalescer) Add(item []byte) error {
 	}
 	copyItem := append([]byte(nil), item...)
 
-	for {
+	for retries := 0; ; retries++ {
 		c.mu.Lock()
 		if len(c.items) == 0 {
 			c.typeID, c.codecID = decoded.TypeID, decoded.CodecID
@@ -193,6 +197,9 @@ func (c *Coalescer) Add(item []byte) error {
 		c.mu.Lock()
 		if c.generation != generation {
 			c.mu.Unlock()
+			if retries >= maxMergeRetries-1 {
+				return ErrMergeRetry
+			}
 			continue
 		}
 		if len(merged) > c.maxBytes-(c.total-len(c.items[len(c.items)-1])) {

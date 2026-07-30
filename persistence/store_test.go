@@ -252,6 +252,105 @@ func TestStoreConcurrentSavesAndLoads(t *testing.T) {
 	}
 }
 
+func TestBoltStoreDeleteIsAtomicAndIdempotent(t *testing.T) {
+	path := t.TempDir() + "/checkpoint.db"
+	store := testStore(t, path, testConfig())
+	saved := testSnapshot(t)
+	for _, name := range []string{"active", "retired"} {
+		if err := store.Save(name, Checkpoint{Snapshot: saved}); err != nil {
+			t.Fatalf("Save(%q) error = %v", name, err)
+		}
+	}
+	deleted, err := store.Delete("retired")
+	if err != nil || !deleted {
+		t.Fatalf("Delete(retired) deleted=%t err=%v", deleted, err)
+	}
+	if _, found, err := store.Load("retired"); err != nil || found {
+		t.Fatalf("Load(retired) after Delete found=%t err=%v", found, err)
+	}
+	if checkpoint, found, err := store.Load("active"); err != nil || !found || checkpoint.Snapshot.TypeID != saved.TypeID {
+		t.Fatalf("Load(active) checkpoint=%+v found=%t err=%v", checkpoint, found, err)
+	}
+	if deleted, err := store.Delete("retired"); err != nil || deleted {
+		t.Fatalf("second Delete(retired) deleted=%t err=%v", deleted, err)
+	}
+	if _, err := store.Delete("invalid/name"); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Delete(invalid name) error = %v, want %v", err, ErrInvalidCheckpoint)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Delete("active"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Delete() after Close error = %v, want %v", err, ErrClosed)
+	}
+
+	store = testStore(t, path, testConfig())
+	defer func() { _ = store.Close() }()
+	if _, found, err := store.Load("retired"); err != nil || found {
+		t.Fatalf("restart Load(retired) found=%t err=%v", found, err)
+	}
+	if _, found, err := store.Load("active"); err != nil || !found {
+		t.Fatalf("restart Load(active) found=%t err=%v", found, err)
+	}
+}
+
+func TestStoresSerializeConcurrentSaveLoadAndDelete(t *testing.T) {
+	for name, open := range map[string]func(*testing.T) Store{
+		"bbolt": func(t *testing.T) Store {
+			return testStore(t, t.TempDir()+"/checkpoint.db", testConfig())
+		},
+		"file": func(t *testing.T) Store {
+			return testFileStore(t, t.TempDir()+"/checkpoint.store", testFileConfig())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := open(t)
+			defer func() { _ = store.Close() }()
+			saved := testSnapshot(t)
+			const workers = 12
+			const operationsPerWorker = 20
+			errorsSeen := make(chan error, workers)
+			var workersGroup sync.WaitGroup
+			for worker := 0; worker < workers; worker++ {
+				workersGroup.Add(1)
+				go func(worker int) {
+					defer workersGroup.Done()
+					for operation := 0; operation < operationsPerWorker; operation++ {
+						switch (worker + operation) % 3 {
+						case 0:
+							if err := store.Save("mobile", Checkpoint{Snapshot: saved, Cursor: uint64(operation)}); err != nil {
+								errorsSeen <- fmt.Errorf("save: %w", err)
+								return
+							}
+						case 1:
+							if _, _, err := store.Load("mobile"); err != nil {
+								errorsSeen <- fmt.Errorf("load: %w", err)
+								return
+							}
+						default:
+							if _, err := store.Delete("mobile"); err != nil {
+								errorsSeen <- fmt.Errorf("delete: %w", err)
+								return
+							}
+						}
+					}
+				}(worker)
+			}
+			workersGroup.Wait()
+			close(errorsSeen)
+			for err := range errorsSeen {
+				t.Error(err)
+			}
+			if err := store.Save("mobile", Checkpoint{Snapshot: saved, Cursor: 99}); err != nil {
+				t.Fatal(err)
+			}
+			if checkpoint, found, err := store.Load("mobile"); err != nil || !found || checkpoint.Cursor != 99 {
+				t.Fatalf("final Load() checkpoint=%+v found=%t err=%v", checkpoint, found, err)
+			}
+		})
+	}
+}
+
 func TestStoreConfigurationAndClosedBoundaries(t *testing.T) {
 	if _, err := Open("", testConfig()); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("Open() empty path error = %v, want %v", err, ErrInvalidConfig)
@@ -277,7 +376,7 @@ func TestStoreConfigurationAndClosedBoundaries(t *testing.T) {
 	if err := store.Save("maintenance", Checkpoint{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Save() after Close error = %v, want %v", err, ErrClosed)
 	}
-	var nilStore *Store
+	var nilStore *BoltStore
 	if err := nilStore.Save("maintenance", Checkpoint{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("nil Save() error = %v, want %v", err, ErrClosed)
 	}
@@ -317,7 +416,7 @@ func TestStoreOpenAndBucketCorruptionBoundaries(t *testing.T) {
 	if _, _, err := store.Load("maintenance"); !errors.Is(err, ErrCorruptStore) {
 		t.Fatalf("Load() missing bucket error = %v, want %v", err, ErrCorruptStore)
 	}
-	if store.validName("") || store.validName("name/with-slash") || store.validName(string(make([]byte, store.config.MaxNameBytes+1))) {
+	if store.config.validName("") || store.config.validName("name/with-slash") || store.config.validName(string(make([]byte, store.config.MaxNameBytes+1))) {
 		t.Fatal("invalid checkpoint name accepted")
 	}
 }
@@ -334,7 +433,7 @@ func testConfig() Config {
 	}
 }
 
-func testStore(t *testing.T, path string, config Config) *Store {
+func testStore(t *testing.T, path string, config Config) *BoltStore {
 	t.Helper()
 	store, err := Open(path, config)
 	if err != nil {

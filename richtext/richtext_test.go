@@ -438,9 +438,6 @@ func TestSnapshotMergeAndStableManifest(t *testing.T) {
 	if !(crdt.ProtocolPolicy{}).SupportsFrame(crdt.TypeIDRichTextDelta) {
 		t.Fatal("zero policy rejected stable rich text")
 	}
-	if crdt.IsExperimentalFrame(crdt.TypeIDRichTextState) {
-		t.Fatal("stable rich-text state remained experimental")
-	}
 }
 
 func TestRichTextStableManifestDeliversCanonicalDelta(t *testing.T) {

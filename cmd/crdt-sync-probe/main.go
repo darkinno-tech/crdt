@@ -97,7 +97,7 @@ func run(args []string) error {
 	element := flags.String("element", "probe", "OR-Set element to deliver; empty skips set delivery")
 	rgaRunes := flags.Int("rga-runes", 0, "number of one-rune RGA characters to deliver; zero skips RGA delivery")
 	rgaRune := flags.String("rga-rune", "x", "one UTF-8 rune repeated for each RGA character")
-	rgaProtocolName := flags.String("rga-protocol", string(defaultRGAProtocol), "RGA frame protocol: run-v2 (stable default), v1 (experimental explicit opt-in), or disabled")
+	rgaProtocolName := flags.String("rga-protocol", string(defaultRGAProtocol), "RGA frame protocol: run-v2 (stable default), v1 (stable legacy compatibility), or disabled")
 	duplicates := flags.Int("duplicates", 3, "deliver each generated delta this many times")
 	timeout := flags.Duration("timeout", 15*time.Second, "network timeout")
 	if err := flags.Parse(args); err != nil {

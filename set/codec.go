@@ -3,6 +3,8 @@ package set
 import (
 	"reflect"
 	"strings"
+
+	"github.com/DarkInno/crdt/internal/codecguard"
 )
 
 // boundElementCodec is a validated codec and its stable wire identifier.
@@ -19,11 +21,22 @@ func bindElementCodec[T comparable](codec ElementCodec[T]) (boundElementCodec[T]
 	if isNilCodec(codec) {
 		return boundElementCodec[T]{}, ErrInvalidCodec
 	}
-	id := codec.ID()
+	id, err := codecguard.ID(codec.ID)
+	if err != nil {
+		return boundElementCodec[T]{}, ErrInvalidCodec
+	}
 	if strings.TrimSpace(id) == "" {
 		return boundElementCodec[T]{}, ErrInvalidCodec
 	}
 	return boundElementCodec[T]{value: codec, id: id}, nil
+}
+
+func (codec boundElementCodec[T]) marshal(value T) ([]byte, error) {
+	return codecguard.Marshal(func() ([]byte, error) { return codec.value.Marshal(value) })
+}
+
+func (codec boundElementCodec[T]) unmarshal(data []byte) (T, error) {
+	return codecguard.Unmarshal(func() (T, error) { return codec.value.Unmarshal(data) })
 }
 
 func isNilCodec[T comparable](codec ElementCodec[T]) bool {

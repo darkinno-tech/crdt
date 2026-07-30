@@ -1,16 +1,14 @@
 # CRDT collection extension design
 
-This document defines the collection boundary after the stable v1 core.
-LWW-Set, LWW-Map, and legacy scalar RGA v1 have framed codecs, bounded
-decoders, HLC snapshots, and fuzz coverage, but remain experimental until their
-exact tombstone-GC lifecycle ships. New Go RGA groups use compact run-v2 frames
-(TypeIDs 19/20) through `crdt.DefaultRGAFrameType()`. Run-v2 retains scalar
-position semantics but must be bound to its own matching manifest; it cannot
-share a group with a legacy v1 browser client. RGA v1 has bounded delayed
-integration, incremental indexed projection, complete snapshots, and leaf-only
-compaction guarded by an external exact-acknowledgement epoch. LWW-Set is a
-framed experimental protocol: its TypeIDs 7/8 are advertised only after the
-replication group explicitly enables experimental protocols.
+This document defines stable collection boundaries after the v1 core. LWW-Set,
+LWW-Map, legacy scalar RGA v1, and generic list RGA have framed codecs,
+bounded decoders, HLC snapshots, exact-acknowledgement tombstone retirement,
+fuzz coverage, and normative vectors. New Go RGA groups use compact run-v2
+frames (TypeIDs 19/20) through `crdt.DefaultRGAFrameType()`. Run-v2 retains
+scalar position semantics but must be bound to its own matching manifest; it
+cannot share a group with a scalar-v1 client. Scalar RGA v1 remains stable for
+migration and has bounded delayed integration, indexed projection, complete
+snapshots, and leaf-only compaction.
 
 Run-v2 is a documented cross-language contract: [the wire specification](../protocol/rga-run-v2.md)
 defines its canonical outer frame, block encoding, ordering, resource boundary,
@@ -18,16 +16,14 @@ and independently consumable vectors. A Wasm integration is available for
 semantic reuse, while a native client must implement that specification rather
 than infer a format from Go internals.
 
-## Experimental protocol policy
+## Protocol negotiation
 
-`crdt.ProtocolPolicy` is the per-replication-group opt-in boundary. Its zero
-value advertises G-Counter, OR-Set, PN-Counter, G-Set, MV-Register, default RGA
-run-v2, stable inline rich-text, and stable observed-remove tree v1 frames.
-Setting `AllowExperimental` additionally advertises LWW-Set, LWW-Map, legacy
-scalar RGA v1, and generic RGA list frames. Peers must compare the advertised
-`FrameTypes` before sending frames; this is capability negotiation, not a
-dynamic plugin registry and not a replacement for authentication,
-authorization, decoder limits, or application-level schema validation.
+`crdt.ProtocolPolicy` enumerates every implemented stable frame pair. Peers
+must still compare the authenticated manifest-selected state/delta pair before
+sending frames; this is capability negotiation, not a dynamic plugin registry
+and not a replacement for authentication, authorization, decoder limits, or
+application-level schema validation. `AllowExperimental` is a no-op retained
+only for source compatibility with earlier releases.
 
 The policy does not change frame parsing or make an unknown type acceptable.
 Callers that opt in must persist the associated HLC state and retain all
@@ -58,26 +54,26 @@ the tombstone is retained and wins when the node eventually arrives. Unknown
 parents are allowed for reordering; completed cycles and conflicting node IDs
 are rejected.
 
-## LWW experimental-protocol requirements
+## LWW stability requirements
 
 LWW-Set and LWW-Map both provide state and delta frames, bounded canonical
 decoders, HLC-bearing snapshots, delta coalescing compatibility, golden-frame
-coverage, and malformed-input fuzz targets. Their remaining lifecycle boundary
-is tombstone retention: neither type may silently discard a delete while an
-offline replica can still hold an older write.
+coverage, malformed-input fuzz targets, and exact-acknowledgement compaction.
+Neither type may silently discard a delete while an offline replica can still
+hold an older write.
 
 An application using either protocol must therefore:
 
-1. Bind the explicit experimental policy, concrete frame IDs, element codec
-   (for LWW-Set), and semantics version in an authenticated manifest.
+1. Bind concrete frame IDs, element codec (for LWW-Set), and semantics version
+   in an authenticated manifest.
 2. Persist the HLC-backed snapshot with the application frontier/outbox record
    before reusing a replica ID.
 3. Apply limits to every transport body, frame, payload, element, tag, string,
    and retained-entry budget; malformed or conflicting input must not partly
    mutate the receiver.
-4. Define retention, rejoin, and recovery behavior before an application adds
-   any LWW tombstone compaction. The library does not infer a safe causal prefix
-   or authenticated acknowledgement set for this purpose.
+4. Define retention, rejoin, and recovery behavior before calling
+   `CompactTombstones`; use an authenticated exact-acknowledgement coordinator,
+   durable post-compaction checkpoint, and old-frame retirement.
 
 ## Performance and safety constraints
 
@@ -108,7 +104,7 @@ An application using either protocol must therefore:
   SHA-256 digest. The application owns object authorization, malware/content
   scanning, and delivery quotas; it calls `Reference.Verify` to stream-check
   exact size and digest before decode/render.
-  `attachment.Register` uses the experimental LWW-Map TypeIDs 9/10 under a
+  `attachment.Register` uses the stable LWW-Map TypeIDs 9/10 under a
   distinct manifest schema and semantics version; raw or signed media URLs
   never belong in CRDT values.
 

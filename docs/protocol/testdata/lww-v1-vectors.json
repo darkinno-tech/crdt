@@ -1,0 +1,11 @@
+{
+  "protocol": "lww-v1",
+  "semantics_version": 1,
+  "frame_types": { "set_state": 7, "set_delta": 8, "map_state": 9, "map_delta": 10 },
+  "vectors": [
+    { "name": "map-set-delta", "kind": "map", "frame_type": 10, "complete_state": false, "codec_id": "", "hex": "43524454010a000e01016105616c6963650100010178dc13bbd6", "values": { "a": "x" } },
+    { "name": "map-set-state", "kind": "map", "frame_type": 9, "complete_state": true, "codec_id": "", "hex": "435244540109000e01016105616c69636501000101783c3edf37", "values": { "a": "x" } },
+    { "name": "set-add-delta", "kind": "set", "frame_type": 8, "complete_state": false, "codec_id": "example.com/lww-set-string/v1", "hex": "4352445401081d6578616d706c652e636f6d2f6c77772d7365742d737472696e672f76310c01016105616c69636501000151051a44", "elements": ["a"] },
+    { "name": "set-add-state", "kind": "set", "frame_type": 7, "complete_state": true, "codec_id": "example.com/lww-set-string/v1", "hex": "4352445401071d6578616d706c652e636f6d2f6c77772d7365742d737472696e672f76310c01016105616c69636501000179e32ae3", "elements": ["a"] }
+  ]
+}

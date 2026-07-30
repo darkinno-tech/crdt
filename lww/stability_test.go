@@ -9,6 +9,18 @@ import (
 	frame "github.com/DarkInno/crdt/encoding"
 )
 
+func TestStableLWWFrameTypes(t *testing.T) {
+	if SemanticsVersion != 1 {
+		t.Fatalf("SemanticsVersion = %d, want 1", SemanticsVersion)
+	}
+	if got, want := SetFrameType(), (crdt.FrameType{StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}); got != want {
+		t.Fatalf("SetFrameType() = %#v, want %#v", got, want)
+	}
+	if got, want := MapFrameType(), (crdt.FrameType{StateID: crdt.TypeIDLWWMapState, DeltaID: crdt.TypeIDLWWMapDelta, SemanticsVersion: crdt.SemanticsVersionLWWMap, UsesHLC: true}); got != want {
+		t.Fatalf("MapFrameType() = %#v, want %#v", got, want)
+	}
+}
+
 func TestSetOptionsTagUniquenessAndCompaction(t *testing.T) {
 	options := SetOptions{MaxEntries: 1}
 	value, err := NewSetWithOptions[string]("local", options)

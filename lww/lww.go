@@ -32,6 +32,20 @@ var (
 	ErrUnsafeCompaction = errors.New("lww: unsafe tombstone compaction")
 )
 
+// SemanticsVersion is the immutable LWW set/map v1 contract. It must match
+// the value negotiated in a replica manifest for TypeIDs 7/8 or 9/10.
+const SemanticsVersion uint64 = crdt.SemanticsVersionLWWSet
+
+// SetFrameType returns the stable LWW-Set v1 state/delta pair.
+func SetFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}
+}
+
+// MapFrameType returns the stable LWW-Map v1 state/delta pair.
+func MapFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDLWWMapState, DeltaID: crdt.TypeIDLWWMapDelta, SemanticsVersion: crdt.SemanticsVersionLWWMap, UsesHLC: true}
+}
+
 type setEntry[T comparable] struct {
 	tag     crdt.Tag
 	present bool

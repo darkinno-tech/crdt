@@ -33,6 +33,9 @@ be committed.
 - [Durable transport reference design](design/durable-transport.md)
 - [G-Set and MV-Register design](design/gset-mvregister.md)
 - [Membership protocol](protocol/membership.md)
+- [LWW Set and Map v1 wire protocol](protocol/lww-v1.md)
+- [Generic list RGA v1 wire protocol](protocol/list-rga-v1.md)
+- [Scalar RGA v1 wire protocol](protocol/rga-scalar-v1.md)
 - [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
 - [Awareness / presence v1](protocol/awareness-v1.md)
@@ -43,6 +46,7 @@ be committed.
 
 ## Operations and architecture
 
+- [Production configuration, errors, and telemetry](operations/production-readiness.md)
 - [Merkle state-repair CLI runbook](operations/merkle-sync-cli.md)
 - [Merkle 状态修复 CLI 手册](operations/merkle-sync-cli.zh-CN.md)
 - [Cross-host probe deployment runbook](operations/cross-host-probe.md)
@@ -55,6 +59,8 @@ be committed.
 - [受控压测记录 — 2026-07-29](operations/benchmark-2026-07-29.zh-CN.md)
 - [Historical cross-device RGA baseline — 2026-07-29](operations/cross-device-rga-2026-07-29.md)
 - [WebSocket batch latency evidence — 2026-07-29](operations/websocket-batch-latency-2026-07-29.md)
+- [Controlled performance-regression CI](operations/performance-regression-ci.md)
+- [受控性能回归 CI](operations/performance-regression-ci.zh-CN.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 

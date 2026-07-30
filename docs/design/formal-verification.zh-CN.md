@@ -9,7 +9,7 @@ DarkInno 已新增可检查的 Lean 模型：[`formal/rga`](../../formal/rga)。
 
 ## 为什么先证明这一层
 
-仓库同时有 stable framed、experimental framed 和 local-only API。忽略这些边界的证明
+仓库同时有 stable framed 和 local-only API。忽略这些边界的证明
 会制造虚假的安全感，因此首个 formal surface 只覆盖 stable RGA state algebra；parser
 limits、认证、relay policy、checkpoint durability 和 GC acknowledgement 都仍是显式外部
 假设。

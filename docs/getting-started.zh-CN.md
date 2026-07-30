@@ -55,12 +55,15 @@ go test ./...
 | 并发值都必须保留的字段 | `register.MVRegister` | 读取 `Values()` 并由产品解决并发值；不能用墙上时钟选赢家。 |
 | 余额、排他预订、工作流流转、权限决策 | 权威服务 | 不要把最终 CRDT 收敛当作不变量或授权机制。 |
 
-先使用内存内合并定义业务语义。[`example_test.go`](../example_test.go) 中的
-`ExampleGCounter`、`ExamplePNCounter`、`ExampleORSet`、`ExampleGSet` 和
-`ExampleMVRegister` 是可执行的最小 API 参考：
+先使用内存内合并定义业务语义。根目录的
+[`example_test.go`](../example_test.go) 包含 `ExampleGCounter`、
+`ExamplePNCounter`、`ExampleORSet`、`ExampleGSet` 和 `ExampleMVRegister`
+这些可执行的最小 API 参考。各包文档还提供了有界 G-Counter 接收、实验性
+RGA 投递和 Manifest 的聚焦 Example：
 
 ```sh
 go test -run '^Example(GCounter|PNCounter|ORSet|GSet|MVRegister)$' .
+go test ./counter ./text ./replica
 ```
 
 完成最小流程后，建议运行协作任务看板这一真实场景。它使用有界的 G-Counter 和 OR-Set 解码器，
@@ -167,8 +170,8 @@ frame ID、codec ID 和语义版本都必须匹配，之后对端才能发送数
   线协议](protocol/rga-run-v2.zh-CN.md)及其 canonical vector；绝不能把 v1 帧静默地
   重新解释成 run-v2，反之亦然。
 
-LWW-Set、LWW-Map、旧版 RGA v1 和通用 RGA list 在每个 manifest、change、inbox、checkpoint、
-session 边界都要求同样的显式实验性 opt-in。稳定 observed-remove tree v1 则在零值策略下绑定
+LWW-Set、LWW-Map、旧版 RGA v1 和通用 RGA list 均为稳定协议，在每个 manifest、change、inbox、checkpoint、
+session 边界都绑定各自精确的 frame pair 与语义版本。稳定 observed-remove tree v1 则在零值策略下绑定
 `tree.SemanticsVersion` 与精确的节点值 schema；它仅支持不可变父链接 add/remove，不支持原地 move。
 选择前先阅读[集合扩展设计](design/crdt-extension.md)和
 [OR-Tree v1 协议](protocol/or-tree-v1.md)。浏览器部署、持久化和 CSP 要求见

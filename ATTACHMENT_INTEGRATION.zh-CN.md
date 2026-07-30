@@ -1,6 +1,6 @@
 # 附件引用集成
 
-`attachment.Register` 是图片、音频、视频和任意二进制数据的实验性 CRDT 边界。它复制有边界、
+`attachment.Register` 是图片、音频、视频和任意二进制数据的稳定 CRDT 边界。它复制有边界、
 不可变的引用；绝不传输对象原始字节。
 
 完整的文本、附件、Manifest、快照和校验流程见[可运行附件协作示例](examples/attachment-collaboration)：
@@ -25,7 +25,7 @@ go test ./examples/attachment-collaboration
 
 ## 复制契约
 
-附件引用复用实验性 LWW-Map 状态/增量帧 TypeID 9/10。一个附件复制组必须具有经过认证的
+附件引用复用稳定 LWW-Map 状态/增量帧 TypeID 9/10。一个附件复制组必须具有经过认证的
 `replica.Manifest`：
 
 | Manifest 字段 | 必需值 |
@@ -34,7 +34,7 @@ go test ./examples/attachment-collaboration
 | `SchemaID` | `github.com/DarkInno/crdt/attachment-reference/v1` |
 | `CodecID` | 空字符串 |
 | `SemanticsVersion` | `attachment.SemanticsVersion` |
-| policy | 每个边界均使用 `crdt.ProtocolPolicy{AllowExperimental: true}` |
+| policy | 零值 `crdt.ProtocolPolicy` |
 
 不要把可编辑 RGA 文本与附件引用放进同一个 Manifest：一个 Manifest 只代表一种具体 CRDT
 协议。对于同一应用文档，应分别建立文本组和附件组；可运行示例即按此方式组织。

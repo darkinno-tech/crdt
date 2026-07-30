@@ -1,6 +1,6 @@
 # Attachment reference integration
 
-`attachment.Register` is the experimental CRDT boundary for images, audio,
+`attachment.Register` is the stable CRDT boundary for images, audio,
 video, and arbitrary binary data. It replicates bounded, immutable references;
 it never transfers object bytes.
 
@@ -28,7 +28,7 @@ conflict rule matches the product, such as `lww.Map`, OR-Set, or OR-Tree.
 
 ## Replication contract
 
-Attachment references use experimental LWW-Map state/delta frame IDs 9/10.
+Attachment references use stable LWW-Map state/delta frame IDs 9/10.
 One attachment group must have an authenticated `replica.Manifest` with:
 
 | Manifest field | Required value |
@@ -37,7 +37,7 @@ One attachment group must have an authenticated `replica.Manifest` with:
 | `SchemaID` | `github.com/DarkInno/crdt/attachment-reference/v1` |
 | `CodecID` | empty string |
 | `SemanticsVersion` | `attachment.SemanticsVersion` |
-| policy | `crdt.ProtocolPolicy{AllowExperimental: true}` at every boundary |
+| policy | zero-value `crdt.ProtocolPolicy` |
 
 Do not put editable RGA text and attachment references in one manifest: a
 manifest represents one concrete CRDT protocol. Create separate text and

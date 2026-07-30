@@ -38,7 +38,7 @@ func TestRunReturnsWriteFailure(t *testing.T) {
 // arbitrary order, so the test covers both per-actor Inbox buffering and RGA
 // parent-dependency buffering before every replica converges.
 func TestThreeEditorReplicationSimulation(t *testing.T) {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	policy := crdt.ProtocolPolicy{}
 	builder := newTextBuilder(t, policy)
 
 	alice := newTestRGA(t, "alice")

@@ -31,6 +31,7 @@ var (
 	ErrResourceLimit  = errors.New("awareness: resource limit exceeded")
 	ErrStateConflict  = errors.New("awareness: conflicting update clock")
 	ErrClockExhausted = errors.New("awareness: actor clock exhausted")
+	ErrOfflineActor   = errors.New("awareness: actor has no online state")
 )
 
 const protocolVersion byte = 1
@@ -43,22 +44,33 @@ type Options struct {
 	MaxActors     int
 	MaxActorBytes int
 	MaxStateBytes int
-	Timeout       time.Duration
+	// MaxSubscribers bounds local UI observers. It has no wire effect and
+	// defaults to 1,024 when omitted from an otherwise valid Options value.
+	MaxSubscribers int
+	Timeout        time.Duration
 }
 
 // DefaultOptions returns conservative limits for UI presence such as names,
 // colours, selections, and small cursor metadata.
 func DefaultOptions() Options {
 	return Options{
-		MaxActors:     1 << 14,
-		MaxActorBytes: 128,
-		MaxStateBytes: 16 << 10,
-		Timeout:       30 * time.Second,
+		MaxActors:      1 << 14,
+		MaxActorBytes:  128,
+		MaxStateBytes:  16 << 10,
+		MaxSubscribers: 1 << 10,
+		Timeout:        30 * time.Second,
 	}
 }
 
 func (options Options) valid() bool {
-	return options.MaxActors > 0 && options.MaxActorBytes > 0 && options.MaxStateBytes > 0 && options.Timeout > 0
+	return options.MaxActors > 0 && options.MaxActorBytes > 0 && options.MaxStateBytes > 0 && options.MaxSubscribers > 0 && options.Timeout > 0
+}
+
+func normalizeOptions(options Options) Options {
+	if options.MaxSubscribers == 0 {
+		options.MaxSubscribers = DefaultOptions().MaxSubscribers
+	}
+	return options
 }
 
 // Update is one actor's complete ephemeral state at Clock. A nil State is a
@@ -104,6 +116,7 @@ func (update Update) MarshalBinaryWithOptions(options Options) ([]byte, error) {
 // UnmarshalUpdate decodes one exact, bounded awareness-v1 update. It performs
 // all limits and JSON validation before allocating retained state.
 func UnmarshalUpdate(data []byte, options Options) (Update, error) {
+	options = normalizeOptions(options)
 	if !options.valid() {
 		return Update{}, ErrInvalidOptions
 	}
@@ -142,6 +155,7 @@ func UnmarshalUpdate(data []byte, options Options) (Update, error) {
 // representation. It reserves nil for a removal and rejects every other JSON
 // top-level value, keeping presence fields namespaced beneath an object.
 func Normalize(update Update, options Options) (Update, error) {
+	options = normalizeOptions(options)
 	if !options.valid() {
 		return Update{}, ErrInvalidOptions
 	}
@@ -193,6 +207,7 @@ func canonicalState(raw []byte) ([]byte, error) {
 type record struct {
 	update   Update
 	lastSeen time.Time
+	expired  bool
 }
 
 // Store accepts locally created and remotely received updates. It is safe for
@@ -202,20 +217,61 @@ type Store struct {
 	mu      sync.RWMutex
 	options Options
 	records map[string]record
+	version uint64
+	hub     observationHub
 }
 
 // NewStore constructs an empty bounded awareness store.
 func NewStore(options Options) (*Store, error) {
+	options = normalizeOptions(options)
 	if !options.valid() {
 		return nil, ErrInvalidOptions
 	}
-	return &Store{options: options, records: make(map[string]record)}, nil
+	return &Store{
+		options: options,
+		records: make(map[string]record),
+		hub: observationHub{
+			subscribers: make(map[uint64]*subscriber),
+			max:         options.MaxSubscribers,
+		},
+	}, nil
 }
 
 // Set creates and installs the next online update for actor. The caller should
 // publish the returned update and periodically call Set again as a heartbeat.
 func (store *Store) Set(actor string, state []byte, now time.Time) (Update, error) {
 	return store.next(actor, state, now)
+}
+
+// Heartbeat creates and installs the next online update without re-parsing an
+// unchanged state object. Call it only for an actor owned by this local
+// application; transports must still authorize that actor before relaying the
+// returned update. A removed or unknown actor must use Set to establish its
+// state again.
+func (store *Store) Heartbeat(actor string, now time.Time) (Update, error) {
+	if store == nil {
+		return Update{}, ErrInvalidOptions
+	}
+	if _, err := Normalize(Update{Actor: actor, Clock: 1}, store.options); err != nil {
+		return Update{}, err
+	}
+	now = normalizeTime(now)
+	store.mu.Lock()
+	current, exists := store.records[actor]
+	if !exists || !current.update.Online() {
+		store.mu.Unlock()
+		return Update{}, ErrOfflineActor
+	}
+	if current.update.Clock == math.MaxUint64 {
+		store.mu.Unlock()
+		return Update{}, ErrClockExhausted
+	}
+	update := cloneUpdate(current.update)
+	update.Clock++
+	store.records[actor] = record{update: update, lastSeen: now}
+	store.publishLocked(Local, update, now)
+	store.mu.Unlock()
+	return cloneUpdate(update), nil
 }
 
 // Remove creates and installs the next removal update for actor. It is useful
@@ -228,8 +284,8 @@ func (store *Store) next(actor string, state []byte, now time.Time) (Update, err
 	if store == nil {
 		return Update{}, ErrInvalidOptions
 	}
+	now = normalizeTime(now)
 	store.mu.Lock()
-	defer store.mu.Unlock()
 	clock := uint64(1)
 	if current, exists := store.records[actor]; exists {
 		if current.update.Clock == math.MaxUint64 {
@@ -242,9 +298,12 @@ func (store *Store) next(actor string, state []byte, now time.Time) (Update, err
 		return Update{}, err
 	}
 	if _, exists := store.records[actor]; !exists && len(store.records) >= store.options.MaxActors {
+		store.mu.Unlock()
 		return Update{}, ErrResourceLimit
 	}
-	store.records[actor] = record{update: update, lastSeen: normalizeTime(now)}
+	store.records[actor] = record{update: update, lastSeen: now}
+	store.publishLocked(Local, update, now)
+	store.mu.Unlock()
 	return cloneUpdate(update), nil
 }
 
@@ -259,26 +318,34 @@ func (store *Store) Apply(update Update, now time.Time) (changed bool, err error
 	if err != nil {
 		return false, err
 	}
+	now = normalizeTime(now)
 	store.mu.Lock()
-	defer store.mu.Unlock()
 	current, exists := store.records[normalized.Actor]
 	if !exists {
 		if len(store.records) >= store.options.MaxActors {
+			store.mu.Unlock()
 			return false, ErrResourceLimit
 		}
-		store.records[normalized.Actor] = record{update: normalized, lastSeen: normalizeTime(now)}
+		store.records[normalized.Actor] = record{update: normalized, lastSeen: now}
+		store.publishLocked(Remote, normalized, now)
+		store.mu.Unlock()
 		return true, nil
 	}
 	if normalized.Clock < current.update.Clock {
+		store.mu.Unlock()
 		return false, nil
 	}
 	if normalized.Clock == current.update.Clock {
 		if !sameUpdate(normalized, current.update) {
+			store.mu.Unlock()
 			return false, ErrStateConflict
 		}
+		store.mu.Unlock()
 		return false, nil
 	}
-	store.records[normalized.Actor] = record{update: normalized, lastSeen: normalizeTime(now)}
+	store.records[normalized.Actor] = record{update: normalized, lastSeen: now}
+	store.publishLocked(Remote, normalized, now)
+	store.mu.Unlock()
 	return true, nil
 }
 
@@ -291,14 +358,8 @@ func (store *Store) ActiveAt(now time.Time) []Update {
 	}
 	now = normalizeTime(now)
 	store.mu.RLock()
-	updates := make([]Update, 0, len(store.records))
-	for _, current := range store.records {
-		if current.update.Online() && now.Sub(current.lastSeen) <= store.options.Timeout {
-			updates = append(updates, cloneUpdate(current.update))
-		}
-	}
+	updates := store.activeAtLocked(now)
 	store.mu.RUnlock()
-	sort.Slice(updates, func(left, right int) bool { return updates[left].Actor < updates[right].Actor })
 	return updates
 }
 
@@ -308,6 +369,17 @@ func (store *Store) Options() Options {
 		return Options{}
 	}
 	return store.options
+}
+
+func (store *Store) activeAtLocked(now time.Time) []Update {
+	updates := make([]Update, 0, len(store.records))
+	for _, current := range store.records {
+		if current.update.Online() && !current.expired && now.Sub(current.lastSeen) <= store.options.Timeout {
+			updates = append(updates, cloneUpdate(current.update))
+		}
+	}
+	sort.Slice(updates, func(left, right int) bool { return updates[left].Actor < updates[right].Actor })
+	return updates
 }
 
 func normalizeTime(value time.Time) time.Time {

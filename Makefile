@@ -1,4 +1,4 @@
-.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz fuzz-smoke coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark wasm-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark wasm-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -14,11 +14,17 @@ NPM ?= npm
 fmt-check:
 	test -z "$$(gofmt -l .)"
 
+generate:
+	go generate ./...
+
+generate-check:
+	go run ./internal/cmd/typeidgen -check
+
 test:
 	go test ./...
 
 test-unit:
-	for package in . ./attachment ./awareness ./clock ./counter ./delta ./durable ./encoding ./extensions ./list ./lww ./merkle ./persistence ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./xml ./cmd/crdt-analyze ./cmd/crdt-merkle-sync ./cmd/crdt-sync-probe ./examples/extensions-provider ./examples/persistent-replica; do go test $$package; done
+	go test $$(go list ./...)
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -52,6 +58,7 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
 	go test -run=^$$ -fuzz=FuzzRGARunUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./list
+	go test -run=^$$ -fuzz=FuzzMoveRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./list
 	go test -run=^$$ -fuzz=FuzzParseDocument -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./xml
 	go test -run=^$$ -fuzz=FuzzUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./richtext
 	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./tree
@@ -71,6 +78,16 @@ coverage:
 
 benchmark:
 	go test -run='^$$' -bench=. -benchmem ./...
+
+# BENCHMARK_BASE must be a checkout of the commit to compare against. The
+# candidate and baseline run consecutively with one logical processor so their
+# medians are comparable; this detects regressions, not production capacity.
+benchmark-regression:
+	@test -n "$(BENCHMARK_BASE)" || (echo "set BENCHMARK_BASE to a baseline checkout" >&2; exit 2)
+	@mkdir -p .tmp/benchmark-results
+	@(cd "$(BENCHMARK_BASE)" && GOMAXPROCS=1 go test -run='^$$' -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain|BenchmarkProviderEndToEndRelayFanout)$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./counter ./text ./examples/websocket-provider/provider) > .tmp/benchmark-results/baseline.txt
+	@GOMAXPROCS=1 go test -run='^$$' -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain|BenchmarkProviderEndToEndRelayFanout)$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./counter ./text ./examples/websocket-provider/provider > .tmp/benchmark-results/candidate.txt
+	@go run ./cmd/crdt-benchmark-check -base .tmp/benchmark-results/baseline.txt -candidate .tmp/benchmark-results/candidate.txt -minimum-samples 5 -max-time-regression 1.00 -max-bytes-regression 0.05 -max-allocs-regression 0.05 -require BenchmarkGCounterApplyDelta -require BenchmarkRGAApplyDeltaLinearChain -require BenchmarkProviderEndToEndRelayFanout/receivers_1 -require BenchmarkProviderEndToEndRelayFanout/receivers_4 -require BenchmarkProviderEndToEndRelayFanout/receivers_16
 
 wasm:
 	mkdir -p "$(WASM_DIR)"
@@ -115,7 +132,7 @@ staticcheck:
 lint:
 	$(GOLANGCI_LINT) run ./...
 
-verify: fmt-check test-unit test-integration test-extreme race vet fuzz coverage staticcheck lint
+verify: fmt-check generate-check test-unit test-integration test-extreme race vet fuzz coverage staticcheck lint
 
 sync-main:
 	./scripts/sync-main.sh

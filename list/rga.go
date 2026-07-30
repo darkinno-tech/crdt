@@ -13,6 +13,7 @@ import (
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
+	"github.com/DarkInno/crdt/internal/codecguard"
 )
 
 var (
@@ -26,6 +27,15 @@ var (
 	ErrResourceLimit    = errors.New("list: RGA resource limit exceeded")
 	ErrUnsafeCompaction = errors.New("list: unsafe RGA tombstone compaction")
 )
+
+// SemanticsVersion is the immutable generic list RGA v1 contract. It must
+// match the value negotiated in a replica manifest.
+const SemanticsVersion uint64 = crdt.SemanticsVersionListRGA
+
+// StableFrameType returns the stable generic list RGA v1 state/delta pair.
+func StableFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDListRGAState, DeltaID: crdt.TypeIDListRGADelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}
+}
 
 // Position is a stable, opaque list-element identity.
 type Position = crdt.Tag
@@ -153,7 +163,11 @@ func codecIdentifier[T any](codec ElementCodec[T]) (string, error) {
 	if codec == nil {
 		return "", ErrInvalidCodec
 	}
-	id := strings.TrimSpace(codec.ID())
+	id, err := codecguard.ID(codec.ID)
+	if err != nil {
+		return "", ErrInvalidCodec
+	}
+	id = strings.TrimSpace(id)
 	if id == "" {
 		return "", ErrInvalidCodec
 	}
@@ -266,7 +280,7 @@ func (r *RGA[T]) Values() ([]T, error) {
 	r.mu.Unlock()
 	values := make([]T, len(encoded))
 	for index, value := range encoded {
-		decoded, err := r.codec.Unmarshal(value)
+		decoded, err := unmarshalCodec(r.codec, value)
 		if err != nil {
 			return nil, ErrInvalidCodec
 		}
@@ -289,7 +303,7 @@ func (r *RGA[T]) At(offset int) (T, error) {
 	}
 	encoded := append([]byte(nil), r.nodes[positions[offset]].value...)
 	r.mu.Unlock()
-	value, err := r.codec.Unmarshal(encoded)
+	value, err := unmarshalCodec(r.codec, encoded)
 	if err != nil {
 		return zero, ErrInvalidCodec
 	}
@@ -507,15 +521,15 @@ func (r *RGA[T]) State() crdt.StateSnapshot {
 }
 
 func (r *RGA[T]) canonical(value T) ([]byte, error) {
-	encoded, err := r.codec.Marshal(value)
+	encoded, err := marshalCodec(r.codec, value)
 	if err != nil || len(encoded) > r.options.MaxValueBytes {
 		return nil, ErrInvalidCodec
 	}
-	decoded, err := r.codec.Unmarshal(encoded)
+	decoded, err := unmarshalCodec(r.codec, encoded)
 	if err != nil {
 		return nil, ErrInvalidCodec
 	}
-	canonical, err := r.codec.Marshal(decoded)
+	canonical, err := marshalCodec(r.codec, decoded)
 	if err != nil || !bytes.Equal(encoded, canonical) {
 		return nil, ErrInvalidCodec
 	}
@@ -527,16 +541,24 @@ func (r *RGA[T]) validateValues(delta Delta) error {
 		if len(item.value) > r.options.MaxValueBytes {
 			return ErrResourceLimit
 		}
-		decoded, err := r.codec.Unmarshal(item.value)
+		decoded, err := unmarshalCodec(r.codec, item.value)
 		if err != nil {
 			return ErrInvalidCodec
 		}
-		canonical, err := r.codec.Marshal(decoded)
+		canonical, err := marshalCodec(r.codec, decoded)
 		if err != nil || !bytes.Equal(item.value, canonical) {
 			return ErrInvalidCodec
 		}
 	}
 	return nil
+}
+
+func marshalCodec[T any](codec ElementCodec[T], value T) ([]byte, error) {
+	return codecguard.Marshal(func() ([]byte, error) { return codec.Marshal(value) })
+}
+
+func unmarshalCodec[T any](codec ElementCodec[T], data []byte) (T, error) {
+	return codecguard.Unmarshal(func() (T, error) { return codec.Unmarshal(data) })
 }
 
 func (r *RGA[T]) classifyNewNodesLocked(nodes map[Position]node) ([]Position, map[Position]struct{}) {

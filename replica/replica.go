@@ -9,6 +9,7 @@
 package replica
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -79,7 +80,7 @@ type Manifest struct {
 
 // NewManifest validates an immutable-by-convention manifest. policy is
 // checked here so a caller cannot accidentally construct a group for a
-// reserved, unknown, or disabled experimental frame type.
+// reserved or unknown frame type.
 func NewManifest(groupID, schemaID string, epoch uint64, protocol Protocol, policy crdt.ProtocolPolicy) (Manifest, error) {
 	manifest := Manifest{GroupID: groupID, SchemaID: schemaID, Epoch: epoch, Protocol: protocol}
 	if err := manifest.validate(policy); err != nil {
@@ -92,10 +93,10 @@ func NewManifest(groupID, schemaID string, epoch uint64, protocol Protocol, poli
 // group and exact CRDT semantics. It intentionally rejects a semantic-version
 // mismatch rather than guessing that two versions can read one another.
 func (m Manifest) Compatible(remote Manifest) error {
-	if err := m.validate(crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
+	if err := m.validate(crdt.ProtocolPolicy{}); err != nil {
 		return ErrInvalidManifest
 	}
-	if err := remote.validate(crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
+	if err := remote.validate(crdt.ProtocolPolicy{}); err != nil {
 		return ErrInvalidManifest
 	}
 	if m.GroupID != remote.GroupID || m.SchemaID != remote.SchemaID || m.Epoch != remote.Epoch {
@@ -116,7 +117,8 @@ func (m Manifest) validate(policy crdt.ProtocolPolicy) error {
 		return ErrInvalidManifest
 	}
 	kind, ok := crdt.FrameTypeForState(m.Protocol.StateID)
-	if !ok || kind.DeltaID != m.Protocol.DeltaID || !policy.SupportsFrame(m.Protocol.StateID) || !policy.SupportsFrame(m.Protocol.DeltaID) {
+	if !ok || kind.DeltaID != m.Protocol.DeltaID || kind.SemanticsVersion != m.Protocol.SemanticsVersion ||
+		!policy.SupportsFrame(m.Protocol.StateID) || !policy.SupportsFrame(m.Protocol.DeltaID) {
 		return ErrInvalidManifest
 	}
 	return nil
@@ -217,15 +219,13 @@ type Change struct {
 
 // NewChange validates that delta belongs to manifest's exact delta protocol
 // and returns a copy. It does not decode the CRDT-specific payload; that work
-// remains the concrete ApplyDelta implementation's responsibility. It accepts
-// only stable protocols; use NewChangeWithPolicy for an explicit experimental
-// protocol opt-in.
+// remains the concrete ApplyDelta implementation's responsibility.
 func NewChange(manifest Manifest, dot Dot, delta []byte) (Change, error) {
 	return NewChangeWithPolicy(manifest, dot, delta, crdt.ProtocolPolicy{})
 }
 
-// NewChangeWithPolicy validates one change under policy. Experimental protocols
-// require an explicit AllowExperimental policy at this use boundary.
+// NewChangeWithPolicy validates one change under policy. The policy parameter
+// remains for source compatibility and future policy extensions.
 func NewChangeWithPolicy(manifest Manifest, dot Dot, delta []byte, policy crdt.ProtocolPolicy) (Change, error) {
 	if manifest.validate(policy) != nil || !dot.valid() {
 		return Change{}, ErrInvalidChange
@@ -299,14 +299,13 @@ type Inbox struct {
 
 // NewInbox creates a bounded receiver. maxPending and maxBytes cover only
 // deferred out-of-order frames; immediately applicable frames are bounded by
-// encoding.DefaultLimits and the concrete CRDT decoder. It accepts only stable
-// protocols; use NewInboxWithPolicy for an explicit experimental protocol opt-in.
+// encoding.DefaultLimits and the concrete CRDT decoder.
 func NewInbox(manifest Manifest, frontier Frontier, maxPending, maxBytes int, apply ApplyDelta) (*Inbox, error) {
 	return NewInboxWithPolicy(manifest, frontier, maxPending, maxBytes, apply, crdt.ProtocolPolicy{})
 }
 
-// NewInboxWithPolicy creates a bounded receiver under policy. Experimental
-// protocols require an explicit AllowExperimental policy at this use boundary.
+// NewInboxWithPolicy creates a bounded receiver under policy. The policy
+// parameter remains for source compatibility and future policy extensions.
 func NewInboxWithPolicy(manifest Manifest, frontier Frontier, maxPending, maxBytes int, apply ApplyDelta, policy crdt.ProtocolPolicy) (*Inbox, error) {
 	if manifest.validate(policy) != nil || !frontier.valid() || maxPending <= 0 || maxBytes <= 0 {
 		return nil, ErrInvalidChange
@@ -343,7 +342,7 @@ func (i *Inbox) Receive(change Change) (Delivery, error) {
 	if change.Dot.Counter > current+1 {
 		return i.buffer(change)
 	}
-	if existing, ok := i.pending[change.Dot.Actor][change.Dot.Counter]; ok && string(existing.delta) != string(change.delta) {
+	if existing, ok := i.pending[change.Dot.Actor][change.Dot.Counter]; ok && !bytes.Equal(existing.delta, change.delta) {
 		return Delivery{}, ErrDotConflict
 	}
 	if err := i.apply(change.Delta()); err != nil {
@@ -388,7 +387,7 @@ func (i *Inbox) Receive(change Change) (Delivery, error) {
 func (i *Inbox) buffer(change Change) (Delivery, error) {
 	byCounter := i.pending[change.Dot.Actor]
 	if existing, ok := byCounter[change.Dot.Counter]; ok {
-		if string(existing.delta) != string(change.delta) {
+		if !bytes.Equal(existing.delta, change.delta) {
 			return Delivery{}, ErrDotConflict
 		}
 		return Delivery{Buffered: true, Duplicate: true}, nil
@@ -454,15 +453,13 @@ type Checkpoint struct {
 
 // NewCheckpoint validates the manifest/frame agreement and invokes validator
 // before a checkpoint may be persisted. For HLC-backed protocols, clockState
-// must be valid; for non-HLC protocols it must be the zero value. It accepts
-// only stable protocols; use NewCheckpointWithPolicy for an explicit experimental
-// protocol opt-in.
+// must be valid; for non-HLC protocols it must be the zero value.
 func NewCheckpoint(manifest Manifest, state []byte, frontier Frontier, clockState clock.State, validator StateValidator) (Checkpoint, error) {
 	return NewCheckpointWithPolicy(manifest, state, frontier, clockState, validator, crdt.ProtocolPolicy{})
 }
 
-// NewCheckpointWithPolicy validates a checkpoint under policy. Experimental
-// protocols require an explicit AllowExperimental policy at this use boundary.
+// NewCheckpointWithPolicy validates a checkpoint under policy. The policy
+// parameter remains for source compatibility and future policy extensions.
 func NewCheckpointWithPolicy(manifest Manifest, state []byte, frontier Frontier, clockState clock.State, validator StateValidator, policy crdt.ProtocolPolicy) (Checkpoint, error) {
 	if validator == nil {
 		return Checkpoint{}, ErrNilValidator
@@ -511,7 +508,7 @@ func (c Checkpoint) ClockState() (clock.State, bool) {
 func (c Checkpoint) ID() [sha256.Size]byte { return c.id }
 
 func (c Checkpoint) valid() bool {
-	if err := c.manifest.validate(crdt.ProtocolPolicy{AllowExperimental: true}); err != nil || !c.frontier.valid() || len(c.state) == 0 {
+	if err := c.manifest.validate(crdt.ProtocolPolicy{}); err != nil || !c.frontier.valid() || len(c.state) == 0 {
 		return false
 	}
 	decoded, err := frame.UnmarshalFrame(c.state, frame.DefaultLimits())
@@ -606,14 +603,13 @@ type Session struct {
 	checkpoint *Checkpoint
 }
 
-// NewSession creates a checkpoint session for one stable-protocol manifest.
-// Use NewSessionWithPolicy for an explicit experimental protocol opt-in.
+// NewSession creates a checkpoint session for one implemented-protocol manifest.
 func NewSession(manifest Manifest) (*Session, error) {
 	return NewSessionWithPolicy(manifest, crdt.ProtocolPolicy{})
 }
 
-// NewSessionWithPolicy creates a checkpoint session under policy. Experimental
-// protocols require an explicit AllowExperimental policy at this use boundary.
+// NewSessionWithPolicy creates a checkpoint session under policy. The policy
+// parameter remains for source compatibility and future policy extensions.
 func NewSessionWithPolicy(manifest Manifest, policy crdt.ProtocolPolicy) (*Session, error) {
 	if manifest.validate(policy) != nil {
 		return nil, ErrInvalidManifest

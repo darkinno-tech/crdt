@@ -16,7 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/DarkInno/crdt"
 	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/telemetry"
 	"github.com/coder/websocket"
 )
 
@@ -58,6 +60,9 @@ type Config struct {
 	MaxBatchChanges  int
 	HandshakeTimeout time.Duration
 	WriteTimeout     time.Duration
+	// Telemetry receives bounded, payload-free handshake and publication
+	// outcomes. A nil Reporter is the default and leaves relay paths unchanged.
+	Telemetry *telemetry.Reporter
 }
 
 // Handler exposes enabled optional endpoints. It is safe to mount into an
@@ -78,6 +83,7 @@ type Handler struct {
 	maxBatchChanges   int
 	handshakeTimeout  time.Duration
 	writeTimeout      time.Duration
+	telemetry         *telemetry.Reporter
 }
 
 // NewHandler validates config and constructs a disabled handler for the zero
@@ -85,16 +91,16 @@ type Handler struct {
 // invoke authentication or start background work.
 func NewHandler(config Config) (*Handler, error) {
 	if config.Features&^knownFeatures != 0 {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("extensions.new_handler", ErrInvalidConfig)
 	}
 	if config.Features.Enabled(FeatureWebSocketBatch) && !config.Features.Enabled(FeatureWebSocket) {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("extensions.new_handler", ErrInvalidConfig)
 	}
 	if config.Features == 0 {
 		return &Handler{}, nil
 	}
 	if config.Authenticate == nil || config.Authorize == nil || config.AuthorizeSubscription == nil || len(config.Groups) == 0 {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("extensions.new_handler", ErrInvalidConfig)
 	}
 	limits, err := normalizeLimits(
 		config.MaxMessageBytes,
@@ -105,29 +111,29 @@ func NewHandler(config Config) (*Handler, error) {
 		config.WriteTimeout,
 	)
 	if err != nil {
-		return nil, err
+		return nil, invalidConfig("extensions.new_handler", err)
 	}
 	maxBatchChanges := 0
 	if config.Features.Enabled(FeatureWebSocketBatch) {
 		maxBatchChanges, err = normalizeBatchChanges(config.MaxBatchChanges)
 		if err != nil || maxBatchChanges > limits.maxQueuedMessages {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("extensions.new_handler", ErrInvalidConfig)
 		}
 	}
 	if err := validateOriginPatterns(config.OriginPatterns); err != nil {
-		return nil, err
+		return nil, invalidConfig("extensions.new_handler", err)
 	}
 	groups := make(map[string]*Group, len(config.Groups))
 	for _, group := range config.Groups {
 		if group == nil || strings.TrimSpace(group.manifest.GroupID) == "" {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("extensions.new_handler", ErrInvalidConfig)
 		}
 		if _, exists := groups[group.manifest.GroupID]; exists {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("extensions.new_handler", ErrInvalidConfig)
 		}
 		hello, err := marshalHello(group.manifest)
 		if err != nil || len(hello) > controlLimit(limits.maxMessageBytes) {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("extensions.new_handler", ErrInvalidConfig)
 		}
 		groups[group.manifest.GroupID] = group
 	}
@@ -145,6 +151,7 @@ func NewHandler(config Config) (*Handler, error) {
 		maxBatchChanges:       maxBatchChanges,
 		handshakeTimeout:      limits.handshakeTimeout,
 		writeTimeout:          limits.writeTimeout,
+		telemetry:             config.Telemetry,
 	}, nil
 }
 
@@ -153,16 +160,16 @@ func NewHandler(config Config) (*Handler, error) {
 // HTTP endpoints under "/crdt/http/".
 func (h *Handler) Mount(mux *http.ServeMux, prefix string) (err error) {
 	if h == nil || mux == nil {
-		return ErrInvalidConfig
+		return invalidConfig("extensions.mount", ErrInvalidConfig)
 	}
 	prefix, err = normalizeMountPrefix(prefix)
 	if err != nil {
-		return err
+		return invalidConfig("extensions.mount", err)
 	}
 	stripPrefix := strings.TrimSuffix(prefix, "/")
 	defer func() {
 		if recover() != nil {
-			err = ErrInvalidConfig
+			err = invalidConfig("extensions.mount", ErrInvalidConfig)
 		}
 	}()
 	mux.Handle(prefix, http.StripPrefix(stripPrefix, h))
@@ -213,12 +220,15 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Request) {
+	handshakeStarted := h.started()
 	if !h.originAllowed(request) {
+		h.record("handshake", handshakeStarted, ErrUnauthorized)
 		http.Error(writer, "forbidden origin", http.StatusForbidden)
 		return
 	}
 	peer, ok := h.authenticateRequest(writer, request)
 	if !ok {
+		h.record("handshake", handshakeStarted, ErrUnauthorized)
 		return
 	}
 	subprotocols := []string{Subprotocol}
@@ -231,10 +241,12 @@ func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Reque
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
+		h.record("handshake", handshakeStarted, err)
 		return
 	}
 	batchEnabled := conn.Subprotocol() == BatchSubprotocol
 	if (!batchEnabled && conn.Subprotocol() != Subprotocol) || (batchEnabled && !h.features.Enabled(FeatureWebSocketBatch)) {
+		h.record("handshake", handshakeStarted, errInvalidWireMessage)
 		_ = conn.CloseNow()
 		return
 	}
@@ -242,6 +254,7 @@ func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Reque
 	handshakeContext, cancelHandshake := context.WithTimeout(context.Background(), h.handshakeTimeout)
 	group, response, err := h.readServerHandshake(handshakeContext, conn, peer)
 	if err != nil {
+		h.record("handshake", handshakeStarted, err)
 		cancelHandshake()
 		_ = conn.CloseNow()
 		return
@@ -249,17 +262,19 @@ func (h *Handler) serveWebSocket(writer http.ResponseWriter, request *http.Reque
 	peerConnection := newWebSocketSubscriber(conn, h.maxQueuedMessages, h.maxQueuedBytes, h.writeTimeout, batchEnabled)
 	group.add(peerConnection)
 	if err := conn.Write(handshakeContext, websocket.MessageText, response); err != nil {
+		h.record("handshake", handshakeStarted, err)
 		cancelHandshake()
 		group.remove(peerConnection)
 		peerConnection.close()
 		return
 	}
+	h.record("handshake", handshakeStarted, nil)
 	cancelHandshake()
 	conn.SetReadLimit(int64(h.maxMessageBytes))
 	defer group.remove(peerConnection)
 	defer peerConnection.close()
 	go peerConnection.writeLoop()
-	peerConnection.readLoop(peer, group, h.authorize, h.maxMessageBytes, h.maxActorBytes, h.maxBatchChanges)
+	peerConnection.readLoop(peer, group, h.authorize, h.maxMessageBytes, h.maxActorBytes, h.maxBatchChanges, h.started, h.record)
 }
 
 func (h *Handler) readServerHandshake(ctx context.Context, conn *websocket.Conn, peer Peer) (*Group, []byte, error) {
@@ -289,21 +304,27 @@ func (h *Handler) readServerHandshake(ctx context.Context, conn *websocket.Conn,
 }
 
 func (h *Handler) serveHTTPChanges(writer http.ResponseWriter, request *http.Request, group *Group) {
+	started := h.started()
+	report := func(err error) { h.record("append", started, err) }
 	if request.Method != http.MethodPost {
+		report(errInvalidWireMessage)
 		writer.Header().Set("Allow", http.MethodPost)
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !h.originAllowed(request) {
+		report(ErrUnauthorized)
 		http.Error(writer, "forbidden origin", http.StatusForbidden)
 		return
 	}
 	peer, ok := h.authenticateRequest(writer, request)
 	if !ok {
+		report(ErrUnauthorized)
 		return
 	}
 	contentType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || contentType != "application/octet-stream" {
+		report(errInvalidWireMessage)
 		http.Error(writer, "content type must be application/octet-stream", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -311,14 +332,17 @@ func (h *Handler) serveHTTPChanges(writer http.ResponseWriter, request *http.Req
 	body := http.MaxBytesReader(writer, request.Body, int64(h.maxMessageBytes))
 	data, err := io.ReadAll(body)
 	if err != nil {
+		report(errInvalidWireMessage)
 		http.Error(writer, "request body exceeds transport limit", http.StatusRequestEntityTooLarge)
 		return
 	}
 	if len(data) == 0 {
+		report(errInvalidWireMessage)
 		http.Error(writer, "request body is empty", http.StatusBadRequest)
 		return
 	}
 	if _, err := group.receive(peer, h.authorize, data, h.maxMessageBytes, h.maxActorBytes); err != nil {
+		report(err)
 		if errors.Is(err, ErrUnauthorized) {
 			http.Error(writer, "unauthorized", http.StatusForbidden)
 			return
@@ -326,8 +350,58 @@ func (h *Handler) serveHTTPChanges(writer http.ResponseWriter, request *http.Req
 		http.Error(writer, "invalid change", http.StatusBadRequest)
 		return
 	}
+	report(nil)
 	setNoStoreHeaders(writer)
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) started() time.Time {
+	if h == nil || h.telemetry == nil {
+		return time.Time{}
+	}
+	return time.Now()
+}
+
+func (h *Handler) record(operation string, started time.Time, err error) {
+	if h != nil {
+		recordExtensionsEvent(h.telemetry, operation, started, err)
+	}
+}
+
+func recordExtensionsEvent(reporter *telemetry.Reporter, operation string, started time.Time, err error) {
+	if reporter == nil {
+		return
+	}
+	outcome := telemetry.OutcomeSuccess
+	code := crdt.ErrorCodeUnknown
+	if err != nil {
+		code = crdt.ErrorCodeOf(err)
+		outcome = telemetry.OutcomeFailure
+		switch {
+		case errors.Is(err, ErrUnauthorized):
+			outcome = telemetry.OutcomeRejected
+			code = crdt.ErrorCodeUnauthorized
+		case errors.Is(err, ErrBatchLimit):
+			outcome = telemetry.OutcomeRejected
+			code = crdt.ErrorCodeResourceLimit
+		case errors.Is(err, ErrClosed):
+			code = crdt.ErrorCodeUnavailable
+		case errors.Is(err, errInvalidWireMessage):
+			outcome = telemetry.OutcomeRejected
+			code = crdt.ErrorCodeInvalidInput
+		}
+	}
+	duration := time.Duration(0)
+	if !started.IsZero() {
+		duration = time.Since(started)
+	}
+	reporter.Record(telemetry.Event{
+		Component: "extensions",
+		Operation: operation,
+		Outcome:   outcome,
+		Duration:  duration,
+		ErrorCode: code,
+	})
 }
 
 func (h *Handler) serveHTTPEvents(writer http.ResponseWriter, request *http.Request, group *Group) {
@@ -640,20 +714,36 @@ func (c *webSocketSubscriber) batchesEnabled() bool {
 	return c != nil && c.batchEnabled
 }
 
-func (c *webSocketSubscriber) readLoop(peer Peer, group *Group, authorize Authorize, maxMessageBytes, maxActorBytes, maxBatchChanges int) {
+func (c *webSocketSubscriber) readLoop(peer Peer, group *Group, authorize Authorize, maxMessageBytes, maxActorBytes, maxBatchChanges int, started func() time.Time, report func(string, time.Time, error)) {
 	for {
 		messageType, data, err := c.conn.Read(c.context)
 		if err != nil || messageType != websocket.MessageBinary {
 			return
 		}
+		operationStarted := time.Time{}
+		if started != nil {
+			operationStarted = started()
+		}
 		if c.batchEnabled && isChangeBatch(data) {
 			if err := group.receiveBatch(peer, authorize, data, maxMessageBytes, maxActorBytes, maxBatchChanges); err != nil {
+				if report != nil {
+					report("append_batch", operationStarted, err)
+				}
 				return
+			}
+			if report != nil {
+				report("append_batch", operationStarted, nil)
 			}
 			continue
 		}
 		if _, err := group.receive(peer, authorize, data, maxMessageBytes, maxActorBytes); err != nil {
+			if report != nil {
+				report("append", operationStarted, err)
+			}
 			return
+		}
+		if report != nil {
+			report("append", operationStarted, nil)
 		}
 	}
 }

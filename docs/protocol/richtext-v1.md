@@ -26,6 +26,15 @@ is not decorative: it MUST identify the allowed attribute keys, values, link
 policy, and rendering/sanitization rules. A rich-text manifest MUST NOT share a
 replication group with raw RGA run-v2 frames.
 
+`richtext.SemanticSchemaID` (`github.com/DarkInno/crdt/richtext/semantic/v1`)
+is an optional schema adapter, not a change to TypeIDs 23/24. A group that
+uses it MUST negotiate that exact schema ID and MUST reject `rt.*` semantic
+attributes from a different schema. It standardizes `rt.bold`, `rt.italic`, a
+single U+FFFC object-replacement character with `rt.embed.kind`/`rt.embed.data`,
+and paragraph-wide atomic `rt.block` markers. Generic v1
+implementations remain free to reject or render those keys as ordinary opaque
+attributes.
+
 ## 2. Frame and common types
 
 Each message uses the repository's canonical CRDT frame envelope with TypeID
@@ -98,6 +107,13 @@ It follows the separation of sequence and formatting required by rich-text
 CRDT research such as [Peritext](https://doi.org/10.1145/3555644); applications
 that need paragraphs, lists, tables, embeds, HTML, CSS, or executable values
 MUST use a distinct, versioned object model.
+
+The optional semantic schema does not change that rule: an embed is one exact
+text position and a block marker is written to the exact current positions of
+the selected paragraphs. Editors MUST explicitly assign attributes to later
+inserts; they MUST NOT infer formatting or block membership across a concurrent
+boundary. The embedded JSON object is application data, not markup or a URL
+policy, and must be authorized and sanitized by the renderer.
 
 ## 6. Limits, security, and persistence
 

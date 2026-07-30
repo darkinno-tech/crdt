@@ -18,7 +18,7 @@ func (replicatedStringCodec) Unmarshal(data []byte) (string, error) { return str
 
 func TestLWWSetThreeReplicaOutOfOrderDuplicateDelivery(t *testing.T) {
 	codec := replicatedStringCodec{}
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	policy := crdt.ProtocolPolicy{}
 	manifest, err := replica.NewManifest("shared-labels", "example.com/labels/v1", 1, replica.Protocol{
 		StateID:          crdt.TypeIDLWWSetState,
 		DeltaID:          crdt.TypeIDLWWSetDelta,

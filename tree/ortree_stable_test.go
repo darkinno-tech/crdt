@@ -12,7 +12,7 @@ import (
 )
 
 func TestStableFrameTypeUsesObservedRemoveTreeV1(t *testing.T) {
-	if got, want := StableFrameType(), (crdt.FrameType{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, UsesHLC: true}); got != want {
+	if got, want := StableFrameType(), (crdt.FrameType{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}); got != want {
 		t.Fatalf("StableFrameType() = %#v, want %#v", got, want)
 	}
 	if SemanticsVersion != 1 {

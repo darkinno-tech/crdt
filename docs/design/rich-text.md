@@ -128,6 +128,32 @@ Attribute changes use `{Key, Value, Remove}`. Keys are non-empty UTF-8 strings;
 `Remove` must not carry a value. Values are opaque strings. Attribute meaning
 and any schema such as `bold=true` or `link=https://…` are application-owned.
 
+### Relative positions and semantic formatting adapter
+
+`Document.AnchorAt` and `Document.ResolveAnchor` expose the already-defined
+`text.Anchor`; rich text does not add a second relative-position wire format.
+`FormatAnchored` resolves its start and exclusive end under the same document
+lock that creates the exact-position format delta. A compacted anchor returns
+`text.ErrAnchorGone` rather than silently moving a user's selection.
+
+The optional `SemanticSchemaID` adapter provides typed helpers for bold,
+italic, embeds, and block presentation while preserving the v1 wire model.
+`InsertEmbed` inserts exactly U+FFFC with a lower-case identifier and a bounded
+JSON object; consumers must still enforce their own asset, URL, and renderer
+policy. `FormatBlocks` expands a selection to complete newline-delimited
+paragraphs and writes a validated `paragraph`, `heading` (levels 1-6), `quote`,
+`code`, or `list-item` marker to each current rune. These markers do not inherit
+onto future concurrent inserts: an editor that needs inheritance must explicitly
+apply it in its local adapter after manifest/schema negotiation.
+
+The adapter also exposes `Blocks()` for a single consistent newline-delimited
+projection, `ClearBlocks` for LWW marker removal, and anchored variants for
+relative selections. `Blocks()` only reports a `BlockFormat` when every current
+position in a paragraph agrees on one valid marker; conflicting concurrent
+edits remain visibly unformatted rather than choosing an arbitrary winner.
+`InsertWithBlockFormat` is the intentional, explicit way for an editor to add
+new text with a selected block format.
+
 ## Performance plan and acceptance tests
 
 The implementation must retain the RGA's run-v2 text compression. Formatting

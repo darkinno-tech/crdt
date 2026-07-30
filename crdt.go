@@ -5,92 +5,51 @@ import (
 	"strings"
 )
 
-// Stable frame type assignments. Values are part of the v1 wire contract and
-// must never be reused for a different payload shape.
-const (
-	TypeIDGCounterState   uint64 = 1
-	TypeIDORSetState      uint64 = 2
-	TypeIDGCounterDelta   uint64 = 3
-	TypeIDORSetDelta      uint64 = 4
-	TypeIDPNCounterState  uint64 = 5
-	TypeIDPNCounterDelta  uint64 = 6
-	TypeIDLWWSetState     uint64 = 7
-	TypeIDLWWSetDelta     uint64 = 8
-	TypeIDLWWMapState     uint64 = 9
-	TypeIDLWWMapDelta     uint64 = 10
-	TypeIDRGAState        uint64 = 11
-	TypeIDRGADelta        uint64 = 12
-	TypeIDGSetState       uint64 = 13
-	TypeIDGSetDelta       uint64 = 14
-	TypeIDMVRegisterState uint64 = 15
-	TypeIDMVRegisterDelta uint64 = 16
-	// Observed-remove tree v1 carries immutable parent links with add/remove
-	// semantics. A move-capable tree requires a new independently negotiated
-	// frame pair; TypeIDs 17/18 must never be repurposed for it.
-	TypeIDORTreeState uint64 = 17
-	TypeIDORTreeDelta uint64 = 18
-	// RGA run frames retain scalar Position semantics while compacting linear
-	// same-replica insertion chains. They are the default protocol for new RGA
-	// replication groups; TypeIDRGAState and TypeIDRGADelta remain immutable v1
-	// contracts for explicitly negotiated legacy groups.
-	TypeIDRGARunState uint64 = 19
-	TypeIDRGARunDelta uint64 = 20
-	// List RGA frames carry one canonical caller-coded value per position.
-	// They are intentionally distinct from text RGA frames: a text position is
-	// one Unicode scalar while a list position is one opaque application value.
-	TypeIDListRGAState uint64 = 21
-	TypeIDListRGADelta uint64 = 22
-	// Rich text nests a run-v2 RGA frame with bounded inline formatting
-	// registers. Its renderer schema is bound by replica.Manifest.SchemaID;
-	// TypeIDs 23/24 and semantics version 1 are immutable.
-	TypeIDRichTextState uint64 = 23
-	TypeIDRichTextDelta uint64 = 24
-)
-
 // FrameType describes one fully implemented framed CRDT protocol. The type
 // table is deliberately closed: reserving an ID alone must not make a payload
 // eligible for batching or recovery before its concrete codec is available.
 type FrameType struct {
-	StateID uint64
-	DeltaID uint64
-	UsesHLC bool
+	StateID          uint64
+	DeltaID          uint64
+	SemanticsVersion uint64
+	UsesHLC          bool
 }
 
-var frameTypes = [...]FrameType{
-	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta},
-	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, UsesHLC: true},
-	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
-	{StateID: TypeIDLWWSetState, DeltaID: TypeIDLWWSetDelta, UsesHLC: true},
-	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, UsesHLC: true},
-	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
-	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
-	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
-	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
-	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
-	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, UsesHLC: true},
-	{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, UsesHLC: true},
+// FrameTypeRegistration identifies one implemented state/delta protocol pair.
+// It is diagnostic and negotiation metadata only: applications must still bind
+// an authenticated manifest, authorization policy, and resource limits before
+// accepting a frame.
+type FrameTypeRegistration struct {
+	Name string
+	FrameType
+}
+
+// RegisteredFrameTypes returns a copy of every implemented protocol
+// registration in stable registry order. Mutating the returned slice cannot
+// affect protocol admission or frame decoding.
+func RegisteredFrameTypes() []FrameTypeRegistration {
+	registrations := make([]FrameTypeRegistration, len(frameTypeRegistrations))
+	copy(registrations, frameTypeRegistrations[:])
+	return registrations
+}
+
+// FrameTypeRegistrationForID returns the implemented registration containing
+// typeID as either its state or delta frame ID. Reserved and unknown IDs return
+// false. It performs no policy, manifest, or authentication decision.
+func FrameTypeRegistrationForID(typeID uint64) (FrameTypeRegistration, bool) {
+	for _, registration := range frameTypeRegistrations {
+		if registration.StateID == typeID || registration.DeltaID == typeID {
+			return registration, true
+		}
+	}
+	return FrameTypeRegistration{}, false
 }
 
 // DefaultRGAFrameType returns the compact run-v2 protocol for new RGA
-// replication groups. Legacy scalar RGA v1 frames remain available only when
-// a group explicitly enables experimental protocols for migration.
+// replication groups. Legacy scalar RGA v1 frames remain a separately selected
+// stable migration contract.
 func DefaultRGAFrameType() FrameType {
-	return FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true}
-}
-
-// experimentalFrameTypes are fully framed protocols whose public API and
-// tombstone-lifecycle guidance are still evolving. They are never enabled by
-// ProtocolPolicy's zero value, so an application must opt in per replication
-// group before advertising or accepting them from a peer.
-var experimentalFrameTypes = map[uint64]struct{}{
-	TypeIDLWWSetState:  {},
-	TypeIDLWWSetDelta:  {},
-	TypeIDLWWMapState:  {},
-	TypeIDLWWMapDelta:  {},
-	TypeIDRGAState:     {},
-	TypeIDRGADelta:     {},
-	TypeIDListRGAState: {},
-	TypeIDListRGADelta: {},
+	return FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, SemanticsVersion: SemanticsVersionRGARun, UsesHLC: true}
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group
@@ -102,18 +61,21 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // TypeID remains necessary but is not sufficient: applications still own
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
-	// AllowExperimental includes framed LWW-Set, LWW-Map, legacy scalar RGA v1,
-	// and generic list RGA protocols. Keep it false until the
-	// replication group has accepted their experimental API and
-	// tombstone-retention lifecycle.
+	// AllowExperimental is retained for source compatibility with releases that
+	// required an opt-in for collection frames. Every implemented frame type is
+	// stable now, so the field has no effect. It is not a substitute for an
+	// authenticated manifest, authorization, limits, or tombstone retirement.
+	//
+	// Deprecated: all implemented protocol pairs are included by the zero value.
 	AllowExperimental bool
 }
 
 // FrameTypes returns a copy of every protocol enabled by p. The returned slice
 // is stable in type-ID order and safe for callers to advertise or modify.
 func (p ProtocolPolicy) FrameTypes() []FrameType {
-	types := make([]FrameType, 0, len(frameTypes))
-	for _, kind := range frameTypes {
+	types := make([]FrameType, 0, len(frameTypeRegistrations))
+	for _, registration := range frameTypeRegistrations {
+		kind := registration.FrameType
 		if p.SupportsFrame(kind.StateID) {
 			types = append(types, kind)
 		}
@@ -129,20 +91,23 @@ func (p ProtocolPolicy) SupportsFrame(typeID uint64) bool {
 			return false
 		}
 	}
-	_, experimental := experimentalFrameTypes[typeID]
-	return p.AllowExperimental || !experimental
+	return true
 }
 
-// IsExperimentalFrame reports whether typeID belongs to an implemented
-// experimental protocol. Reserved or unknown type IDs return false.
+// IsExperimentalFrame reports whether typeID belongs to an experimental
+// protocol. No implemented protocol is experimental; reserved and unknown IDs
+// also return false. It remains for source compatibility with earlier policy
+// negotiation code.
+//
+// Deprecated: every implemented frame type is stable.
 func IsExperimentalFrame(typeID uint64) bool {
-	_, ok := experimentalFrameTypes[typeID]
-	return ok
+	return false
 }
 
 // FrameTypeForState returns the supported protocol associated with stateID.
 func FrameTypeForState(stateID uint64) (FrameType, bool) {
-	for _, kind := range frameTypes {
+	for _, registration := range frameTypeRegistrations {
+		kind := registration.FrameType
 		if kind.StateID == stateID {
 			return kind, true
 		}
@@ -152,7 +117,8 @@ func FrameTypeForState(stateID uint64) (FrameType, bool) {
 
 // FrameTypeForDelta returns the supported protocol associated with deltaID.
 func FrameTypeForDelta(deltaID uint64) (FrameType, bool) {
-	for _, kind := range frameTypes {
+	for _, registration := range frameTypeRegistrations {
+		kind := registration.FrameType
 		if kind.DeltaID == deltaID {
 			return kind, true
 		}

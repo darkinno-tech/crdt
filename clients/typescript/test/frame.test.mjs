@@ -29,6 +29,13 @@ test("decodeFrame accepts a canonical opaque-codec frame and copies input", () =
   assert.equal(bytesEqual(decoded.codecID, codec), true);
 });
 
+test("FrameType includes every generated stable protocol pair", () => {
+  assert.equal(FrameType.ListRGAState, 21n);
+  assert.equal(FrameType.ListRGADelta, 22n);
+  assert.equal(FrameType.RichTextState, 23n);
+  assert.equal(FrameType.RichTextDelta, 24n);
+});
+
 test("decodeFrame rejects checksum, canonicality, type, and resource failures", () => {
   const valid = makeFrame({ typeID: 7n, codec: new Uint8Array(), payload: Uint8Array.of(7, 8, 9) });
   const tampered = valid.slice();

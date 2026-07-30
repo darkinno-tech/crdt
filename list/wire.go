@@ -1,6 +1,8 @@
 package list
 
 import (
+	"bytes"
+
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
 	frame "github.com/DarkInno/crdt/encoding"
@@ -312,12 +314,12 @@ func unmarshalRGA(data []byte, expectedType uint64, codecID string, limits frame
 
 func validateCodecValues[T any](delta Delta, codec ElementCodec[T]) error {
 	for _, item := range delta.nodes {
-		decoded, err := codec.Unmarshal(item.value)
+		decoded, err := unmarshalCodec(codec, item.value)
 		if err != nil {
 			return ErrInvalidCodec
 		}
-		canonical, err := codec.Marshal(decoded)
-		if err != nil || string(canonical) != string(item.value) {
+		canonical, err := marshalCodec(codec, decoded)
+		if err != nil || !bytes.Equal(canonical, item.value) {
 			return ErrInvalidCodec
 		}
 	}

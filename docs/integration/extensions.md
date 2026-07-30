@@ -14,6 +14,7 @@ handler, err := extensions.NewHandler(extensions.Config{
 	Features: extensions.FeatureWebSocket | extensions.FeatureHTTP,
 	Groups:   []*extensions.Group{group},
 	// Authenticate, Authorize, and AuthorizeSubscription are required here.
+	// Telemetry is optional and records bounded, payload-free local events.
 })
 if err != nil {
 	return err
@@ -42,6 +43,19 @@ relay=5
 The example uses `httptest` so it is self-contained. A production host mounts
 the same handler in its own `http.Server`, configures TLS, and uses `wss://`
 from browsers.
+
+## Local operational telemetry
+
+Set `Config.Telemetry` to an explicitly constructed bounded
+`telemetry.Reporter` when the host needs local operational signals. The relay
+records `handshake`, `append`, and `append_batch` outcomes, elapsed time, and a
+stable error code. Events never contain CRDT payloads, group IDs, actor IDs, or
+credentials.
+
+Reporting is asynchronous and intentionally lossy under sink pressure. It is
+not a CRDT protocol message, delivery receipt, audit log, or recovery source.
+For queue sizing, sink behavior, and production examples, see
+[production readiness](../operations/production-readiness.md).
 
 ## Feature switch and surfaces
 
@@ -149,11 +163,84 @@ The host application must therefore own all of the following:
 4. Authorized membership, checkpoint distribution, replica retirement, and
    tombstone lifecycle.
 
-The reference intentionally adds WebSocket and HTTP/SSE before a gRPC adapter:
-they exercise browser and ordinary HTTP integration without inventing an
-unnegotiated gRPC streaming contract. A future gRPC transport should be a
-separate manifest-bound feature with equivalent deadline, backpressure,
-authorization, duplicate/reorder, and recovery tests.
+## Native gRPC relay
+
+`extensions.Relay` is a native bidirectional gRPC service for Go services and
+other gRPC clients. Its generated schema is
+[`extensions/relay.proto`](../../extensions/relay.proto). It does not reuse the
+WebSocket subprotocol or introduce another CRDT envelope: the first message in
+each direction is the exact encoded `replica.Manifest`, and every later message
+contains the existing canonical change envelope.
+
+```go
+server, relay, err := extensions.NewGRPCServer(extensions.GRPCConfig{
+	Groups: []*extensions.Group{group},
+	Authenticate: func(ctx context.Context) (extensions.Peer, error) {
+		// Derive identity from mTLS, a trusted interceptor, or authenticated metadata.
+	},
+	Authorize:             authorizeWrite,
+	AuthorizeSubscription: authorizeRead,
+	Telemetry:             reporter, // Optional bounded, payload-free local events.
+})
+_ = relay
+_ = server // Serve with the application's listener and TLS credentials.
+```
+
+For an application-owned shared `grpc.Server`, build `NewGRPCRelay`, pass
+`relay.ServerOptions()` when creating that server, then call
+`extensions.RegisterRelayServer(server, relay)`. This preserves gRPC's native
+interceptors, TLS/mTLS, health service, observability, and shutdown ownership.
+`GRPCAuthenticate` receives `context.Context`, so metadata must be treated as
+untrusted until the host validates its credentials; it must never use the CRDT
+actor as an identity.
+
+Go applications can use the managed `OpenGRPC` client after dialing their own
+credentialed `grpc.ClientConn`. It validates the local and remote manifests,
+sets the same bounded message limits as the relay, serializes sends, and
+delivers validated changes to the callback:
+
+```go
+streamContext, cancel := context.WithCancel(context.Background())
+defer cancel() // also cancel on application shutdown or reconnect.
+
+client, err := extensions.OpenGRPC(
+	streamContext,
+	extensions.NewRelayClient(connection), // connection owns TLS/mTLS and credentials
+	manifest,
+	extensions.GRPCClientConfig{OnChange: func(change replica.Change) error {
+		_, err := inbox.Receive(change)
+		return err
+	}},
+)
+if err != nil { /* handle failed live handshake */ }
+defer client.Close() // does not close connection
+```
+
+The stream context is deliberately the lifetime and deadline control for the
+whole RPC. Do not pass a short handshake-only timeout to `OpenGRPC`, because
+gRPC would cancel the established subscription when that deadline expires.
+`Publish` checks its supplied context before queuing behind another send, but a
+currently blocked HTTP/2 send is released by the stream context; choose that
+deadline from realistic network and shutdown constraints.
+
+The first response is sent only after the subscription is registered. As a
+result, the completed client handshake is the live-subscription linearization
+point, exactly as it is for WebSocket. `Group` still supplies manifest/policy
+validation, authorisation, bounded duplicate/out-of-order `Inbox` processing,
+and accepted-dot-only fan-out. Per-stream application queues remain bounded;
+gRPC HTTP/2 flow control is helpful transport backpressure but is not a memory
+retention policy. A full queue disconnects the slow stream.
+
+`GRPCConfig.Telemetry` uses the same bounded reporter as the HTTP/WebSocket
+handler. It records only `handshake` and `append` outcome, duration, and stable
+error code; it never includes manifests, peer identities, metadata, or CRDT
+payloads.
+
+Use explicit, realistic RPC deadlines and stop work when the stream context is
+cancelled. A successful `Send` only means gRPC accepted the message for its
+transport pipeline, not that the peer durably stored it. Keep a durable outbox,
+recover from snapshots/frontiers, and use anti-entropy after reconnect exactly
+as with the WebSocket/HTTP relay.
 
 ## Design review matrix
 
@@ -163,7 +250,7 @@ authorization, duplicate/reorder, and recovery tests.
 | Security | Default-off handler; app-owned authentication and separate read/write authorization; strict host patterns; compression off. | No anonymous endpoint appears merely by importing the package; cross-origin policy is shared across transports. |
 | Performance | Fixed maximum frames and queues; slow peers are disconnected; HTTP publishing is a single bounded request. | Memory use is capped per peer; callers must benchmark their target workload before raising limits. |
 | Availability | No hidden listener, storage, retry, or reconnect loop. | Host deployment controls lifecycle and can use its existing HTTP/TLS/observability stack. |
-| Compatibility | New transport envelope uses subprotocol `crdt-sync-v1` and manifest negotiation, separate from CRDT frame versions. | Unknown transport versions and incompatible groups fail closed instead of being guessed. |
+| Compatibility | WebSocket uses `crdt-sync-v1`; gRPC uses generated `Relay.Sync`; both negotiate the same exact Manifest and carry the same CRDT envelope. | Unknown transport versions and incompatible groups fail closed instead of being guessed. |
 
 ## Validation commands
 

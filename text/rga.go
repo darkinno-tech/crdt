@@ -40,11 +40,15 @@ var (
 	ErrUndoAnchorGone = errors.New("text: undo anchor is no longer retained")
 )
 
-// RunV2SemanticsVersion is the immutable semantics version for the stable
-// run-v2 text protocol (TypeIDs 19/20). It belongs in every run-v2 replica
-// manifest. Legacy scalar-v1 frames use a distinct, explicitly negotiated
-// protocol and must never be substituted for run-v2 frames.
-const RunV2SemanticsVersion uint64 = 2
+const (
+	// LegacySemanticsVersion is the immutable scalar RGA v1 contract for
+	// TypeIDs 11/12. It is stable but remains a distinct protocol from run-v2.
+	LegacySemanticsVersion uint64 = crdt.SemanticsVersionRGA
+	// RunV2SemanticsVersion is the immutable semantics version for the stable
+	// run-v2 text protocol (TypeIDs 19/20). It belongs in every run-v2 replica
+	// manifest. Scalar-v1 frames must never be substituted for run-v2 frames.
+	RunV2SemanticsVersion uint64 = crdt.SemanticsVersionRGARun
+)
 
 // Position is a stable, opaque identifier for one Unicode scalar value.
 // It remains valid after inserts before it and after it has been deleted.
@@ -270,6 +274,12 @@ var _ crdt.DeltaCapable[*RGA, Delta] = (*RGA)(nil)
 // provided here so callers can bind the text package's semantic version and
 // frame pair without treating legacy scalar-v1 helpers as the default.
 func StableFrameType() crdt.FrameType { return crdt.DefaultRGAFrameType() }
+
+// LegacyFrameType returns the stable scalar RGA v1 state/delta pair. It is a
+// migration-compatible contract, not the default for new text groups.
+func LegacyFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: LegacySemanticsVersion, UsesHLC: true}
+}
 
 func New(replicaID string) (*RGA, error) { return NewWithOptions(replicaID, DefaultOptions()) }
 
@@ -819,11 +829,34 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 			return err
 		}
 	}
+	markers := make([]*sequenceMarker, 0, len(ids)*2)
 	for _, id := range ids {
+		_, deleted := r.tombstones[id]
+		markers = append(markers, &newSequencePair(id, !deleted).entry)
+	}
+	for index := len(ids) - 1; index >= 0; index-- {
+		markers = append(markers, &markers[index].pair.exit)
+	}
+	var anchor *sequenceMarker
+	for index, id := range ids {
 		item := delta.nodes[id]
 		r.nodes[id] = item
-		r.integrateNode(id, item)
+		parent := r.sequence.pair(item.parent)
+		if index > 0 {
+			parent = markers[index-1].pair
+		}
+		if parent == nil {
+			panic("text: integrating resolved linear run without integrated parent")
+		}
+		previous, hasPrevious := r.children.insert(parent, markers[index].pair)
+		if index == 0 {
+			anchor = &parent.entry
+			if hasPrevious {
+				anchor = &previous.exit
+			}
+		}
 	}
+	r.sequence.insertLinearMarkersAfter(anchor, markers, len(ids))
 	changed := len(ids) > 0
 	if r.integrateReady() {
 		changed = true

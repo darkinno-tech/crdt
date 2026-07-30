@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
-	"strings"
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
@@ -155,11 +154,16 @@ func (s *Set[T]) UnmarshalBinaryWithLimits(data []byte, codec ElementCodec[T], l
 }
 
 func marshalSet[T comparable](typeID uint64, codec ElementCodec[T], entries map[T]setEntry[T], limits frame.DecoderLimits) ([]byte, error) {
+	bound, err := bindElementCodec(codec)
+	if err != nil {
+		return nil, err
+	}
+	return marshalSetWithCodec(typeID, bound, entries, limits)
+}
+
+func marshalSetWithCodec[T comparable](typeID uint64, codec boundElementCodec[T], entries map[T]setEntry[T], limits frame.DecoderLimits) ([]byte, error) {
 	if typeID != crdt.TypeIDLWWSetState && typeID != crdt.TypeIDLWWSetDelta {
 		return nil, frame.ErrInvalidFrame
-	}
-	if isNilSetCodec(codec) || strings.TrimSpace(codec.ID()) == "" {
-		return nil, ErrInvalidCodec
 	}
 	if err := validateSetEntries(entries); err != nil {
 		return nil, err
@@ -173,7 +177,7 @@ func marshalSet[T comparable](typeID uint64, codec ElementCodec[T], entries map[
 	}
 	items := make([]item, 0, len(entries))
 	for value, entry := range entries {
-		encoded, err := codec.Marshal(value)
+		encoded, err := codec.marshal(value)
 		if err != nil {
 			return nil, fmt.Errorf("%w: marshal element: %v", ErrInvalidCodec, err)
 		}
@@ -196,7 +200,7 @@ func marshalSet[T comparable](typeID uint64, codec ElementCodec[T], entries map[
 		}
 		payloadSize += additional
 	}
-	return frame.MarshalFrameWithPayload(typeID, codec.ID(), payloadSize, func(payload []byte) error {
+	return frame.MarshalFrameWithPayload(typeID, codec.id, payloadSize, func(payload []byte) error {
 		output := frame.AppendUvarint(payload[:0], uint64(len(items)))
 		for _, item := range items {
 			output = frame.AppendUvarint(output, uint64(len(item.encoded)))
@@ -216,14 +220,19 @@ func marshalSet[T comparable](typeID uint64, codec ElementCodec[T], entries map[
 }
 
 func unmarshalSet[T comparable](data []byte, expectedTypeID uint64, codec ElementCodec[T], limits frame.DecoderLimits) (map[T]setEntry[T], error) {
-	if isNilSetCodec(codec) || strings.TrimSpace(codec.ID()) == "" {
-		return nil, ErrInvalidCodec
+	bound, err := bindElementCodec(codec)
+	if err != nil {
+		return nil, err
 	}
+	return unmarshalSetWithCodec(data, expectedTypeID, bound, limits)
+}
+
+func unmarshalSetWithCodec[T comparable](data []byte, expectedTypeID uint64, codec boundElementCodec[T], limits frame.DecoderLimits) (map[T]setEntry[T], error) {
 	decoded, err := frame.UnmarshalFrame(data, limits)
 	if err != nil {
 		return nil, err
 	}
-	if decoded.TypeID != expectedTypeID || decoded.CodecID != codec.ID() {
+	if decoded.TypeID != expectedTypeID || decoded.CodecID != codec.id {
 		return nil, ErrCodecMismatch
 	}
 	position := 0
@@ -240,11 +249,11 @@ func unmarshalSet[T comparable](data []byte, expectedTypeID uint64, codec Elemen
 			return nil, frame.ErrInvalidFrame
 		}
 		position = next
-		value, err := codec.Unmarshal(encoded)
+		value, err := codec.unmarshal(encoded)
 		if err != nil {
 			return nil, fmt.Errorf("%w: unmarshal element: %v", ErrInvalidCodec, err)
 		}
-		canonical, err := codec.Marshal(value)
+		canonical, err := codec.marshal(value)
 		if err != nil || !bytes.Equal(canonical, encoded) {
 			return nil, ErrInvalidCodec
 		}

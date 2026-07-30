@@ -24,7 +24,7 @@ const (
 	RGADeltaTypeID uint64 = crdt.TypeIDRGADelta
 
 	// RGASemanticsVersion identifies scalar RGA v1 semantics.
-	RGASemanticsVersion uint64 = 1
+	RGASemanticsVersion uint64 = crdt.SemanticsVersionRGA
 
 	// RGARunStateTypeID and RGARunDeltaTypeID identify the compact run-v2
 	// protocol used by new Go RGA replication groups.
@@ -32,7 +32,7 @@ const (
 	RGARunDeltaTypeID uint64 = crdt.TypeIDRGARunDelta
 
 	// RGARunSemanticsVersion identifies compact RGA run-v2 semantics.
-	RGARunSemanticsVersion uint64 = 2
+	RGARunSemanticsVersion uint64 = crdt.SemanticsVersionRGARun
 )
 
 var (

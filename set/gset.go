@@ -268,7 +268,7 @@ func marshalGSetWithCodec[T comparable](typeID uint64, codec boundElementCodec[T
 	}
 	encoded := make([][]byte, 0, len(elements))
 	for element := range elements {
-		value, err := codec.value.Marshal(element)
+		value, err := codec.marshal(element)
 		if err != nil {
 			return nil, fmt.Errorf("%w: marshal element: %v", ErrInvalidCodec, err)
 		}
@@ -329,11 +329,11 @@ func unmarshalGSetWithCodec[T comparable](data []byte, expectedTypeID uint64, co
 			return nil, frame.ErrInvalidFrame
 		}
 		pos = next
-		element, err := codec.value.Unmarshal(encoded)
+		element, err := codec.unmarshal(encoded)
 		if err != nil {
 			return nil, fmt.Errorf("%w: unmarshal element: %v", ErrInvalidCodec, err)
 		}
-		canonical, err := codec.value.Marshal(element)
+		canonical, err := codec.marshal(element)
 		if err != nil || !bytes.Equal(canonical, encoded) {
 			return nil, ErrInvalidCodec
 		}

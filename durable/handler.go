@@ -15,6 +15,7 @@ import (
 	"github.com/DarkInno/crdt"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/replica"
+	"github.com/DarkInno/crdt/telemetry"
 	"github.com/coder/websocket"
 )
 
@@ -46,6 +47,10 @@ type Config struct {
 	MaxReplayBytes        int
 	HandshakeTimeout      time.Duration
 	WriteTimeout          time.Duration
+	// Telemetry receives bounded, payload-free operational events for
+	// handshake, replay, and append outcomes. A nil Reporter is the default
+	// and adds no reporting work to relay paths.
+	Telemetry *telemetry.Reporter
 }
 
 type limits struct {
@@ -69,6 +74,7 @@ type Handler struct {
 	authorizeSubscription AuthorizeSubscription
 	origins               []string
 	limits                limits
+	telemetry             *telemetry.Reporter
 }
 
 // Group owns the manifest, validation boundary, and live subscribers for one
@@ -86,10 +92,10 @@ type Group struct {
 // state-independent concrete CRDT validator.
 func NewGroup(config GroupConfig) (*Group, error) {
 	if config.Validate == nil || strings.TrimSpace(config.Manifest.GroupID) == "" {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("durable.new_group", ErrInvalidConfig)
 	}
 	if _, err := replica.NewSessionWithPolicy(config.Manifest, config.Policy); err != nil {
-		return nil, fmt.Errorf("validate durable manifest: %w", err)
+		return nil, crdt.WrapError(crdt.ErrorCodeInvalidConfig, "durable.new_group", fmt.Errorf("validate durable manifest: %w", err))
 	}
 	return &Group{
 		manifest: config.Manifest,
@@ -110,25 +116,25 @@ func (group *Group) Manifest() replica.Manifest {
 // NewHandler validates a complete, bounded durable-relay configuration.
 func NewHandler(config Config) (*Handler, error) {
 	if config.Store == nil || config.Store.Closed() || config.Authenticate == nil || config.Authorize == nil || config.AuthorizeSubscription == nil || len(config.Groups) == 0 {
-		return nil, ErrInvalidConfig
+		return nil, invalidConfig("durable.new_handler", ErrInvalidConfig)
 	}
 	limits, err := normalizeLimits(config)
 	if err != nil {
-		return nil, err
+		return nil, invalidConfig("durable.new_handler", err)
 	}
 	if err := validateOriginPatterns(config.OriginPatterns); err != nil {
-		return nil, err
+		return nil, invalidConfig("durable.new_handler", err)
 	}
 	groups := make(map[string]*Group, len(config.Groups))
 	for _, group := range config.Groups {
 		if group == nil || strings.TrimSpace(group.manifest.GroupID) == "" {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("durable.new_handler", ErrInvalidConfig)
 		}
 		if _, exists := groups[group.manifest.GroupID]; exists {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("durable.new_handler", ErrInvalidConfig)
 		}
 		if hello, err := marshalHello(group.manifest, 0); err != nil || len(hello) > controlLimit(limits.maxMessageBytes) {
-			return nil, ErrInvalidConfig
+			return nil, invalidConfig("durable.new_handler", ErrInvalidConfig)
 		}
 		groups[group.manifest.GroupID] = group
 	}
@@ -140,30 +146,37 @@ func NewHandler(config Config) (*Handler, error) {
 		authorizeSubscription: config.AuthorizeSubscription,
 		origins:               append([]string(nil), config.OriginPatterns...),
 		limits:                limits,
+		telemetry:             config.Telemetry,
 	}, nil
 }
 
 // ServeHTTP exposes a single durable WebSocket endpoint at /ws.
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	handshakeStarted := handler.started()
 	if handler == nil || handler.store == nil || handler.store.Closed() {
+		handler.record("handshake", handshakeStarted, ErrClosed)
 		http.Error(writer, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if request.URL.Path != "/ws" {
+		handler.record("handshake", handshakeStarted, errInvalidWire)
 		http.NotFound(writer, request)
 		return
 	}
 	if request.Method != http.MethodGet {
+		handler.record("handshake", handshakeStarted, errInvalidWire)
 		writer.Header().Set("Allow", http.MethodGet)
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	if !handler.originAllowed(request) {
+		handler.record("handshake", handshakeStarted, ErrUnauthorized)
 		http.Error(writer, "forbidden origin", http.StatusForbidden)
 		return
 	}
 	peer, err := handler.authenticate(request)
 	if err != nil || strings.TrimSpace(peer.ID) == "" {
+		handler.record("handshake", handshakeStarted, ErrUnauthorized)
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -173,9 +186,11 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
+		handler.record("handshake", handshakeStarted, err)
 		return
 	}
 	if connection.Subprotocol() != Subprotocol {
+		handler.record("handshake", handshakeStarted, errInvalidWire)
 		_ = connection.CloseNow()
 		return
 	}
@@ -184,12 +199,16 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	defer cancelHandshake()
 	group, resume, err := handler.serverHandshake(handshakeContext, connection, peer)
 	if err != nil {
+		handler.record("handshake", handshakeStarted, err)
 		_ = connection.CloseNow()
 		return
 	}
 	client := newServerPeer(connection, handler.limits.maxQueuedEvents, handler.limits.maxQueuedBytes, handler.limits.writeTimeout)
+	handler.record("handshake", handshakeStarted, nil)
+	replayStarted := handler.started()
 	replay, highWater, err := group.subscribe(handler.store, client, resume, handler.limits)
 	if err != nil {
+		handler.record("replay", replayStarted, err)
 		if errors.Is(err, ErrReplayUnavailable) {
 			if message, marshalErr := marshalError("replay_unavailable"); marshalErr == nil {
 				_ = connection.Write(handshakeContext, websocket.MessageText, message)
@@ -198,6 +217,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		_ = connection.CloseNow()
 		return
 	}
+	handler.record("replay", replayStarted, nil)
 	defer group.remove(client)
 	defer client.close()
 	welcome, err := marshalWelcome(group.manifest, highWater)
@@ -257,7 +277,9 @@ func (group *Group) remove(peer *serverPeer) {
 	group.mu.Unlock()
 }
 
-func (group *Group) publish(peer Peer, data []byte, handler *Handler) error {
+func (group *Group) publish(peer Peer, data []byte, handler *Handler) (err error) {
+	started := handler.started()
+	defer func() { handler.record("append", started, err) }()
 	dot, delta, err := unmarshalChange(data, handler.limits.maxMessageBytes, handler.limits.maxActorBytes)
 	if err != nil {
 		return err
@@ -288,6 +310,49 @@ func (group *Group) publish(peer Peer, data []byte, handler *Handler) error {
 		}
 	}
 	return nil
+}
+
+func (handler *Handler) started() time.Time {
+	if handler == nil || handler.telemetry == nil {
+		return time.Time{}
+	}
+	return time.Now()
+}
+
+func (handler *Handler) record(operation string, started time.Time, err error) {
+	if handler == nil || handler.telemetry == nil {
+		return
+	}
+	outcome := telemetry.OutcomeSuccess
+	code := crdt.ErrorCodeUnknown
+	if err != nil {
+		code = crdt.ErrorCodeOf(err)
+		outcome = telemetry.OutcomeFailure
+		switch {
+		case errors.Is(err, ErrUnauthorized):
+			outcome = telemetry.OutcomeRejected
+			code = crdt.ErrorCodeUnauthorized
+		case errors.Is(err, ErrStoreFull):
+			outcome = telemetry.OutcomeRejected
+			code = crdt.ErrorCodeResourceLimit
+		case errors.Is(err, ErrClosed), errors.Is(err, ErrReplayUnavailable):
+			code = crdt.ErrorCodeUnavailable
+		case errors.Is(err, errInvalidWire):
+			outcome = telemetry.OutcomeRejected
+			code = crdt.ErrorCodeInvalidInput
+		}
+	}
+	duration := time.Duration(0)
+	if !started.IsZero() {
+		duration = time.Since(started)
+	}
+	handler.telemetry.Record(telemetry.Event{
+		Component: "durable",
+		Operation: operation,
+		Outcome:   outcome,
+		Duration:  duration,
+		ErrorCode: code,
+	})
 }
 
 func (peer *serverPeer) readLoop(identity Peer, group *Group, handler *Handler) {

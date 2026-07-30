@@ -13,7 +13,9 @@ import (
 )
 
 const (
-	recordVersion      byte = 1
+	// recordVersion remains the v1 value for legacy test fixtures. New writes
+	// take their version from Config.Format.
+	recordVersion      byte = RecordFormatV1
 	recordClockPresent byte = 1
 )
 
@@ -62,6 +64,10 @@ func normalizeCheckpoint(checkpoint Checkpoint, config Config) (Checkpoint, erro
 }
 
 func marshalCheckpoint(checkpoint Checkpoint, config Config) ([]byte, error) {
+	format, err := config.Format.normalized()
+	if err != nil {
+		return nil, ErrInvalidCheckpoint
+	}
 	size, err := checkpointSize(checkpoint, config)
 	if err != nil {
 		return nil, err
@@ -71,7 +77,7 @@ func marshalCheckpoint(checkpoint Checkpoint, config Config) ([]byte, error) {
 	clockState, hasClock := checkpoint.Snapshot.ClockState()
 	encoded := make([]byte, 0, size)
 	encoded = append(encoded, recordMagic[:]...)
-	encoded = append(encoded, recordVersion)
+	encoded = append(encoded, format.Version)
 	if hasClock {
 		encoded = append(encoded, recordClockPresent)
 	} else {
@@ -96,30 +102,46 @@ func marshalCheckpoint(checkpoint Checkpoint, config Config) ([]byte, error) {
 }
 
 func unmarshalCheckpoint(data []byte, config Config) (Checkpoint, error) {
+	checkpoint, version, err := decodeCheckpoint(data, config)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if !config.Format.MigrateOnLoad || version == effectiveFormat(config).Version {
+		return checkpoint, nil
+	}
+	return migrateCheckpoint(checkpoint, version, config)
+}
+
+func decodeCheckpoint(data []byte, config Config) (Checkpoint, byte, error) {
+	format, err := config.Format.normalized()
+	if err != nil {
+		return Checkpoint{}, 0, ErrCorruptStore
+	}
 	if len(data) < len(recordMagic)+2+sha256.Size || len(data) > config.MaxRecordBytes {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
 	payloadEnd := len(data) - sha256.Size
 	actual := sha256.Sum256(data[:payloadEnd])
 	if !bytes.Equal(actual[:], data[payloadEnd:]) {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
-	if string(data[:len(recordMagic)]) != string(recordMagic[:]) || data[len(recordMagic)] != recordVersion {
-		return Checkpoint{}, ErrCorruptStore
+	version := data[len(recordMagic)]
+	if string(data[:len(recordMagic)]) != string(recordMagic[:]) || !format.accepts(version) {
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
 	flags := data[len(recordMagic)+1]
 	if flags != 0 && flags != recordClockPresent {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
 	position := len(recordMagic) + 2
 	state, next, ok := frame.ReadBytes(data[:payloadEnd], position, config.MaxStateBytes)
 	if !ok || len(state) == 0 {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
 	position = next
 	frontierCount, next, ok := frame.ReadUvarint(data[:payloadEnd], position)
 	if !ok || frontierCount > uint64(config.MaxFrontierEntries) {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
 	position = next
 	frontier := make(map[string]crdt.Tag, int(frontierCount))
@@ -127,7 +149,7 @@ func unmarshalCheckpoint(data []byte, config Config) (Checkpoint, error) {
 	for index := uint64(0); index < frontierCount; index++ {
 		tag, next, ok := frame.ReadTag(data[:payloadEnd], position, config.MaxReplicaIDBytes)
 		if !ok || tag.ReplicaID <= previousReplicaID {
-			return Checkpoint{}, ErrCorruptStore
+			return Checkpoint{}, 0, ErrCorruptStore
 		}
 		frontier[tag.ReplicaID] = tag
 		previousReplicaID = tag.ReplicaID
@@ -137,28 +159,32 @@ func unmarshalCheckpoint(data []byte, config Config) (Checkpoint, error) {
 	if flags == recordClockPresent {
 		tag, next, ok := frame.ReadTag(data[:payloadEnd], position, config.MaxReplicaIDBytes)
 		if !ok {
-			return Checkpoint{}, ErrCorruptStore
+			return Checkpoint{}, 0, ErrCorruptStore
 		}
 		clockState = &clock.State{ReplicaID: tag.ReplicaID, WallTime: tag.WallTime, Logical: tag.Logical}
 		position = next
 	}
 	cursor, next, ok := frame.ReadUvarint(data[:payloadEnd], position)
 	if !ok {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
 	position = next
 	outbox, next, ok := frame.ReadBytes(data[:payloadEnd], position, config.MaxOutboxBytes)
 	if !ok || next != payloadEnd {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
-	checkpoint, err := decodedCheckpoint(state, frontier, clockState, cursor, outbox, config)
+	checkpoint, err := decodedCheckpointWithValidator(state, frontier, clockState, cursor, outbox, config, config.validatorFor(version))
 	if err != nil {
-		return Checkpoint{}, ErrCorruptStore
+		return Checkpoint{}, 0, ErrCorruptStore
 	}
-	return checkpoint, nil
+	return checkpoint, version, nil
 }
 
 func decodedCheckpoint(state []byte, frontier map[string]crdt.Tag, clockState *clock.State, cursor uint64, outbox []byte, config Config) (Checkpoint, error) {
+	return decodedCheckpointWithValidator(state, frontier, clockState, cursor, outbox, config, config.Validate)
+}
+
+func decodedCheckpointWithValidator(state []byte, frontier map[string]crdt.Tag, clockState *clock.State, cursor uint64, outbox []byte, config Config, validator snapshot.StateValidator) (Checkpoint, error) {
 	decoded, err := frame.UnmarshalFrame(state, frame.DefaultLimits())
 	if err != nil {
 		return Checkpoint{}, err
@@ -172,17 +198,54 @@ func decodedCheckpoint(state []byte, frontier map[string]crdt.Tag, clockState *c
 		if clockState == nil {
 			return Checkpoint{}, errors.New("missing HLC state")
 		}
-		saved, err = snapshot.NewValidatedWithClockState(state, frontier, *clockState, config.Validate)
+		saved, err = snapshot.NewValidatedWithClockState(state, frontier, *clockState, validator)
 	} else {
 		if clockState != nil {
 			return Checkpoint{}, errors.New("unexpected HLC state")
 		}
-		saved, err = snapshot.NewValidated(state, frontier, config.Validate)
+		saved, err = snapshot.NewValidated(state, frontier, validator)
 	}
 	if err != nil {
 		return Checkpoint{}, err
 	}
 	return Checkpoint{Snapshot: saved, Cursor: cursor, Outbox: append([]byte(nil), outbox...)}, nil
+}
+
+func effectiveFormat(config Config) FormatConfig {
+	format, err := config.Format.normalized()
+	if err != nil {
+		return FormatConfig{}
+	}
+	return format
+}
+
+func migrateCheckpoint(checkpoint Checkpoint, fromVersion byte, config Config) (Checkpoint, error) {
+	format := effectiveFormat(config)
+	if fromVersion == format.Version || !format.accepts(fromVersion) {
+		return Checkpoint{}, ErrMigration
+	}
+	if migration, ok := format.migration(fromVersion); ok && migration.Transform != nil {
+		var err error
+		checkpoint, err = applyMigration(migration.Transform, checkpoint)
+		if err != nil {
+			return Checkpoint{}, ErrMigration
+		}
+	}
+	normalized, err := normalizeCheckpoint(checkpoint, config)
+	if err != nil {
+		return Checkpoint{}, ErrMigration
+	}
+	return normalized, nil
+}
+
+func applyMigration(transform CheckpointMigration, checkpoint Checkpoint) (result Checkpoint, err error) {
+	defer func() {
+		if recover() != nil {
+			result = Checkpoint{}
+			err = ErrMigration
+		}
+	}()
+	return transform(checkpoint)
 }
 
 func checkpointSize(checkpoint Checkpoint, config Config) (int, error) {

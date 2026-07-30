@@ -1,7 +1,6 @@
 package replica
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/DarkInno/crdt"
@@ -15,8 +14,8 @@ func (s *builderCheckpointStore) SaveCheckpoint(checkpoint Checkpoint) error {
 	return nil
 }
 
-func TestSessionBuilderBindsExplicitExperimentalPolicyAcrossLifecycle(t *testing.T) {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+func TestSessionBuilderBindsStableScalarRGAAcrossLifecycle(t *testing.T) {
+	policy := crdt.ProtocolPolicy{}
 	builder, err := NewSessionBuilder("notes", "example.com/notes/v1", 1, Protocol{
 		StateID:          crdt.TypeIDRGAState,
 		DeltaID:          crdt.TypeIDRGADelta,
@@ -26,8 +25,8 @@ func TestSessionBuilderBindsExplicitExperimentalPolicyAcrossLifecycle(t *testing
 		t.Fatal(err)
 	}
 	manifest := builder.Manifest()
-	if _, err := NewSessionBuilderFromManifest(manifest, crdt.ProtocolPolicy{}); !errors.Is(err, ErrInvalidManifest) {
-		t.Fatalf("zero-policy builder = %v, want ErrInvalidManifest", err)
+	if _, err := NewSessionBuilderFromManifest(manifest, crdt.ProtocolPolicy{}); err != nil {
+		t.Fatalf("zero-policy builder = %v", err)
 	}
 
 	writer, err := text.New("writer")

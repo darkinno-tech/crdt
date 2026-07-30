@@ -24,18 +24,41 @@ func TestManifestRejectsDisabledAndMismatchedProtocols(t *testing.T) {
 	}
 	if _, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
 		StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
-		t.Fatalf("experimental RGA manifest error = %v", err)
+	}, crdt.ProtocolPolicy{}); err != nil {
+		t.Fatalf("stable scalar RGA manifest error = %v", err)
 	}
 	if _, err := NewManifest("set", "example.com/set/v1", 1, Protocol{
 		StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: 1,
-	}, crdt.ProtocolPolicy{AllowExperimental: true}); err != nil {
-		t.Fatalf("experimental LWW-Set manifest error = %v", err)
+	}, crdt.ProtocolPolicy{}); err != nil {
+		t.Fatalf("stable LWW-Set manifest error = %v", err)
 	}
 	remote := stable
 	remote.Protocol.SemanticsVersion = 2
-	if err := stable.Compatible(remote); !errors.Is(err, ErrProtocolMismatch) {
-		t.Fatalf("semantic mismatch error = %v", err)
+	if err := stable.Compatible(remote); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("tampered semantic version error = %v, want ErrInvalidManifest", err)
+	}
+}
+
+func TestManifestBindsSemanticVersionToFramePair(t *testing.T) {
+	valid := []Protocol{
+		{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: crdt.SemanticsVersionRGA},
+		{StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: crdt.SemanticsVersionRGARun},
+	}
+	for _, protocol := range valid {
+		if _, err := NewManifest("text", "example.com/text/v1", 1, protocol, crdt.ProtocolPolicy{}); err != nil {
+			t.Fatalf("NewManifest(%#v) = %v", protocol, err)
+		}
+	}
+
+	invalid := []Protocol{
+		{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: crdt.SemanticsVersionRGARun},
+		{StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: crdt.SemanticsVersionRGA},
+		{StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: crdt.SemanticsVersionLWWSet + 1},
+	}
+	for _, protocol := range invalid {
+		if _, err := NewManifest("text", "example.com/text/v1", 1, protocol, crdt.ProtocolPolicy{}); !errors.Is(err, ErrInvalidManifest) {
+			t.Fatalf("NewManifest(%#v) = %v, want ErrInvalidManifest", protocol, err)
+		}
 	}
 }
 
@@ -98,7 +121,7 @@ func TestManifestNegotiatesOuterFrameV2AtEveryReplicaBoundary(t *testing.T) {
 	}
 }
 
-func TestDefaultRunRGAProtocolDoesNotRequireExperimentalPolicy(t *testing.T) {
+func TestDefaultRunRGAProtocolUsesStablePolicy(t *testing.T) {
 	policy := crdt.ProtocolPolicy{}
 	manifest, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
 		StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: 2,
@@ -646,7 +669,7 @@ func TestInboxRejectsChangesFromAnotherEpoch(t *testing.T) {
 }
 
 func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	policy := crdt.ProtocolPolicy{}
 	protocol := Protocol{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1}
 	oldManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 1, protocol, policy)
 	newManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 2, protocol, policy)

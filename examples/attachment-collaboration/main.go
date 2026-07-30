@@ -55,9 +55,9 @@ func main() {
 }
 
 func run(writer io.Writer) error {
-	// Applications obtain this opt-in only after authenticating the peer and
-	// comparing the exact manifest for each replication group.
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
+	// Authenticate the peer and compare the exact manifest for each replication
+	// group before accepting any frame.
+	policy := crdt.ProtocolPolicy{}
 	note, err := replicateNote(policy)
 	if err != nil {
 		return fmt.Errorf("replicate note: %w", err)

@@ -23,7 +23,7 @@ or durable transaction boundary needed by the other CRDT types.
 
 | Dimension | Decision and evidence |
 | --- | --- |
-| Correctness | Admit only stable G-Counter state frames (TypeID 1); `counter.UnmarshalBinaryWithLimits` validates every stored and received state, and G-Counter `Merge` supplies the commutative, associative, idempotent join. Unknown, delta, and experimental states fail closed. |
+| Correctness | Admit only stable G-Counter state frames (TypeID 1); `counter.UnmarshalBinaryWithLimits` validates every stored and received state, and G-Counter `Merge` supplies the commutative, associative, idempotent join. Unknown and delta states fail closed. |
 | Integrity | The inventory carries a per-state SHA-256. The client verifies the downloaded body and response digest against that inventory, then compares both complete Merkle roots after repair. CRC-32C/frame validation remains input validation, not peer authentication. |
 | Resource safety | The default limits are 1 MiB per state, 1,024 files, 65,536 counter components, 1,024-byte replica IDs, 128-byte flat keys, and a hard maximum of 4,096 files. Limits are checked before decoder allocation or mutation. |
 | Security | The loopback-only server requires a non-empty shared token and compares a hashed token in constant time. `-token-file` avoids process-list exposure. Non-loopback listening is explicit; the server does not terminate TLS. |
