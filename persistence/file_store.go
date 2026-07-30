@@ -28,11 +28,6 @@ type FileConfig struct {
 	MaxStoreBytes int
 }
 
-func (config FileConfig) valid() bool {
-	_, err := config.normalized()
-	return err == nil
-}
-
 func (config FileConfig) normalized() (FileConfig, error) {
 	if config.MaxStoreBytes <= 0 {
 		return FileConfig{}, ErrInvalidConfig
