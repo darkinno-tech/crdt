@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,7 +64,10 @@ func TestWebSocketClientHandlesDialAndWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.connection.CloseNow(); err != nil {
+	// The receive loop may observe the scripted server's close first. Both
+	// orderings establish the same precondition for this test: Publish writes
+	// to a closed connection.
+	if err := client.connection.CloseNow(); err != nil && !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
 	change := rawReplicaChange(t, manifest, "writer", 1)
