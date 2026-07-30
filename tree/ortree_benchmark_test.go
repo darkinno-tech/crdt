@@ -70,6 +70,41 @@ func BenchmarkORTreeNodesWideTreeParallel(b *testing.B) {
 	})
 }
 
+func BenchmarkORTreeUnmarshalState1024(b *testing.B) {
+	state := benchmarkORTreeState(b, 1024)
+	target, err := New("target")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(state)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := target.UnmarshalBinary(state); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkORTreeRejectOverLimitState1024 measures untrusted state rejection
+// under a receiver-local node budget. The parser must reject the node count
+// before allocating a decoded node map or copying node values.
+func BenchmarkORTreeRejectOverLimitState1024(b *testing.B) {
+	state := benchmarkORTreeState(b, 1024)
+	target, err := NewWithOptions("target", Options{MaxNodes: 1, MaxTombstones: 1, MaxValueBytes: 256})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(state)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if err := target.UnmarshalBinary(state); err != ErrResourceLimit {
+			b.Fatalf("UnmarshalBinary() = %v, want %v", err, ErrResourceLimit)
+		}
+	}
+}
+
 func BenchmarkORTreeTombstoneTags1024(b *testing.B) {
 	value, _ := benchmarkORTreeTombstones(b, 1024)
 	b.ReportAllocs()
@@ -166,4 +201,27 @@ func benchmarkORTreeTombstones(b testing.TB, count int) (*ORTree, []NodeID) {
 		}
 	}
 	return value, value.TombstoneTags()
+}
+
+func benchmarkORTreeState(b testing.TB, children int) []byte {
+	b.Helper()
+	value, err := New("benchmark")
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload := make([]byte, 256)
+	root, _, err := value.Add(NodeID{}, payload)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for index := 0; index < children; index++ {
+		if _, _, err := value.Add(root, payload); err != nil {
+			b.Fatal(err)
+		}
+	}
+	state, err := value.MarshalBinary()
+	if err != nil {
+		b.Fatal(err)
+	}
+	return state
 }
