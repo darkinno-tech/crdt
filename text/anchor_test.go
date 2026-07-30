@@ -2,6 +2,7 @@ package text
 
 import (
 	"errors"
+	"math/rand"
 	"sync"
 	"testing"
 )
@@ -43,8 +44,8 @@ func TestRGAAnchorTracksRetainedTombstoneAcrossRunV2Delivery(t *testing.T) {
 
 	bob := mustRGA(t, "anchor-bob")
 	carol := mustRGA(t, "anchor-carol")
-	mustApplyRGARunDelta(t, bob, base)
-	mustApplyRGARunDelta(t, carol, base)
+	applyAnchorRunDelta(t, bob, base)
+	applyAnchorRunDelta(t, carol, base)
 
 	anchor, err := bob.AnchorAt(2) // The boundary directly before c.
 	if err != nil {
@@ -57,13 +58,51 @@ func TestRGAAnchorTracksRetainedTombstoneAcrossRunV2Delivery(t *testing.T) {
 	}
 	changes := []Delta{base, insert, deleted}
 	for index, replica := range []*RGA{alice, bob, carol} {
-		deliverRGARunChanges(t, replica, changes, int64(20260730+index))
+		deliverAnchorRunChanges(t, replica, changes, int64(20260730+index))
 		if got := replica.String(); got != "abXd" {
 			t.Fatalf("replica text = %q, want abXd", got)
 		}
 		resolved, err := replica.ResolveAnchor(anchor)
 		if err != nil || resolved != 3 {
 			t.Fatalf("ResolveAnchor after shuffled run-v2 delivery = %d, %v; want 3, nil", resolved, err)
+		}
+	}
+}
+
+func applyAnchorRunDelta(t testing.TB, target *RGA, delta Delta) {
+	t.Helper()
+	encoded, err := delta.MarshalRunBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalRGARunDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func deliverAnchorRunChanges(t testing.TB, target *RGA, changes []Delta, seed int64) {
+	t.Helper()
+	frames := make([][]byte, 0, len(changes)*2)
+	for _, change := range changes {
+		encoded, err := change.MarshalRunBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		frames = append(frames, encoded, encoded)
+	}
+	random := rand.New(rand.NewSource(seed))
+	random.Shuffle(len(frames), func(left, right int) { frames[left], frames[right] = frames[right], frames[left] })
+	for _, encoded := range frames {
+		decoded, err := UnmarshalRGARunDelta(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := target.ApplyDelta(decoded); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
