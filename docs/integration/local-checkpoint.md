@@ -146,6 +146,24 @@ if err != nil {
 }
 ```
 
+## Retire a local checkpoint
+
+`Delete` is idempotent: it returns `found=false, nil` if the named checkpoint
+is already absent. It atomically removes only that local recovery boundary;
+use it after the host's retention/rejoin policy confirms the replica will not
+need to recover from it. It does **not** acknowledge a peer, retire a durable
+relay event, or make CRDT tombstones eligible for collection.
+
+```go
+deleted, err := store.Delete("retired-device")
+if err != nil {
+	return err
+}
+if deleted {
+	// The application may now remove only its matching local metadata.
+}
+```
+
 HLC-based protocols (OR-Set, LWW, RGA, OR-Tree, list RGA, and rich text)
 cannot omit HLC state. `persistence.Save` rejects that shape before writing,
 and `Load` rejects it as corruption. This prevents a restarted process from
@@ -186,7 +204,7 @@ go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
 ```
 
 These checks cover local restart, corruption rejection, concurrent access, and

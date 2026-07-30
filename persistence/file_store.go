@@ -169,6 +169,43 @@ func (store *FileStore) Load(name string) (checkpoint Checkpoint, found bool, er
 	return checkpoint, true, nil
 }
 
+// Delete atomically removes name's local recovery boundary by replacing the
+// complete file. found is false when name was never saved. A successful delete
+// does not retire relay data or CRDT tombstones; callers must enforce their own
+// retention and rejoin policy before removing a checkpoint.
+func (store *FileStore) Delete(name string) (found bool, err error) {
+	if store == nil || store.closed.Load() {
+		return false, ErrClosed
+	}
+	if !store.config.Config.validName(name) {
+		return false, ErrInvalidCheckpoint
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed.Load() {
+		return false, ErrClosed
+	}
+	if _, found = store.records[name]; !found {
+		return false, nil
+	}
+	candidate := cloneRecords(store.records)
+	delete(candidate, name)
+	encoded, err := marshalFileRecords(candidate, store.config)
+	if err != nil {
+		return false, err
+	}
+	replaced, err := replaceFile(store.path, encoded)
+	if replaced {
+		// See Save: after rename the store must retain the new view even when
+		// parent-directory sync reports an error.
+		store.records = candidate
+	}
+	if err != nil {
+		return false, fmt.Errorf("delete file persistence checkpoint: %w", err)
+	}
+	return true, nil
+}
+
 func (store *FileStore) migrateAndLoad(name string) (checkpoint Checkpoint, found bool, err error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

@@ -170,6 +170,42 @@ func (store *BoltStore) Load(name string) (checkpoint Checkpoint, found bool, er
 	return checkpoint, found, nil
 }
 
+// Delete atomically removes name's local recovery boundary. found is false
+// when no checkpoint exists. A successful deletion does not acknowledge a
+// peer, retire a durable-relay event, or permit CRDT tombstone collection.
+func (store *BoltStore) Delete(name string) (found bool, err error) {
+	if store == nil || store.db == nil || store.closed.Load() {
+		return false, ErrClosed
+	}
+	if !store.config.validName(name) {
+		return false, ErrInvalidCheckpoint
+	}
+	err = store.db.Update(func(transaction *bolt.Tx) error {
+		bucket := transaction.Bucket(checkpointBucket)
+		if bucket == nil {
+			return ErrCorruptStore
+		}
+		if bucket.Get([]byte(name)) == nil {
+			return nil
+		}
+		if err := bucket.Delete([]byte(name)); err != nil {
+			return err
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrCorruptStore) {
+			return false, ErrCorruptStore
+		}
+		if store.closed.Load() {
+			return false, ErrClosed
+		}
+		return false, fmt.Errorf("delete persistence checkpoint: %w", err)
+	}
+	return found, nil
+}
+
 var errLegacyRecord = errors.New("crdt persistence: legacy record")
 
 func (store *BoltStore) migrateAndLoad(name string) (checkpoint Checkpoint, found bool, err error) {

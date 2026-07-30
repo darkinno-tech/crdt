@@ -13,5 +13,6 @@
 // codec/schema mismatch fails closed before a caller restores a replica. The
 // caller must still make its local CRDT mutation and its call to Save part of
 // its own failure policy, and must not retire tombstones merely because a
-// checkpoint exists.
+// checkpoint exists. Delete only retires one local recovery boundary; it does
+// not retire CRDT tombstones, relay history, or another replica's state.
 package persistence

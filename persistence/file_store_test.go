@@ -150,6 +150,45 @@ func TestFileStoreMigratesLegacyRecordOnLoad(t *testing.T) {
 	}
 }
 
+func TestFileStoreDeletePersistsRetentionBoundary(t *testing.T) {
+	path := t.TempDir() + "/checkpoint.store"
+	store := testFileStore(t, path, testFileConfig())
+	saved := testSnapshot(t)
+	for _, name := range []string{"active", "retired"} {
+		if err := store.Save(name, Checkpoint{Snapshot: saved}); err != nil {
+			t.Fatalf("Save(%q) error = %v", name, err)
+		}
+	}
+	deleted, err := store.Delete("retired")
+	if err != nil || !deleted {
+		t.Fatalf("Delete(retired) deleted=%t err=%v", deleted, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store = testFileStore(t, path, testFileConfig())
+	defer func() { _ = store.Close() }()
+	if _, found, err := store.Load("retired"); err != nil || found {
+		t.Fatalf("restart Load(retired) found=%t err=%v", found, err)
+	}
+	if checkpoint, found, err := store.Load("active"); err != nil || !found || checkpoint.Snapshot.TypeID != saved.TypeID {
+		t.Fatalf("restart Load(active) checkpoint=%+v found=%t err=%v", checkpoint, found, err)
+	}
+	if deleted, err := store.Delete("retired"); err != nil || deleted {
+		t.Fatalf("second Delete(retired) deleted=%t err=%v", deleted, err)
+	}
+	if _, err := store.Delete("invalid/name"); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Delete(invalid name) error = %v, want %v", err, ErrInvalidCheckpoint)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Delete("active"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Delete() after Close error = %v, want %v", err, ErrClosed)
+	}
+}
+
 func TestFileStoreConcurrentSavesAndLoads(t *testing.T) {
 	store := testFileStore(t, t.TempDir()+"/checkpoint.store", testFileConfig())
 	defer func() { _ = store.Close() }()

@@ -114,6 +114,40 @@ func BenchmarkFileStoreSaveParallel(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkStoreDelete(b *testing.B) {
+	store := benchmarkStore(b)
+	defer func() { _ = store.Close() }()
+	checkpoint := benchmarkCheckpoint(b)
+	b.ReportAllocs()
+	for index := 0; index < b.N; index++ {
+		b.StopTimer()
+		if err := store.Save("maintenance", checkpoint); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		if _, err := store.Delete("maintenance"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkFileStoreDelete(b *testing.B) {
+	store := benchmarkFileStore(b)
+	defer func() { _ = store.Close() }()
+	checkpoint := benchmarkCheckpoint(b)
+	b.ReportAllocs()
+	for index := 0; index < b.N; index++ {
+		b.StopTimer()
+		if err := store.Save("maintenance", checkpoint); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		if _, err := store.Delete("maintenance"); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 func benchmarkStore(b *testing.B) *BoltStore {
 	b.Helper()
 	store, err := Open(b.TempDir()+"/checkpoint.db", testConfig())

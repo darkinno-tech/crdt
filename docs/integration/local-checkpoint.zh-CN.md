@@ -131,6 +131,22 @@ if err != nil {
 }
 ```
 
+## 退役本地 checkpoint
+
+`Delete` 是幂等的：如果指定 checkpoint 已不存在，返回 `found=false, nil`。它只会原子
+删除这一个本地恢复边界；只能在宿主的保留/重新加入策略确认该 replica 不再需要它时调用。
+它**不会**确认 peer、退役 durable relay event，也不会让 CRDT tombstone 获得 GC 资格。
+
+```go
+deleted, err := store.Delete("retired-device")
+if err != nil {
+	return err
+}
+if deleted {
+	// 应用此时只能删除自己对应的本地元数据。
+}
+```
+
 使用 HLC 的协议（OR-Set、LWW、RGA、OR-Tree、list RGA、rich text）不能遗漏 HLC 状态。
 `persistence.Save` 会在写入前拒绝这种形状，`Load` 会将其视为损坏，避免重启后复用旧
 mutation tag。恢复工厂仍是最终的 type/codec 检查点。
@@ -163,7 +179,7 @@ go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
 go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
+go test -run='^$' -bench='Benchmark(File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)$' -benchmem -benchtime=2s ./persistence
 ```
 
 这些检查覆盖本地重启、损坏拒绝、并发访问和 fuzz 解码；它们不证明宿主备份、磁盘写满、

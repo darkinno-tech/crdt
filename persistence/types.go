@@ -213,5 +213,6 @@ func (config Config) validatorFor(version byte) snapshot.StateValidator {
 type Store interface {
 	Save(name string, checkpoint Checkpoint) error
 	Load(name string) (checkpoint Checkpoint, found bool, err error)
+	Delete(name string) (found bool, err error)
 	Close() error
 }
