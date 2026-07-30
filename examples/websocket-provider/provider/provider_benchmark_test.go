@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/DarkInno/crdt/awareness"
 	"github.com/DarkInno/crdt/counter"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/replica"
@@ -167,8 +169,88 @@ func BenchmarkProviderEndToEndRelayBatchFanout(b *testing.B) {
 	}
 }
 
+// BenchmarkProviderAwarenessFanout measures a complete v3 awareness heartbeat
+// from one authenticated actor through the relay to each observer. It does not
+// claim durable delivery: each operation waits only until every observer has
+// decoded and installed the current transient state.
+func BenchmarkProviderAwarenessFanout(b *testing.B) {
+	for _, receiverCount := range []int{1, 4, 16} {
+		b.Run(fmt.Sprintf("receivers_%d", receiverCount), func(b *testing.B) {
+			server, _, manifest := newCounterAwarenessServer(b)
+			endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+			observed := make(chan awareness.Update, receiverCount)
+			receivers := make([]*Client, 0, receiverCount)
+			for receiver := 0; receiver < receiverCount; receiver++ {
+				receivers = append(receivers, benchmarkAwarenessClient(b, endpoint, manifest, fmt.Sprintf("presence-observer-%d", receiver), nil, observed))
+			}
+			publisherStore := mustAwarenessStore(b)
+			publisher := benchmarkAwarenessClient(b, endpoint, manifest, "presence-publisher", publisherStore, nil)
+			updates := make([]awareness.Update, b.N)
+			for index := range updates {
+				update, err := publisherStore.Set("presence-publisher", []byte(`{"cursor":{"anchor":"publisher:2048","association":"before"},"name":"Publisher"}`), time.Now())
+				if err != nil {
+					b.Fatal(err)
+				}
+				updates[index] = update
+			}
+			wire, err := marshalAwareness(updates[0], publisherStore.Options())
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			b.SetBytes(int64(len(wire)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for _, update := range updates {
+				if err := publisher.PublishAwareness(context.Background(), update); err != nil {
+					b.Fatal(err)
+				}
+				for receiver := 0; receiver < receiverCount; receiver++ {
+					if received := <-observed; received.Actor != update.Actor || received.Clock != update.Clock {
+						b.Fatalf("received awareness = %#v, want %#v", received, update)
+					}
+				}
+			}
+			b.StopTimer()
+			for _, receiver := range receivers {
+				if err := receiver.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := publisher.Close(); err != nil {
+				b.Fatal(err)
+			}
+		})
+	}
+}
+
 func benchmarkCounterPublisher(b testing.TB, endpoint string, manifest replica.Manifest) (*Client, *counter.GCounter) {
 	return benchmarkCounterPublisherWithBatches(b, endpoint, manifest, false)
+}
+
+func benchmarkAwarenessClient(b testing.TB, endpoint string, manifest replica.Manifest, actor string, store *awareness.Store, observed chan<- awareness.Update) *Client {
+	b.Helper()
+	if store == nil {
+		store = mustAwarenessStore(b)
+	}
+	client, err := Dial(context.Background(), endpoint, manifest, ClientConfig{
+		Header:          http.Header{"Authorization": []string{"Bearer " + actor}},
+		EnableAwareness: true,
+		OnChange:        func(replica.Change) error { return nil },
+		OnAwareness: func(update awareness.Update) error {
+			if _, err := store.Apply(update, time.Now()); err != nil {
+				return err
+			}
+			if observed != nil {
+				observed <- update
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return client
 }
 
 func benchmarkCounterPublisherWithBatches(b testing.TB, endpoint string, manifest replica.Manifest, enableBatches bool) (*Client, *counter.GCounter) {
