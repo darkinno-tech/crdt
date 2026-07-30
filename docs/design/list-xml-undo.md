@@ -39,6 +39,46 @@ It retains deletion tombstones as structural anchors. Only call
 post-compaction checkpoint, and retirement of older deltas. It refuses any
 node with a retained child or unresolved dependent.
 
+## Move-capable sequence
+
+`list.MoveRGA[T]` is the separately versioned answer for products whose domain
+identity must survive drag-and-drop, prioritisation, or kanban reordering. It
+uses TypeIDs `25/26`; it is not wire-compatible with `list.RGA[T]` and has its
+own manifest schema/semantics contract.
+
+```go
+tasks, err := list.NewMoveRGA("desktop-a", stringCodec{})
+if err != nil { /* handle */ }
+_, _ = tasks.Append([]string{"draft", "review", "publish"})
+move, err := tasks.Move(2, 1, 0) // `to` is indexed after removing the range.
+if err != nil { /* handle */ }
+// `publish` keeps its original Position identity; replicate move as usual.
+wire, err := move.MarshalBinary()
+_ = wire
+```
+
+The state has three monotonic components: immutable value nodes, observed-remove
+tombstones, and one HLC-tagged placement register per node. A range move uses
+one operation tag plus per-item rank, so its local order remains defined. The
+join is immutable-node union, tombstone union, and maximum placement register
+per element. This makes duplicate and out-of-order delivery idempotent.
+
+Two concurrent moves may request `A after B` and `B after A`. That is a real
+conflict rather than an implementation error: storing a mutable parent pointer
+would produce a cycle. `MoveRGA` keeps both operations in the join state and
+constructs a deterministic projection by considering placement tags in canonical
+order and dropping only a cycle-closing attachment to the synthetic root. Every
+replica therefore makes the same bounded repair without rewriting either user's
+operation. A snapshot accepts such resolved-by-projection state, but rejects
+missing node or anchor dependencies.
+
+Projection is currently `O(n log n)` because it recomputes attachment order and
+the deterministic cycle repair. That is a deliberate correctness-first tradeoff;
+benchmark the real move mix before adopting it
+for very large, frequently reordered lists. Do not compact tombstones or old
+placement anchors until an authenticated exact-acknowledgement epoch, durable
+post-compaction snapshot, and old-delta retirement are complete.
+
 ## XML fragments
 
 `xml.Fragment` is an ordered `list.RGA[xml.Node]` with a canonical XML-node

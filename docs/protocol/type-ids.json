@@ -12,6 +12,7 @@
     { "name": "ORTree", "state_id": 17, "delta_id": 18, "semantics_version": 1, "uses_hlc": true },
     { "name": "RGARun", "state_id": 19, "delta_id": 20, "semantics_version": 2, "uses_hlc": true },
     { "name": "ListRGA", "state_id": 21, "delta_id": 22, "semantics_version": 1, "uses_hlc": true },
-    { "name": "RichText", "state_id": 23, "delta_id": 24, "semantics_version": 1, "uses_hlc": true }
+    { "name": "RichText", "state_id": 23, "delta_id": 24, "semantics_version": 1, "uses_hlc": true },
+    { "name": "MoveRGA", "state_id": 25, "delta_id": 26, "semantics_version": 1, "uses_hlc": true }
   ]
 }

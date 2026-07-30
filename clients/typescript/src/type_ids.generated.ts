@@ -25,6 +25,8 @@ export const FrameType = {
   ListRGADelta: 22n,
   RichTextState: 23n,
   RichTextDelta: 24n,
+  MoveRGAState: 25n,
+  MoveRGADelta: 26n,
 } as const;
 
 export const FrameSemanticsVersion = {
@@ -40,4 +42,5 @@ export const FrameSemanticsVersion = {
   RGARun: 2n,
   ListRGA: 1n,
   RichText: 1n,
+  MoveRGA: 1n,
 } as const;

@@ -95,6 +95,7 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 		{TypeIDRGARunState, TypeIDRGARunDelta, SemanticsVersionRGARun, true},
 		{TypeIDListRGAState, TypeIDListRGADelta, SemanticsVersionListRGA, true},
 		{TypeIDRichTextState, TypeIDRichTextDelta, SemanticsVersionRichText, true},
+		{TypeIDMoveRGAState, TypeIDMoveRGADelta, SemanticsVersionMoveRGA, true},
 	} {
 		kind, ok := FrameTypeForState(test.stateID)
 		if !ok || kind.DeltaID != test.deltaID || kind.SemanticsVersion != test.semanticsVersion || kind.UsesHLC != test.usesHLC {
@@ -109,8 +110,8 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 
 func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 	stable := (ProtocolPolicy{}).FrameTypes()
-	if len(stable) != 12 {
-		t.Fatalf("stable protocol count = %d, want 12", len(stable))
+	if len(stable) != 13 {
+		t.Fatalf("stable protocol count = %d, want 13", len(stable))
 	}
 	for _, kind := range stable {
 		if kind.SemanticsVersion == 0 {
@@ -132,15 +133,18 @@ func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 	if !(ProtocolPolicy{}).SupportsFrame(TypeIDORTreeState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDORTreeDelta) {
 		t.Fatal("default policy omitted stable OR-Tree frames")
 	}
+	if !(ProtocolPolicy{}).SupportsFrame(TypeIDMoveRGAState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDMoveRGADelta) {
+		t.Fatal("default policy omitted move RGA frames")
+	}
 }
 
 func TestProtocolPolicyCompatibilityFlagAndUnknownFrameHandling(t *testing.T) {
 	policy := ProtocolPolicy{AllowExperimental: true}
 	types := policy.FrameTypes()
-	if len(types) != 12 {
-		t.Fatalf("stable protocol count = %d, want 12", len(types))
+	if len(types) != 13 {
+		t.Fatalf("stable protocol count = %d, want 13", len(types))
 	}
-	if !policy.SupportsFrame(TypeIDLWWSetState) || !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDRGARunDelta) || !policy.SupportsFrame(TypeIDListRGADelta) || !policy.SupportsFrame(TypeIDORTreeDelta) || !policy.SupportsFrame(TypeIDRichTextDelta) {
+	if !policy.SupportsFrame(TypeIDLWWSetState) || !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDRGARunDelta) || !policy.SupportsFrame(TypeIDListRGADelta) || !policy.SupportsFrame(TypeIDMoveRGADelta) || !policy.SupportsFrame(TypeIDORTreeDelta) || !policy.SupportsFrame(TypeIDRichTextDelta) {
 		t.Fatal("enabled policy omitted an implemented protocol")
 	}
 	if policy.SupportsFrame(999) {

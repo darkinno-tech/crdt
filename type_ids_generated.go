@@ -42,6 +42,9 @@ const (
 	TypeIDRichTextState        uint64 = 23
 	TypeIDRichTextDelta        uint64 = 24
 	SemanticsVersionRichText   uint64 = 1
+	TypeIDMoveRGAState         uint64 = 25
+	TypeIDMoveRGADelta         uint64 = 26
+	SemanticsVersionMoveRGA    uint64 = 1
 )
 
 var frameTypes = [...]FrameType{
@@ -57,4 +60,5 @@ var frameTypes = [...]FrameType{
 	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, SemanticsVersion: SemanticsVersionRGARun, UsesHLC: true},
 	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, SemanticsVersion: SemanticsVersionListRGA, UsesHLC: true},
 	{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, SemanticsVersion: SemanticsVersionRichText, UsesHLC: true},
+	{StateID: TypeIDMoveRGAState, DeltaID: TypeIDMoveRGADelta, SemanticsVersion: SemanticsVersionMoveRGA, UsesHLC: true},
 }
