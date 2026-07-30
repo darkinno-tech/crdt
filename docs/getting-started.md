@@ -62,12 +62,15 @@ business invariant.
 | A field whose concurrent values must remain visible | `register.MVRegister` | Read `Values()` and resolve concurrent values in the product; a wall clock does not choose a winner. |
 | A balance, exclusive booking, workflow transition, or access decision | An authoritative service | Do not treat eventual CRDT convergence as an invariant or authorization mechanism. |
 
-Start with an in-memory merge while defining business semantics. `ExampleGCounter`,
-`ExamplePNCounter`, `ExampleORSet`, `ExampleGSet`, and `ExampleMVRegister` in
-[`example_test.go`](../example_test.go) are executable, minimal API references:
+Start with an in-memory merge while defining business semantics. The root
+[`example_test.go`](../example_test.go) contains executable minimal references
+for `ExampleGCounter`, `ExamplePNCounter`, `ExampleORSet`, `ExampleGSet`, and
+`ExampleMVRegister`. Package documentation also contains focused Examples for
+the bounded G-Counter receive path, experimental RGA delivery, and a manifest:
 
 ```sh
 go test -run '^Example(GCounter|PNCounter|ORSet|GSet|MVRegister)$' .
+go test ./counter ./text ./replica
 ```
 
 After the minimal flow, the collaborative-board example is the recommended

@@ -55,12 +55,15 @@ go test ./...
 | 并发值都必须保留的字段 | `register.MVRegister` | 读取 `Values()` 并由产品解决并发值；不能用墙上时钟选赢家。 |
 | 余额、排他预订、工作流流转、权限决策 | 权威服务 | 不要把最终 CRDT 收敛当作不变量或授权机制。 |
 
-先使用内存内合并定义业务语义。[`example_test.go`](../example_test.go) 中的
-`ExampleGCounter`、`ExamplePNCounter`、`ExampleORSet`、`ExampleGSet` 和
-`ExampleMVRegister` 是可执行的最小 API 参考：
+先使用内存内合并定义业务语义。根目录的
+[`example_test.go`](../example_test.go) 包含 `ExampleGCounter`、
+`ExamplePNCounter`、`ExampleORSet`、`ExampleGSet` 和 `ExampleMVRegister`
+这些可执行的最小 API 参考。各包文档还提供了有界 G-Counter 接收、实验性
+RGA 投递和 Manifest 的聚焦 Example：
 
 ```sh
 go test -run '^Example(GCounter|PNCounter|ORSet|GSet|MVRegister)$' .
+go test ./counter ./text ./replica
 ```
 
 完成最小流程后，建议运行协作任务看板这一真实场景。它使用有界的 G-Counter 和 OR-Set 解码器，
