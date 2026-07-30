@@ -2,7 +2,10 @@
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
-FUZZ_TIME ?= 10s
+# A single fuzz worker avoids scheduler starvation in shared CI. Give it enough
+# time to finish corpus minimization and a bounded large-frame decode before
+# the fuzz context expires; 10s intermittently ended as context deadline.
+FUZZ_TIME ?= 20s
 FUZZ_PARALLEL ?= 1
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
