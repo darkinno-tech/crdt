@@ -88,7 +88,7 @@ func marshalRGAWithLimits(typeID uint64, nodes map[Position]node, tombstones map
 			return nil, frame.ErrFrameLimit
 		}
 	}
-	return frame.MarshalFrameWithPayload(typeID, "", payloadSize, func(payload []byte) error {
+	return frame.MarshalFrameWithPayloadAndLimits(typeID, "", payloadSize, limits, func(payload []byte) error {
 		output := frame.AppendUvarint(payload[:0], uint64(len(ids)))
 		for _, id := range ids {
 			item := nodes[id]
