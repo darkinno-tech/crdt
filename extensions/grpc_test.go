@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/counter"
@@ -235,11 +234,9 @@ func grpcBufconn(t testing.TB, server *grpc.Server) *grpc.ClientConn {
 		server.Stop()
 		_ = listener.Close()
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	t.Cleanup(cancel)
-	connection, err := grpc.DialContext(ctx, "bufnet", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+	connection, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
 		return listener.Dial()
-	}), grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	}), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +273,7 @@ func grpcCode(err error) string {
 	if err == nil {
 		return ""
 	}
-	return grpc.Code(err).String()
+	return status.Code(err).String()
 }
 
 func BenchmarkGRPCRelayLoopback(b *testing.B) {

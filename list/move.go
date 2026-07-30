@@ -387,7 +387,7 @@ func validateMoveDelta(delta MoveDelta) error {
 		return ErrInvalidDelta
 	}
 	for id, item := range delta.nodes {
-		if !id.Valid() || id == item.parent || (item.parent.Valid() == false && item.parent != (Position{})) {
+		if !id.Valid() || id == item.parent || (!item.parent.Valid() && item.parent != (Position{})) {
 			return ErrInvalidDelta
 		}
 	}
