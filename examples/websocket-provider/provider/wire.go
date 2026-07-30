@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/DarkInno/crdt/awareness"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/replica"
 )
@@ -14,6 +15,7 @@ import (
 const (
 	protocolVersion      = 1
 	batchProtocolVersion = 2
+	awarenessWireVersion = 3
 	maxControlBytes      = 16 << 10
 )
 
@@ -34,6 +36,31 @@ type helloMessage struct {
 type wireChange struct {
 	dot   replica.Dot
 	delta []byte
+}
+
+func maxAwarenessWireBytes(options awareness.Options) int {
+	return 1 + 1 + options.MaxActorBytes + 2*10 + 1 + 10 + options.MaxStateBytes
+}
+
+func isAwareness(data []byte) bool { return len(data) > 0 && data[0] == awarenessWireVersion }
+
+func marshalAwareness(update awareness.Update, options awareness.Options) ([]byte, error) {
+	payload, err := update.MarshalBinaryWithOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte{awarenessWireVersion}, payload...), nil
+}
+
+func unmarshalAwareness(data []byte, maxMessageBytes int, options awareness.Options) (awareness.Update, error) {
+	if len(data) < 2 || len(data) > maxMessageBytes || !isAwareness(data) {
+		return awareness.Update{}, errInvalidWireMessage
+	}
+	update, err := awareness.UnmarshalUpdate(data[1:], options)
+	if err != nil {
+		return awareness.Update{}, errInvalidWireMessage
+	}
+	return update, nil
 }
 
 func marshalHello(manifest replica.Manifest) ([]byte, error) {

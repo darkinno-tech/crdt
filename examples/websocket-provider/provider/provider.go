@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/awareness"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/replica"
 	"github.com/coder/websocket"
@@ -31,6 +32,10 @@ const (
 	// Dot and canonical CRDT delta for every contained change. It is opt-in so
 	// v1 peers retain their original wire contract.
 	BatchSubprotocol = "crdt-sync-v2"
+	// AwarenessSubprotocol adds ephemeral awareness-v1 messages to the v2
+	// envelope. Awareness is never part of a CRDT delta, checkpoint, or
+	// replica.Frontier, so it remains explicitly negotiated and optional.
+	AwarenessSubprotocol = "crdt-sync-v3"
 
 	defaultMaxMessageBytes   = 1 << 20
 	defaultMaxActorBytes     = 128
@@ -53,6 +58,9 @@ var (
 	// ErrBatchLimit reports a batch that exceeds the configured item or message
 	// limit before it reaches the network.
 	ErrBatchLimit = errors.New("websocket provider: batch limit exceeded")
+	// ErrAwarenessUnsupported reports an awareness operation attempted without
+	// the explicitly negotiated awareness subprotocol.
+	ErrAwarenessUnsupported = errors.New("websocket provider: awareness unsupported")
 )
 
 // Peer is the authenticated identity returned by Authenticate. ID should be a
@@ -70,6 +78,11 @@ type Authenticate func(*http.Request) (Peer, error)
 // under another logical replica actor.
 type Authorize func(Peer, replica.Manifest, replica.Dot) error
 
+// AuthorizeAwareness binds a transient awareness actor to an authenticated
+// peer. It is intentionally separate from Authorize because awareness clocks
+// are not replica dots and must not be granted durable mutation authority.
+type AuthorizeAwareness func(Peer, replica.Manifest, awareness.Update) error
+
 // GroupConfig describes one in-memory replication group at the reference
 // provider. Frontier must come from the same durable transaction as the
 // application CRDT state when a production application restores a group.
@@ -80,14 +93,19 @@ type GroupConfig struct {
 	MaxPendingChanges int
 	MaxPendingBytes   int
 	Apply             replica.ApplyDelta
+	// Awareness is an optional in-memory, short-lived store. Do not restore it
+	// from a CRDT checkpoint; clean disconnects should publish a removal and
+	// broken connections naturally disappear after its TTL.
+	Awareness *awareness.Store
 }
 
 // Group owns a manifest-bound, bounded replica inbox and the live peers for
 // that group. It has no operation log or snapshot store.
 type Group struct {
-	manifest replica.Manifest
-	policy   crdt.ProtocolPolicy
-	inbox    *replica.Inbox
+	manifest  replica.Manifest
+	policy    crdt.ProtocolPolicy
+	inbox     *replica.Inbox
+	awareness *awareness.Store
 
 	receiveMu sync.Mutex
 	peersMu   sync.Mutex
@@ -117,11 +135,21 @@ func NewGroup(config GroupConfig) (*Group, error) {
 		return nil, fmt.Errorf("create replica inbox: %w", err)
 	}
 	return &Group{
-		manifest: config.Manifest,
-		policy:   config.Policy,
-		inbox:    inbox,
-		peers:    make(map[*connection]struct{}),
+		manifest:  config.Manifest,
+		policy:    config.Policy,
+		inbox:     inbox,
+		awareness: config.Awareness,
+		peers:     make(map[*connection]struct{}),
 	}, nil
+}
+
+// Awareness returns current non-expired awareness states. The returned data is
+// a snapshot, not durable replication state.
+func (g *Group) Awareness() []awareness.Update {
+	if g == nil || g.awareness == nil {
+		return nil
+	}
+	return g.awareness.ActiveAt(time.Now())
 }
 
 // Manifest returns the immutable-by-convention manifest negotiated by g.
@@ -151,16 +179,17 @@ func (g *Group) Pending() (changes, bytes int) {
 // Config configures a Handler. Authentication and authorization are required;
 // callers must not rely on the CRDT frame checksum as an identity check.
 type Config struct {
-	Groups            []*Group
-	Authenticate      Authenticate
-	Authorize         Authorize
-	OriginPatterns    []string
-	MaxMessageBytes   int
-	MaxActorBytes     int
-	MaxQueuedMessages int
-	MaxBatchChanges   int
-	HandshakeTimeout  time.Duration
-	WriteTimeout      time.Duration
+	Groups             []*Group
+	Authenticate       Authenticate
+	Authorize          Authorize
+	AuthorizeAwareness AuthorizeAwareness
+	OriginPatterns     []string
+	MaxMessageBytes    int
+	MaxActorBytes      int
+	MaxQueuedMessages  int
+	MaxBatchChanges    int
+	HandshakeTimeout   time.Duration
+	WriteTimeout       time.Duration
 }
 
 // Handler implements an authenticated WebSocket endpoint for a fixed set of
@@ -168,9 +197,10 @@ type Config struct {
 type Handler struct {
 	groups map[string]*Group
 
-	authenticate Authenticate
-	authorize    Authorize
-	origins      []string
+	authenticate       Authenticate
+	authorize          Authorize
+	authorizeAwareness AuthorizeAwareness
+	origins            []string
 
 	maxMessageBytes   int
 	maxActorBytes     int
@@ -206,6 +236,11 @@ func NewHandler(config Config) (*Handler, error) {
 		if _, exists := groups[group.manifest.GroupID]; exists {
 			return nil, ErrInvalidConfig
 		}
+		if group.awareness != nil {
+			if config.AuthorizeAwareness == nil || maxAwarenessWireBytes(group.awareness.Options()) > limits.maxMessageBytes {
+				return nil, ErrInvalidConfig
+			}
+		}
 		hello, err := marshalHello(group.manifest)
 		if err != nil || len(hello) > controlLimit(limits.maxMessageBytes) {
 			return nil, ErrInvalidConfig
@@ -213,16 +248,17 @@ func NewHandler(config Config) (*Handler, error) {
 		groups[group.manifest.GroupID] = group
 	}
 	return &Handler{
-		groups:            groups,
-		authenticate:      config.Authenticate,
-		authorize:         config.Authorize,
-		origins:           append([]string(nil), config.OriginPatterns...),
-		maxMessageBytes:   limits.maxMessageBytes,
-		maxActorBytes:     limits.maxActorBytes,
-		maxQueuedMessages: limits.maxQueuedMessages,
-		maxBatchChanges:   limits.maxBatchChanges,
-		handshakeTimeout:  limits.handshakeTimeout,
-		writeTimeout:      limits.writeTimeout,
+		groups:             groups,
+		authenticate:       config.Authenticate,
+		authorize:          config.Authorize,
+		authorizeAwareness: config.AuthorizeAwareness,
+		origins:            append([]string(nil), config.OriginPatterns...),
+		maxMessageBytes:    limits.maxMessageBytes,
+		maxActorBytes:      limits.maxActorBytes,
+		maxQueuedMessages:  limits.maxQueuedMessages,
+		maxBatchChanges:    limits.maxBatchChanges,
+		handshakeTimeout:   limits.handshakeTimeout,
+		writeTimeout:       limits.writeTimeout,
 	}, nil
 }
 
@@ -239,14 +275,15 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	conn, err := websocket.Accept(writer, request, &websocket.AcceptOptions{
-		Subprotocols:    []string{BatchSubprotocol, Subprotocol},
+		Subprotocols:    []string{AwarenessSubprotocol, BatchSubprotocol, Subprotocol},
 		OriginPatterns:  h.origins,
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return
 	}
-	batchEnabled := conn.Subprotocol() == BatchSubprotocol
+	awarenessEnabled := conn.Subprotocol() == AwarenessSubprotocol
+	batchEnabled := conn.Subprotocol() == BatchSubprotocol || awarenessEnabled
 	if !batchEnabled && conn.Subprotocol() != Subprotocol {
 		_ = conn.CloseNow()
 		return
@@ -262,13 +299,14 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	conn.SetReadLimit(int64(h.maxMessageBytes))
 	connectionContext, cancelConnection := context.WithCancel(context.Background())
 	peerConnection := &connection{
-		context:         connectionContext,
-		cancel:          cancelConnection,
-		conn:            conn,
-		outbound:        make(chan []byte, h.maxQueuedMessages),
-		writeTimeout:    h.writeTimeout,
-		batchEnabled:    batchEnabled,
-		maxBatchChanges: h.maxBatchChanges,
+		context:          connectionContext,
+		cancel:           cancelConnection,
+		conn:             conn,
+		outbound:         make(chan []byte, h.maxQueuedMessages),
+		writeTimeout:     h.writeTimeout,
+		batchEnabled:     batchEnabled,
+		awarenessEnabled: awarenessEnabled,
+		maxBatchChanges:  h.maxBatchChanges,
 	}
 	// Register before confirming the handshake. Dial returns once it receives
 	// response, so acknowledging first would allow an immediately published
@@ -280,7 +318,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	go peerConnection.writeLoop()
-	peerConnection.readLoop(peer, group, h.authorize, h.maxMessageBytes, h.maxActorBytes)
+	group.sendAwarenessSnapshot(peerConnection, h.maxMessageBytes)
+	peerConnection.readLoop(peer, group, h.authorize, h.authorizeAwareness, h.maxMessageBytes, h.maxActorBytes)
 }
 
 func (h *Handler) serverHandshake(ctx context.Context, conn *websocket.Conn) (*Group, []byte, error) {
@@ -318,6 +357,19 @@ func (g *Group) remove(connection *connection) {
 	delete(g.peers, connection)
 }
 
+func (g *Group) sendAwarenessSnapshot(connection *connection, maxMessageBytes int) {
+	if g == nil || g.awareness == nil || connection == nil || !connection.awarenessEnabled {
+		return
+	}
+	for _, update := range g.awareness.ActiveAt(time.Now()) {
+		data, err := marshalAwareness(update, g.awareness.Options())
+		if err != nil || len(data) > maxMessageBytes || !connection.enqueue(data) {
+			connection.close()
+			return
+		}
+	}
+}
+
 func (g *Group) receive(peer Peer, authorize Authorize, data []byte, maxMessageBytes, maxActorBytes int) error {
 	dot, delta, err := unmarshalChange(data, maxMessageBytes, maxActorBytes)
 	if err != nil {
@@ -332,6 +384,32 @@ func (g *Group) receiveBatch(peer Peer, authorize Authorize, data []byte, maxMes
 		return err
 	}
 	return g.receiveChanges(peer, authorize, changes)
+}
+
+func (g *Group) receiveAwareness(peer Peer, authorize AuthorizeAwareness, data []byte, maxMessageBytes int) error {
+	if g == nil || g.awareness == nil || authorize == nil {
+		return ErrUnauthorized
+	}
+	update, err := unmarshalAwareness(data, maxMessageBytes, g.awareness.Options())
+	if err != nil {
+		return err
+	}
+	if err := authorize(peer, g.manifest, update); err != nil {
+		return ErrUnauthorized
+	}
+	changed, err := g.awareness.Apply(update, time.Now())
+	if err != nil {
+		return fmt.Errorf("receive awareness: %w", err)
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := marshalAwareness(update, g.awareness.Options())
+	if err != nil {
+		return err
+	}
+	g.broadcast(encoded)
+	return nil
 }
 
 func (g *Group) receiveChanges(peer Peer, authorize Authorize, incoming []wireChange) error {
@@ -466,17 +544,18 @@ func normalizeLimits(messageBytes, actorBytes, queuedMessages, batchChanges int,
 }
 
 type connection struct {
-	context         context.Context
-	cancel          context.CancelFunc
-	conn            *websocket.Conn
-	outbound        chan []byte
-	writeTimeout    time.Duration
-	batchEnabled    bool
-	maxBatchChanges int
-	closeOnce       sync.Once
+	context          context.Context
+	cancel           context.CancelFunc
+	conn             *websocket.Conn
+	outbound         chan []byte
+	writeTimeout     time.Duration
+	batchEnabled     bool
+	awarenessEnabled bool
+	maxBatchChanges  int
+	closeOnce        sync.Once
 }
 
-func (connection *connection) readLoop(peer Peer, group *Group, authorize Authorize, maxMessageBytes, maxActorBytes int) {
+func (connection *connection) readLoop(peer Peer, group *Group, authorize Authorize, authorizeAwareness AuthorizeAwareness, maxMessageBytes, maxActorBytes int) {
 	for {
 		messageType, data, err := connection.conn.Read(connection.context)
 		if err != nil {
@@ -484,6 +563,12 @@ func (connection *connection) readLoop(peer Peer, group *Group, authorize Author
 		}
 		if messageType != websocket.MessageBinary {
 			return
+		}
+		if connection.awarenessEnabled && isAwareness(data) {
+			if err := group.receiveAwareness(peer, authorizeAwareness, data, maxMessageBytes); err != nil {
+				return
+			}
+			continue
 		}
 		if connection.batchEnabled && isChangeBatch(data) {
 			if err := group.receiveBatch(peer, authorize, data, maxMessageBytes, maxActorBytes, connection.maxBatchChanges); err != nil {

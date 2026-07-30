@@ -1,0 +1,59 @@
+{
+  "protocol": "richtext-v1",
+  "semantics_version": 1,
+  "frame_types": {
+    "state": 23,
+    "delta": 24
+  },
+  "vectors": [
+    {
+      "name": "attributed-insert-delta",
+      "frame_type": 24,
+      "complete_state": false,
+      "hex": "435244540118005d27435244540114001b01010205616c69636500ee9f8b94fb330048ee9f8b94fb33016900ab4e1d860105616c696365ee9f8b94fb33020205616c696365ee9f8b94fb330005616c696365ee9f8b94fb33010104626f6c64000474727565fba11cba",
+      "text": "Hi",
+      "spans": [
+        {
+          "text": "Hi",
+          "attributes": {
+            "bold": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "attributed-insert-state",
+      "frame_type": 23,
+      "complete_state": true,
+      "hex": "435244540117007327435244540113001b01010205616c69636500ee9f8b94fb330048ee9f8b94fb33016900c36edab90205616c696365ee9f8b94fb330004626f6c6405616c696365ee9f8b94fb330200047472756505616c696365ee9f8b94fb330104626f6c6405616c696365ee9f8b94fb3302000474727565af17109f",
+      "text": "Hi",
+      "spans": [
+        {
+          "text": "Hi",
+          "attributes": {
+            "bold": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "format-removal-state",
+      "frame_type": 23,
+      "complete_state": true,
+      "hex": "435244540117006e27435244540113001b01010205616c69636500ee9f8b94fb330048ee9f8b94fb33016900c36edab90205616c696365ee9f8b94fb330004626f6c6405616c696365ee9f8b94fb33040105616c696365ee9f8b94fb330104626f6c6405616c696365ee9f8b94fb33020004747275656ddd6f80",
+      "text": "Hi",
+      "spans": [
+        {
+          "text": "H",
+          "attributes": null
+        },
+        {
+          "text": "i",
+          "attributes": {
+            "bold": "true"
+          }
+        }
+      ]
+    }
+  ]
+}

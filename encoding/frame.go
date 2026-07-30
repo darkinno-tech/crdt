@@ -9,9 +9,15 @@ import (
 	"github.com/DarkInno/crdt"
 )
 
-// FormatVersion identifies the canonical frame layout implemented by this
-// package. Unknown versions are rejected rather than guessed.
+// FormatVersion identifies the original canonical frame layout. It remains the
+// default for existing MarshalFrame callers and is immutable on the wire.
 const FormatVersion uint64 = 1
+
+// FormatVersionV2 identifies the compression-aware frame layout. It preserves
+// a frame's TypeID, CodecID, and decoded payload, but records an explicit
+// payload encoding so peers can negotiate the transport representation without
+// changing CRDT semantics.
+const FormatVersionV2 uint64 = 2
 
 const (
 	defaultMaxFrameBytes = 16 << 20
@@ -62,6 +68,21 @@ type Frame struct {
 	TypeID  uint64
 	CodecID string
 	Payload []byte
+
+	// formatVersion is deliberately private so existing Frame literals remain
+	// v1-compatible. Version exposes the received format to protocol
+	// negotiation code.
+	formatVersion uint64
+	payloadOwned  bool
+}
+
+// Version returns the wire format used to decode f. Frames constructed by
+// callers and all legacy v1 frames report FormatVersion.
+func (f Frame) Version() uint64 {
+	if f.formatVersion == 0 {
+		return FormatVersion
+	}
+	return f.formatVersion
 }
 
 // MarshalFrame returns the canonical v1 encoding of frame.
@@ -131,7 +152,10 @@ func UnmarshalFrame(data []byte, limits Limits) (Frame, error) {
 	if err != nil {
 		return Frame{}, err
 	}
-	frame.Payload = append([]byte(nil), frame.Payload...)
+	if !frame.payloadOwned {
+		frame.Payload = append([]byte(nil), frame.Payload...)
+	}
+	frame.payloadOwned = false
 	return frame, nil
 }
 
@@ -142,7 +166,8 @@ func UnmarshalFrame(data []byte, limits Limits) (Frame, error) {
 //
 // This is intended for bounded decoders that validate and copy only the fields
 // they retain. Validation, including the checksum, completes before the view is
-// returned.
+// returned. A v2 DEFLATE payload is reconstructed during validation and is
+// therefore owned by the returned Frame rather than aliased to data.
 func UnmarshalFrameView(data []byte, limits Limits) (Frame, error) {
 	if !limits.valid() || len(data) > limits.MaxFrameBytes || len(data) < 9 {
 		return Frame{}, ErrFrameLimit
@@ -156,7 +181,7 @@ func UnmarshalFrameView(data []byte, limits Limits) (Frame, error) {
 	}
 	position := 4
 	version, next, ok := ReadUvarint(data[:len(data)-4], position)
-	if !ok || version != FormatVersion {
+	if !ok || (version != FormatVersion && version != FormatVersionV2) {
 		return Frame{}, ErrInvalidFrame
 	}
 	position = next
@@ -173,12 +198,15 @@ func UnmarshalFrameView(data []byte, limits Limits) (Frame, error) {
 	codecEnd := position + int(codecLength)
 	codecID := string(data[position:codecEnd])
 	position = codecEnd
-	payloadLength, next, ok := ReadUvarint(data[:len(data)-4], position)
-	if !ok || payloadLength > uint64(limits.MaxPayload) || payloadLength != uint64(len(data)-4-next) {
-		return Frame{}, ErrFrameLimit
+	if version == FormatVersion {
+		payloadLength, next, ok := ReadUvarint(data[:len(data)-4], position)
+		if !ok || payloadLength > uint64(limits.MaxPayload) || payloadLength != uint64(len(data)-4-next) {
+			return Frame{}, ErrFrameLimit
+		}
+		payload := data[next : len(data)-4]
+		return Frame{TypeID: typeID, CodecID: codecID, Payload: payload}, nil
 	}
-	payload := data[next : len(data)-4]
-	return Frame{TypeID: typeID, CodecID: codecID, Payload: payload}, nil
+	return unmarshalFrameV2(data[:len(data)-4], typeID, codecID, position, limits)
 }
 
 // AppendUvarint appends the unique shortest representation of value.

@@ -119,7 +119,8 @@ export type NativeCRDTErrorCode =
   | "state_conflict"
   | "type_conflict"
   | "transaction_active"
-  | "document_closed";
+  | "document_closed"
+  | "incomplete_state";
 
 export class NativeCRDTError extends Error {
   readonly code: NativeCRDTErrorCode;
@@ -135,6 +136,8 @@ export class NativeCRDTError extends Error {
 export interface NativeUpdateEvent {
   readonly update: NativeUpdate;
   readonly origin: unknown;
+  /** True only for an update created by this document's local mutation API. */
+  readonly local: boolean;
 }
 
 export interface NativeTypeEvent extends NativeUpdateEvent {
@@ -153,6 +156,15 @@ export interface NativeRoot {
 export interface NativeSnapshot {
   readonly roots: readonly NativeRoot[];
   readonly updates: readonly NativeUpdate[];
+  readonly counter: number;
+}
+
+/**
+ * The mutable portion of a persistence record. Browser stores can append
+ * canonical updates without repeatedly encoding the complete document state.
+ */
+export interface NativePersistenceMetadata {
+  readonly roots: readonly NativeRoot[];
   readonly counter: number;
 }
 
@@ -403,12 +415,44 @@ export class NativeArray<T extends NativeValue = NativeValue> {
     this.document._applyLocal({ kind: "array-insert", target: this.name, entries });
   }
 
+  /**
+   * Inserts preallocated immutable entries. It is reserved for document-owned
+   * extensions that need one entry ID to also name a nested shared type.
+   * Callers must obtain every ID from the same NativeDocument.
+   *
+   * @internal
+   */
+  _insertWithIDs(index: number, values: readonly { readonly id: NativeID; readonly value: NativeValue }[]): NativeArrayInsertOperation {
+    this.document._assertOpen();
+    const visible = this.#visibleNodes();
+    assertArrayIndex(index, visible.length, true);
+    if (values.length === 0 || values.length > this.document.limits.maxArrayItems) {
+      throw invalidUpdate();
+    }
+    if (this.#nodes.size + this.#pending.size + values.length > this.document.limits.maxArrayItems) {
+      throw resourceLimit();
+    }
+    let after = index === 0 ? null : copyID(visible[index - 1]!.id);
+    const entries: NativeArrayEntry[] = [];
+    const ids = new Set<string>();
+    for (const value of values) {
+      const id = this.document._copyID(value.id);
+      if (ids.has(idKey(id))) {
+        throw stateConflict();
+      }
+      ids.add(idKey(id));
+      entries.push({ id, after, value: this.document._copyValue(value.value) });
+      after = copyID(id);
+    }
+    return this.document._applyLocal({ kind: "array-insert", target: this.name, entries }) as NativeArrayInsertOperation;
+  }
+
   push(values: readonly T[]): void {
     this.insert(this.length, values);
   }
 
   /** Tombstones a visible range. A delete is idempotent and may be delivered before its insert. */
-  delete(index: number, count = 1): void {
+  delete(index: number, count = 1): NativeArrayDeleteOperation {
     this.document._assertOpen();
     const visible = this.#visibleNodes();
     assertArrayIndex(index, visible.length, false);
@@ -416,12 +460,12 @@ export class NativeArray<T extends NativeValue = NativeValue> {
       throw invalidUpdate();
     }
     if (count === 0) {
-      return;
+      return { kind: "array-delete", target: this.name, ids: [] };
     }
     const ids = visible
       .slice(index, index + count)
       .map((node) => copyID(node.id));
-    this.document._applyLocal({ kind: "array-delete", target: this.name, ids });
+    return this.document._applyLocal({ kind: "array-delete", target: this.name, ids }) as NativeArrayDeleteOperation;
   }
 
   toArray(): T[] {
@@ -520,7 +564,7 @@ export class NativeArray<T extends NativeValue = NativeValue> {
   /** @internal */
   _stateOperations(): NativeOperation[] {
     if (this.#pending.size !== 0) {
-      throw invalidUpdate();
+      throw incompleteState();
     }
     const operations: NativeOperation[] = [];
     const entries = topologicalNodes(this.#nodes);
@@ -618,6 +662,8 @@ export class NativeDocument {
   #transactionDepth = 0;
   #transactionOrigin: unknown;
   #pendingOperations: NativeOperation[] = [];
+  /** Canonical UTF-8 bytes of pending operation JSON, excluding commas. */
+  #pendingOperationBytes = 0;
   #changedRoots = new Set<Root>();
   #closed = false;
 
@@ -693,7 +739,7 @@ export class NativeDocument {
     const prepared = this.#prepare(update);
     const changed = this.#applyPrepared(prepared);
     if (changed) {
-      this.#emit(prepared.update, origin);
+      this.#emit(prepared.update, origin, false);
     }
     return changed;
   }
@@ -708,7 +754,7 @@ export class NativeDocument {
     const prepared = this.#prepareNormalized(decodeNativeUpdate(encoded, this.limits));
     const changed = this.#applyPrepared(prepared);
     if (changed) {
-      this.#emit(prepared.update, origin);
+      this.#emit(prepared.update, origin, false);
     }
     return changed;
   }
@@ -727,10 +773,20 @@ export class NativeDocument {
 
   snapshot(): NativeSnapshot {
     this._assertOpen();
+    return { ...this.persistenceMetadata(), updates: this.encodeStateAsUpdates() };
+  }
+
+  /**
+   * Returns copied root declarations and the local counter without encoding
+   * complete state. Pair this metadata with an atomically appended canonical
+   * update log; it is not a standalone recovery record.
+   */
+  persistenceMetadata(): NativePersistenceMetadata {
+    this._assertOpen();
     const roots: NativeRoot[] = [...this.#roots.values()]
       .sort((left, right) => compareText(left.name, right.name))
       .map((root) => ({ name: root.name, type: root instanceof NativeMap ? "map" : "array" }));
-    return { roots, updates: this.encodeStateAsUpdates(), counter: this.#counter };
+    return { roots, counter: this.#counter };
   }
 
   static restore(replicaID: string, snapshot: NativeSnapshot, options: NativeDocumentOptions = {}): NativeDocument {
@@ -771,6 +827,7 @@ export class NativeDocument {
     this.#roots.clear();
     this.#updateListeners.clear();
     this.#pendingOperations = [];
+    this.#pendingOperationBytes = 0;
     this.#changedRoots.clear();
     return true;
   }
@@ -793,6 +850,19 @@ export class NativeDocument {
   }
 
   /** @internal */
+  _copyID(value: NativeID): NativeID {
+    return normalizeID(value, this.limits);
+  }
+
+  /** @internal */
+  _setCounterAtLeast(counter: number): void {
+    if (!isPositiveOrZeroSafeInteger(counter)) {
+      throw invalidUpdate();
+    }
+    this.#counter = Math.max(this.#counter, counter);
+  }
+
+  /** @internal */
   _nextID(): NativeID {
     if (this.#counter >= Number.MAX_SAFE_INTEGER) {
       throw resourceLimit();
@@ -802,16 +872,26 @@ export class NativeDocument {
   }
 
   /** @internal */
-  _applyLocal(operation: NativeOperation): void {
+  _applyLocal(operation: NativeOperation): NativeOperation {
     this._assertOpen();
-    const combined: NativeUpdate = {
+    // Normalize and preflight one operation first. Re-encoding every prior
+    // operation for each member of a large transaction is quadratic, while
+    // the exact canonical envelope size is additive after normalization.
+    const normalized = normalizeUpdate({
       version: NATIVE_UPDATE_VERSION,
       actor: this.replicaID,
-      operations: [...this.#pendingOperations, operation],
-    };
-    // This checks the future outbound envelope before the local state changes.
-    const normalized = normalizeUpdate(combined, this.limits);
-    const normalizedOperation = normalized.operations[normalized.operations.length - 1]!;
+      operations: [operation],
+    }, this.limits);
+    const normalizedOperation = normalized.operations[0]!;
+    if (this.#pendingOperations.length >= this.limits.maxOperationsPerUpdate) {
+      throw resourceLimit();
+    }
+    const operationBytes = encodedLength(canonicalJSON(normalizedOperation));
+    const candidateBytes = nativeUpdateFixedBytes(this.replicaID) + this.#pendingOperationBytes + operationBytes + (this.#pendingOperations.length === 0 ? 0 : 1);
+    // Check the future outbound envelope before local state changes.
+    if (candidateBytes > this.limits.maxUpdateBytes) {
+      throw resourceLimit();
+    }
     const prepared = this.#prepareNormalized({
       version: NATIVE_UPDATE_VERSION,
       actor: this.replicaID,
@@ -819,9 +899,11 @@ export class NativeDocument {
     });
     this.#applyPrepared(prepared);
     this.#pendingOperations.push(normalizedOperation);
+    this.#pendingOperationBytes += operationBytes;
     if (this.#transactionDepth === 0) {
       this.#flushLocal();
     }
+    return normalizedOperation;
   }
 
   #prepare(update: NativeUpdate): PreparedUpdate {
@@ -903,13 +985,14 @@ export class NativeDocument {
       this.limits,
     );
     this.#pendingOperations = [];
+    this.#pendingOperationBytes = 0;
     const origin = this.#transactionOrigin;
     this.#transactionOrigin = undefined;
-    this.#emit(update, origin);
+    this.#emit(update, origin, true);
   }
 
-  #emit(update: NativeUpdate, origin: unknown): void {
-    const updateEvent: NativeUpdateEvent = { update, origin };
+  #emit(update: NativeUpdate, origin: unknown, local: boolean): void {
+    const updateEvent: NativeUpdateEvent = { update, origin, local };
     for (const listener of [...this.#updateListeners]) {
       listener(updateEvent);
     }
@@ -1492,6 +1575,10 @@ function encodedLength(value: string): number {
   return utf8ByteLength(value);
 }
 
+function nativeUpdateFixedBytes(actor: string): number {
+  return encodedLength(`{"actor":${canonicalJSON(actor)},"operations":[`) + encodedLength("],\"version\":1}");
+}
+
 /** Matches TextEncoder's replacement behaviour without allocating a byte array. */
 function utf8ByteLength(value: string): number {
   let length = 0;
@@ -1598,6 +1685,10 @@ function resourceLimit(): NativeCRDTError {
 
 function stateConflict(): NativeCRDTError {
   return new NativeCRDTError("state_conflict");
+}
+
+function incompleteState(): NativeCRDTError {
+  return new NativeCRDTError("incomplete_state");
 }
 
 function typeConflict(): NativeCRDTError {

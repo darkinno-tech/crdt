@@ -7,32 +7,44 @@ starts with a stable CRDT and an executable example, then points to the
 additional work required at a real network boundary. It does not turn the
 library or its examples into a hosted synchronization service.
 
-## 1. Verify the checkout
+## 1. Run one complete, safe delivery flow
 
-The module language baseline is Go 1.21. From a fresh checkout:
+The module language baseline is Go 1.21. In an existing Go application, add the
+latest stable module first:
+
+```sh
+go get github.com/DarkInno/crdt@latest
+```
+
+Then inspect and run the smallest complete reference from a local checkout:
 
 ```sh
 git clone https://github.com/DarkInno/crdt.git
 cd crdt
 go version
-go test ./...
-go run ./examples/collaborative-board
+go run ./examples/getting-started
+go test ./examples/getting-started
 ```
 
-The board example is the recommended first run. It serializes and decodes
-deltas, deliberately delivers duplicates and an out-of-order update, models an
-add-wins conflict during a partition, then restores an OR-Set with the same
-replica ID from a snapshot. Its expected final state is:
+Expected output:
 
 ```text
-completed-inspections=5
-open-tasks=[close-shift inspect-pump replace-filter]
+left=5
+right=5
+converged=true
 ```
 
-To consume the module from another Go project instead, run:
+This example uses the stable G-Counter protocol only. It keeps the local
+mutation, encoded outbox record, bounded receive decoder, and `ApplyDelta`
+separate so the application boundary is visible. It intentionally delivers one
+record twice; the two replicas still converge. The small limits are teaching
+values, not a production capacity recommendation.
+
+If you are changing the library rather than integrating it, validate the whole
+checkout separately:
 
 ```sh
-go get github.com/DarkInno/crdt@latest
+go test ./...
 ```
 
 ## 2. Choose the data type before writing transport code
@@ -58,8 +70,25 @@ Start with an in-memory merge while defining business semantics. `ExampleGCounte
 go test -run '^Example(GCounter|PNCounter|ORSet|GSet|MVRegister)$' .
 ```
 
-For a realistic framed G-Set and MV-Register flow, including duplicate delivery
-and recovery, run:
+After the minimal flow, the collaborative-board example is the recommended
+realistic scenario. It uses bounded G-Counter and OR-Set decoders, deliberately
+delivers duplicates and an out-of-order update, models an add-wins conflict
+during a partition, then restores an OR-Set with the same replica ID from a
+snapshot:
+
+```sh
+go run ./examples/collaborative-board
+```
+
+Its expected final state is:
+
+```text
+completed-inspections=5
+open-tasks=[close-shift inspect-pump replace-filter]
+```
+
+For a framed G-Set and MV-Register flow, including duplicate delivery and
+recovery, run:
 
 ```sh
 go run ./examples/warehouse-replication
@@ -118,7 +147,9 @@ before allocating the byte slice, and persist a mutation/outbox record before
 retrying it. The [end-to-end integration tutorial](integration/overview.md)
 shows the complete local delivery exercise; the [WebSocket provider
 reference](integration/websocket-provider.md) shows a bounded, manifest-bound
-Go integration pattern.
+Go integration pattern. The complete compilable G-Counter version of this
+split is [`examples/getting-started`](../examples/getting-started); copy its
+shape, not its example limits.
 
 ## 4. Persist the complete recovery record
 
@@ -156,11 +187,15 @@ New Go RGA groups need special attention:
   the [RGA run-v2 wire protocol](protocol/rga-run-v2.md) and its canonical
   vectors; never silently reinterpret a v1 frame as run-v2 or vice versa.
 
-LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree require the same explicit
+LWW-Set, LWW-Map, legacy RGA v1, and generic RGA list require the same explicit
 experimental opt-in at every manifest, change, inbox, checkpoint, and session
-boundary. Read the [collection extension design](design/crdt-extension.md)
-before choosing one. The [TypeScript/Wasm client guide](../clients/typescript/README.md)
-has its browser deployment, persistence, and CSP requirements.
+boundary. Stable observed-remove tree v1 instead binds `tree.SemanticsVersion`
+and an exact node-value schema under the zero-value policy; it supports only
+immutable-parent add/remove, not in-place moves. Read the
+[collection extension design](design/crdt-extension.md) and
+[OR-Tree v1 protocol](protocol/or-tree-v1.md) before choosing one. The
+[TypeScript/Wasm client guide](../clients/typescript/README.md) has its browser
+deployment, persistence, and CSP requirements.
 
 ## 6. Use the appropriate next guide
 

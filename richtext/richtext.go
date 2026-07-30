@@ -31,6 +31,11 @@ var (
 	ErrInvalidDelta     = errors.New("richtext: invalid delta")
 	ErrTagConflict      = errors.New("richtext: conflicting attribute for one tag")
 	ErrResourceLimit    = errors.New("richtext: resource limit exceeded")
+	// ErrUnsafeCompaction means a rich-text tombstone cannot be retired without
+	// changing retained text structure. Attribute-only tombstones may compact
+	// when they are part of the exact-acknowledged batch, but text positions
+	// still follow the RGA leaf-before-parent rule.
+	ErrUnsafeCompaction = errors.New("richtext: unsafe tombstone compaction")
 )
 
 // Attributes is the presentation-safe view of one span's live attributes.

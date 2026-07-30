@@ -1,0 +1,5 @@
+name = "darkinno-rga-formal"
+defaultTargets = ["RGAFormal"]
+
+[[lean_lib]]
+name = "RGAFormal"

@@ -69,6 +69,28 @@ object field-by-field. Model independently collaborative structures as named
 root `NativeMap`/`NativeArray` values instead. This avoids invisible in-place
 mutation and keeps resource accounting explicit.
 
+For a replication group that explicitly negotiates `native-ts-nested-v1`, use
+`NativeNestedDocument` from `@darkinno/crdt-client/nested`. It preserves the
+atomic-v1 API while allowing a map or array entry to own one independently
+merged child `NativeNestedMap`/`NativeNestedArray`:
+
+```ts
+import { NativeNestedDocument } from "@darkinno/crdt-client/nested";
+
+const document = new NativeNestedDocument("alice-device-7");
+const board = document.getMap("board");
+const card = board.createArray("cards").pushMap();
+card.set("title", "Draft");
+card.createArray("labels").push(["planning"]);
+```
+
+The child reference is bound to its immutable parent-operation ID, so it has
+one owner and cannot be moved or aliased. Nested updates that arrive before a
+parent wait under an explicit limit; snapshots reject while unresolved. This
+is a new semantics contract, not Yjs compatibility, a Go frame TypeID, or a
+transparent upgrade for a `NativeDocument` peer. See the
+[nested-type design](../../docs/design/native-typescript-nested-types.md).
+
 ### Native protocol, limits, and persistence
 
 `native-ts-v1` updates are immutable operation sets, not authentication. A
@@ -78,6 +100,90 @@ schema and deployment limits, cap the HTTP/WebSocket body before allocating a
 where required. The decoder checks canonical UTF-8 JSON, exact fields, IDs,
 cycles, type conflicts, duplicate-ID payload conflicts, and every limit before
 it changes state.
+
+## Browser-native document: persistent local-first use in a few lines
+
+`native-ts-v1` now has a browser facade at
+`@darkinno/crdt-client/browser`. `openNativeBrowserDocument` restores an
+append-only IndexedDB record before exposing the same named Map/Array API. It
+persists a local mutation before an optional transport is allowed to receive
+it, and an application can wait for the local recovery boundary with
+`flush()`:
+
+```ts
+import {
+  createBrowserReplicaID,
+  openNativeBrowserDocument,
+} from "@darkinno/crdt-client/browser";
+
+const board = await openNativeBrowserDocument({
+  documentID: "roadmap-2026-q3", // bind this to one product group/schema
+  replicaID: createBrowserReplicaID(), // unique for this active tab/Worker
+});
+
+const metadata = board.getMap("metadata");
+const cards = board.getArray("cards");
+board.transact(() => {
+  metadata.set("title", "Roadmap");
+  cards.push([{ id: "draft", status: "open" }]);
+});
+await board.flush(); // local IndexedDB recovery record is committed
+```
+
+The default browser store is `darkinno-crdt-native`; `documentID` is its local
+record key. A recovery record has three parts: copied root declarations and
+the local actor counter, an optional compacted bounded state base, and an
+append-only canonical update log. An append writes its update and current
+metadata in one IndexedDB transaction. This avoids serializing the whole
+document on every keystroke while ensuring a same-actor restart never reuses a
+counter after `flush()` resolves.
+
+The defaults compact only after 128 retained updates or 1 MiB of retained log,
+and only when no local update awaits a transport receipt. They cap the log at
+10,000 updates or 32 MiB. A document with an unresolved array parent retains
+the log and will not make an incomplete snapshot. If its cap is reached,
+`flush()` rejects with `NativeBrowserError("persistence_limit")`; the host must
+recover missing parents, reconnect, compact a complete state, or present an
+offline-storage error instead of silently dropping a mutation.
+
+### Bring your own authenticated transport
+
+`NativeBrowserTransport` deliberately has no URL, WebSocket handshake, token,
+or server envelope built in. That prevents `native-ts-v1` from being presented
+as compatible with the manifest-bound Go frame relay. Supply an adapter only
+after it authenticates the user and binds this exact `documentID`, schema,
+native semantic version, and compatible limits:
+
+```ts
+const board = await openNativeBrowserDocument({
+  documentID: authenticatedGroupID,
+  replicaID: createBrowserReplicaID(),
+  transport: authenticatedNativeTransport,
+});
+```
+
+The adapter's `send(bytes)` must resolve only at the product's receipt
+boundary. Until then, the browser client retains the canonical bytes in its
+local outbox and retries them after the next `connect()`. A raw WebSocket
+`send()` commonly means only that the browser queued bytes; it is not a remote
+durable acknowledgement. Received bytes enter `applyEncodedUpdate()` and are
+still bounded and canonical-validated before state changes. Cap an HTTP or
+WebSocket message before constructing its `Uint8Array`.
+
+For a local same-origin multi-tab experience, use two independently created
+`BroadcastChannelNativeTransport` instances with the same document-specific
+channel name. It is intentionally volatile: BroadcastChannel supplies neither
+authentication, durable delivery, history/bootstrap, nor anti-entropy. It is
+useful only as an extra live path beside IndexedDB and an authenticated server
+transport.
+
+`flush()` proves that the browser completed the requested IndexedDB work, not
+that an operating-system crash, quota eviction, a closed browser process, or a
+remote service preserved it forever. Surface `onError`, request persistent
+storage where product policy requires it, and treat server-side durable
+outbox/replay/checkpoint logic as a separate production requirement. See the
+[browser-native architecture decision](../../docs/design/browser-native-client.md)
+and [controlled browser benchmarks](../../docs/operations/browser-native-client-2026-07-30.md).
 
 The defaults are deliberately mobile-oriented: 1 MiB encoded update, 10,000
 operations/update, 128 roots, 10,000 retained map entries, 100,000 array nodes
@@ -222,6 +328,41 @@ op/update、10,000 map entry、100,000 array node/墓碑、10,000 pending node�
 
 对于必须与 Go、原生移动端或既有 RGA 数据互通的组，仍然使用下面的 Wasm run-v2 路径；它
 复用同一份 Go 编辑、乱序、墓碑和 HLC 语义，而不是维护一份隐式兼容的第二实现。
+
+## 浏览器原生文档：几行代码实现本地优先与恢复
+
+`@darkinno/crdt-client/browser` 的 `openNativeBrowserDocument` 在暴露
+Map/Array API 前先从 IndexedDB 恢复，并将本地变更写入追加日志。最小使用方式如下：
+
+```ts
+import { createBrowserReplicaID, openNativeBrowserDocument } from "@darkinno/crdt-client/browser";
+
+const board = await openNativeBrowserDocument({
+  documentID: "roadmap-2026-q3", // 对应一个业务复制组/schema
+  replicaID: createBrowserReplicaID(), // 每个同时活跃 tab/Worker 必须不同
+});
+board.getMap("metadata").set("title", "Roadmap");
+board.getArray("cards").push([{ id: "draft", status: "open" }]);
+await board.flush(); // 本地恢复记录已提交
+```
+
+默认数据库名为 `darkinno-crdt-native`，`documentID` 是本地记录键。记录把根类型声明与本地
+counter、可选完整 state base、以及规范 update 追加日志分开保存；每次追加在一个
+IndexedDB 事务中同时保存 update 与 metadata。因此不会每次编辑都编码整个文档，并且
+`flush()` 成功后以同一 actor 重启不会复用 counter。默认在日志达到 128 条或 1 MiB 时尝试
+压缩，但只有没有待确认本地 outbox 且 array 没有待父节点时才可压缩；总上限为 10,000 条或
+32 MiB。上限耗尽会由 `flush()` 返回 `persistence_limit`，绝不会静默丢弃变更。
+
+`NativeBrowserTransport` 不内置 URL、WebSocket 鉴权或服务端 envelope。这样不会把
+`native-ts-v1` 错称为可直接接入 Go manifest/frame relay 的协议。宿主应在 adapter 中先完成
+身份验证、组/schema/version/limits 绑定和入站 body 限制；`send(bytes)` 只有在产品定义的
+receipt 到达后才应 resolve。浏览器层在此之前保留 outbox 并在 `connect()` 后重试；普通
+WebSocket `send()` 只代表浏览器已入队，并不是远端持久确认。
+
+同源多标签可额外使用相同通道名的 `BroadcastChannelNativeTransport`，但它只是易失的实时路径，
+没有认证、持久化、历史/bootstrap 或反熵能力，不能取代经过认证的服务端 transport。更多架构
+与实测数据见[浏览器原生客户端设计](../../docs/design/browser-native-client.md)和
+[受控性能报告](../../docs/operations/browser-native-client-2026-07-30.md)。
 
 RGA 仍需要显式协商：先认证 `replica.Manifest`（group、schema、epoch、codec、语义
 版本和能力），再接收 frame；校验和不等于身份验证。默认 Wasm 产物只接收/发出

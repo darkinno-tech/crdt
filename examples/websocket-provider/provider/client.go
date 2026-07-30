@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/awareness"
 	"github.com/DarkInno/crdt/replica"
 	"github.com/coder/websocket"
 )
@@ -22,8 +23,14 @@ type ClientConfig struct {
 	MaxActorBytes   int
 	// EnableBatches negotiates BatchSubprotocol and allows PublishBatch. Each
 	// contained change retains its own Dot; v1 remains the default.
-	EnableBatches    bool
-	MaxBatchChanges  int
+	EnableBatches   bool
+	MaxBatchChanges int
+	// EnableAwareness requires the opt-in crdt-sync-v3 subprotocol. OnAwareness
+	// receives only authenticated, bounded, transient messages; applications
+	// should apply them to their own awareness.Store rather than a CRDT inbox.
+	EnableAwareness  bool
+	AwarenessOptions awareness.Options
+	OnAwareness      func(awareness.Update) error
 	HandshakeTimeout time.Duration
 	WriteTimeout     time.Duration
 	OnChange         func(replica.Change) error
@@ -33,23 +40,26 @@ type ClientConfig struct {
 // persist an outbox or automatically reconnect; callers decide retry and
 // recovery policy.
 type Client struct {
-	manifest replica.Manifest
-	policy   crdt.ProtocolPolicy
-	onChange func(replica.Change) error
+	manifest    replica.Manifest
+	policy      crdt.ProtocolPolicy
+	onChange    func(replica.Change) error
+	onAwareness func(awareness.Update) error
 
-	maxMessageBytes int
-	maxActorBytes   int
-	maxBatchChanges int
-	writeTimeout    time.Duration
-	batchEnabled    bool
-	connection      *websocket.Conn
-	context         context.Context
-	cancel          context.CancelFunc
-	done            chan struct{}
-	writeMu         sync.Mutex
-	closeOnce       sync.Once
-	errMu           sync.RWMutex
-	err             error
+	maxMessageBytes  int
+	maxActorBytes    int
+	maxBatchChanges  int
+	writeTimeout     time.Duration
+	batchEnabled     bool
+	awarenessEnabled bool
+	awarenessOptions awareness.Options
+	connection       *websocket.Conn
+	context          context.Context
+	cancel           context.CancelFunc
+	done             chan struct{}
+	writeMu          sync.Mutex
+	closeOnce        sync.Once
+	errMu            sync.RWMutex
+	err              error
 }
 
 // Dial authenticates the WebSocket handshake through config.Header, verifies
@@ -58,6 +68,10 @@ type Client struct {
 // configured TLS.
 func Dial(ctx context.Context, endpoint string, manifest replica.Manifest, config ClientConfig) (*Client, error) {
 	if config.OnChange == nil {
+		return nil, ErrInvalidConfig
+	}
+	awarenessOptions, err := normalizeAwarenessOptions(config.EnableAwareness, config.AwarenessOptions)
+	if err != nil || (config.EnableAwareness && config.OnAwareness == nil) {
 		return nil, ErrInvalidConfig
 	}
 	limits, err := normalizeLimits(
@@ -77,7 +91,12 @@ func Dial(ctx context.Context, endpoint string, manifest replica.Manifest, confi
 	handshakeContext, cancelHandshake := context.WithTimeout(ctx, limits.handshakeTimeout)
 	defer cancelHandshake()
 	subprotocols := []string{Subprotocol}
-	if config.EnableBatches {
+	if config.EnableAwareness {
+		subprotocols = []string{AwarenessSubprotocol, Subprotocol}
+		if config.EnableBatches {
+			subprotocols = []string{AwarenessSubprotocol, BatchSubprotocol, Subprotocol}
+		}
+	} else if config.EnableBatches {
 		// Offer v1 as a fallback so an upgraded client can still connect to a
 		// legacy provider. New handlers prefer BatchSubprotocol.
 		subprotocols = []string{BatchSubprotocol, Subprotocol}
@@ -90,10 +109,15 @@ func Dial(ctx context.Context, endpoint string, manifest replica.Manifest, confi
 	if err != nil {
 		return nil, err
 	}
-	batchEnabled := connection.Subprotocol() == BatchSubprotocol
+	awarenessEnabled := connection.Subprotocol() == AwarenessSubprotocol
+	batchEnabled := connection.Subprotocol() == BatchSubprotocol || awarenessEnabled
 	if connection.Subprotocol() != Subprotocol && !batchEnabled {
 		_ = connection.CloseNow()
 		return nil, errInvalidWireMessage
+	}
+	if config.EnableAwareness && !awarenessEnabled {
+		_ = connection.CloseNow()
+		return nil, ErrAwarenessUnsupported
 	}
 	connection.SetReadLimit(int64(controlLimit(limits.maxMessageBytes)))
 	hello, err := marshalHello(manifest)
@@ -126,21 +150,56 @@ func Dial(ctx context.Context, endpoint string, manifest replica.Manifest, confi
 	connection.SetReadLimit(int64(limits.maxMessageBytes))
 	connectionContext, cancelConnection := context.WithCancel(context.Background())
 	client := &Client{
-		manifest:        manifest,
-		policy:          config.Policy,
-		onChange:        config.OnChange,
-		maxMessageBytes: limits.maxMessageBytes,
-		maxActorBytes:   limits.maxActorBytes,
-		maxBatchChanges: limits.maxBatchChanges,
-		writeTimeout:    limits.writeTimeout,
-		batchEnabled:    batchEnabled,
-		connection:      connection,
-		context:         connectionContext,
-		cancel:          cancelConnection,
-		done:            make(chan struct{}),
+		manifest:         manifest,
+		policy:           config.Policy,
+		onChange:         config.OnChange,
+		onAwareness:      config.OnAwareness,
+		maxMessageBytes:  limits.maxMessageBytes,
+		maxActorBytes:    limits.maxActorBytes,
+		maxBatchChanges:  limits.maxBatchChanges,
+		writeTimeout:     limits.writeTimeout,
+		batchEnabled:     batchEnabled,
+		awarenessEnabled: awarenessEnabled,
+		awarenessOptions: awarenessOptions,
+		connection:       connection,
+		context:          connectionContext,
+		cancel:           cancelConnection,
+		done:             make(chan struct{}),
 	}
 	go client.readLoop()
 	return client, nil
+}
+
+// PublishAwareness transmits one ephemeral actor state after local validation.
+// It does not modify a replica.Inbox or establish a durability boundary.
+func (client *Client) PublishAwareness(ctx context.Context, update awareness.Update) error {
+	if client == nil {
+		return ErrClosed
+	}
+	if !client.awarenessEnabled {
+		return ErrAwarenessUnsupported
+	}
+	select {
+	case <-client.context.Done():
+		return ErrClosed
+	default:
+	}
+	encoded, err := marshalAwareness(update, client.awarenessOptions)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > client.maxMessageBytes {
+		return errInvalidWireMessage
+	}
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
+	writeContext, cancel := context.WithTimeout(ctx, client.writeTimeout)
+	err = client.connection.Write(writeContext, websocket.MessageBinary, encoded)
+	cancel()
+	if err != nil {
+		client.stop(err)
+	}
+	return err
 }
 
 // Publish validates change against the connection manifest, then transmits its
@@ -272,6 +331,18 @@ func (client *Client) readLoop() {
 			client.stop(errInvalidWireMessage)
 			return
 		}
+		if client.awarenessEnabled && isAwareness(data) {
+			update, err := unmarshalAwareness(data, client.maxMessageBytes, client.awarenessOptions)
+			if err != nil {
+				client.stop(err)
+				return
+			}
+			if err := client.onAwareness(update); err != nil {
+				client.stop(fmt.Errorf("apply received awareness: %w", err))
+				return
+			}
+			continue
+		}
 		if client.batchEnabled && isChangeBatch(data) {
 			changes, err := unmarshalChangeBatch(data, client.maxMessageBytes, client.maxActorBytes, client.maxBatchChanges)
 			if err != nil {
@@ -321,4 +392,17 @@ func (client *Client) stop(err error) {
 		client.cancel()
 		_ = client.connection.CloseNow()
 	})
+}
+
+func normalizeAwarenessOptions(enabled bool, options awareness.Options) (awareness.Options, error) {
+	if !enabled {
+		return awareness.Options{}, nil
+	}
+	if options == (awareness.Options{}) {
+		options = awareness.DefaultOptions()
+	}
+	if _, err := awareness.NewStore(options); err != nil {
+		return awareness.Options{}, err
+	}
+	return options, nil
 }

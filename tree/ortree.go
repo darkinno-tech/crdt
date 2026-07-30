@@ -23,6 +23,10 @@ var (
 	ErrUnsafeCompaction = errors.New("tree: unsafe OR-Tree tombstone compaction")
 )
 
+// SemanticsVersion is the immutable observed-remove tree v1 contract. It must
+// match the value negotiated in a replica manifest.
+const SemanticsVersion uint64 = 1
+
 // NodeID is an immutable node-instance identity. The zero ID is the synthetic root.
 type NodeID = crdt.Tag
 
@@ -85,6 +89,13 @@ type ORTree struct {
 
 var _ crdt.CRDT[*ORTree] = (*ORTree)(nil)
 var _ crdt.DeltaCapable[*ORTree, Delta] = (*ORTree)(nil)
+
+// StableFrameType returns the stable observed-remove tree state/delta pair.
+// Tree v1 supports immutable parent links with add and observed-remove only;
+// a future move protocol requires a distinct frame pair and semantic version.
+func StableFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, UsesHLC: true}
+}
 
 func New(replicaID string) (*ORTree, error) { return NewWithOptions(replicaID, DefaultOptions()) }
 
@@ -342,6 +353,87 @@ func (t *ORTree) CompactTombstones(tags []NodeID) (int, error) {
 			return 0, ErrUnsafeCompaction
 		}
 		compact = append(compact, tag)
+	}
+	for _, tag := range compact {
+		delete(t.nodes, tag)
+		delete(t.tombstones, tag)
+	}
+	if len(compact) > 0 {
+		t.version++
+	}
+	return len(compact), nil
+}
+
+// CompactEligibleTombstones makes best-effort structural progress through an
+// exact-acknowledged tombstone batch. It removes deleted descendants before
+// their deleted ancestors, so an entirely deleted tree branch can compact in
+// one call. A retained child that is not part of the batch remains a structural
+// anchor and prevents its parent from being removed.
+//
+// Callers must first authenticate exact acknowledgements for the current
+// membership epoch, durably persist the post-compaction checkpoint, and retire
+// old-epoch frames. This method does not establish any of those conditions.
+func (t *ORTree) CompactEligibleTombstones(tags []NodeID) (int, error) {
+	if t == nil {
+		return 0, ErrNilTree
+	}
+	for _, tag := range tags {
+		if !tag.Valid() {
+			return 0, ErrUnsafeCompaction
+		}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	indexes := make(map[NodeID]int, len(tags))
+	candidates := make([]NodeID, 0, len(tags))
+	for _, tag := range tags {
+		if _, duplicate := indexes[tag]; duplicate {
+			continue
+		}
+		if _, tombstoned := t.tombstones[tag]; !tombstoned {
+			continue
+		}
+		if _, exists := t.nodes[tag]; !exists {
+			continue
+		}
+		indexes[tag] = len(candidates)
+		candidates = append(candidates, tag)
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Compare(candidates[j]) < 0 })
+	for index, tag := range candidates {
+		indexes[tag] = index
+	}
+
+	remainingChildren := make([]int, len(candidates))
+	for _, node := range t.nodes {
+		if index, selected := indexes[node.parent]; selected {
+			remainingChildren[index]++
+		}
+	}
+	ready := make([]int, 0, len(candidates))
+	for index, children := range remainingChildren {
+		if children == 0 {
+			ready = append(ready, index)
+		}
+	}
+	compact := make([]NodeID, 0, len(candidates))
+	for len(ready) > 0 {
+		index := ready[0]
+		ready = ready[1:]
+		tag := candidates[index]
+		compact = append(compact, tag)
+		parentIndex, selectedParent := indexes[t.nodes[tag].parent]
+		if !selectedParent {
+			continue
+		}
+		remainingChildren[parentIndex]--
+		if remainingChildren[parentIndex] == 0 {
+			ready = append(ready, parentIndex)
+		}
 	}
 	for _, tag := range compact {
 		delete(t.nodes, tag)

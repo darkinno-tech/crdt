@@ -122,6 +122,32 @@ func main() {
 		}
 		return bytesToJS(encoded), nil
 	})
+	register(api, "replace", func(args []js.Value) (any, error) {
+		if len(args) != 4 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		offset, err := requiredIndex(args[1])
+		if err != nil {
+			return nil, err
+		}
+		count, err := requiredIndex(args[2])
+		if err != nil {
+			return nil, err
+		}
+		value, err := requiredBoundedString(args[3], runtime.MaxLocalEditBytes())
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := runtime.Replace(handle, offset, count, value)
+		if err != nil {
+			return nil, err
+		}
+		return bytesToJS(encoded), nil
+	})
 	register(api, "applyDelta", func(args []js.Value) (any, error) {
 		if len(args) != 2 {
 			return nil, errInvalidArgument

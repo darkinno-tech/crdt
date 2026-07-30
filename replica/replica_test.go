@@ -39,6 +39,65 @@ func TestManifestRejectsDisabledAndMismatchedProtocols(t *testing.T) {
 	}
 }
 
+func TestManifestNegotiatesOuterFrameV2AtEveryReplicaBoundary(t *testing.T) {
+	manifest, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
+		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1, WireFormatVersion: frame.FormatVersionV2,
+	}, crdt.ProtocolPolicy{})
+	if err != nil {
+		t.Fatalf("NewManifest v2: %v", err)
+	}
+	if got := manifest.Protocol.FrameFormatVersion(); got != frame.FormatVersionV2 {
+		t.Fatalf("FrameFormatVersion() = %d, want %d", got, frame.FormatVersionV2)
+	}
+	legacy := manifest
+	legacy.Protocol.WireFormatVersion = 0
+	if err := manifest.Compatible(legacy); !errors.Is(err, ErrProtocolMismatch) {
+		t.Fatalf("v2/legacy compatibility error = %v, want ErrProtocolMismatch", err)
+	}
+
+	delta, err := frame.MarshalFrameV2(frame.Frame{TypeID: crdt.TypeIDGCounterDelta, Payload: []byte{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, err := NewChange(manifest, Dot{Actor: "writer", Counter: 1}, delta)
+	if err != nil {
+		t.Fatalf("NewChange v2: %v", err)
+	}
+	frontier, err := NewFrontier(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := NewInbox(manifest, frontier, 2, 1024, func(data []byte) error {
+		decoded, err := frame.UnmarshalFrame(data, frame.DefaultLimits())
+		if err != nil || decoded.Version() != frame.FormatVersionV2 || decoded.TypeID != crdt.TypeIDGCounterDelta {
+			return ErrInvalidChange
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
+		t.Fatalf("v2 inbox delivery = %#v, %v", delivery, err)
+	}
+	if _, err := NewChange(legacy, Dot{Actor: "writer", Counter: 1}, delta); !errors.Is(err, ErrInvalidChange) {
+		t.Fatalf("v2 frame under legacy manifest error = %v, want ErrInvalidChange", err)
+	}
+
+	state, err := frame.MarshalFrameV2(frame.Frame{TypeID: crdt.TypeIDGCounterState, Payload: []byte{0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCheckpoint(manifest, state, frontier, clock.State{}, func([]byte) error { return nil }); err != nil {
+		t.Fatalf("NewCheckpoint v2: %v", err)
+	}
+	if _, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
+		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1, WireFormatVersion: 3,
+	}, crdt.ProtocolPolicy{}); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("unknown format manifest error = %v, want ErrInvalidManifest", err)
+	}
+}
+
 func TestDefaultRunRGAProtocolDoesNotRequireExperimentalPolicy(t *testing.T) {
 	policy := crdt.ProtocolPolicy{}
 	manifest, err := NewManifest("text", "example.com/text/v1", 1, Protocol{
@@ -589,8 +648,8 @@ func TestInboxRejectsChangesFromAnotherEpoch(t *testing.T) {
 func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 	policy := crdt.ProtocolPolicy{AllowExperimental: true}
 	protocol := Protocol{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: 1}
-	oldManifest := mustExperimentalManifest(t, "text", "example.com/text/v1", 1, protocol, policy)
-	newManifest := mustExperimentalManifest(t, "text", "example.com/text/v1", 2, protocol, policy)
+	oldManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 1, protocol, policy)
+	newManifest := mustPolicyManifest(t, "text", "example.com/text/v1", 2, protocol, policy)
 
 	oldAnchor, err := text.New("old-anchor")
 	if err != nil {
@@ -636,9 +695,9 @@ func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 		name   string
 		change Change
 	}{
-		{"compacted old anchor", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 1}, mustMarshalRGADelta(t, anchorDelta), policy)},
-		{"old anchor tombstone", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 2}, mustMarshalRGADelta(t, tombstoneDelta), policy)},
-		{"old parent reference", mustExperimentalChange(t, oldManifest, Dot{Actor: "old-parent", Counter: 2}, mustMarshalRGADelta(t, childDelta), policy)},
+		{"compacted old anchor", mustPolicyChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 1}, mustMarshalRGADelta(t, anchorDelta), policy)},
+		{"old anchor tombstone", mustPolicyChange(t, oldManifest, Dot{Actor: "old-anchor", Counter: 2}, mustMarshalRGADelta(t, tombstoneDelta), policy)},
+		{"old parent reference", mustPolicyChange(t, oldManifest, Dot{Actor: "old-parent", Counter: 2}, mustMarshalRGADelta(t, childDelta), policy)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := inbox.Receive(test.change); !errors.Is(err, ErrManifestMismatch) {
@@ -660,7 +719,7 @@ func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change := mustExperimentalChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalRGADelta(t, future), policy)
+	change := mustPolicyChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalRGADelta(t, future), policy)
 	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
 		t.Fatalf("Receive(new epoch) = %#v, %v", delivery, err)
 	}
@@ -670,10 +729,10 @@ func TestCheckpointRebaseRejectsOldEpochRGAAnchorsAndParents(t *testing.T) {
 }
 
 func TestCheckpointRebaseRejectsOldEpochORTreeAnchorsAndParents(t *testing.T) {
-	policy := crdt.ProtocolPolicy{AllowExperimental: true}
-	protocol := Protocol{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, SemanticsVersion: 1}
-	oldManifest := mustExperimentalManifest(t, "tree", "example.com/tree/v1", 1, protocol, policy)
-	newManifest := mustExperimentalManifest(t, "tree", "example.com/tree/v1", 2, protocol, policy)
+	policy := crdt.ProtocolPolicy{}
+	protocol := Protocol{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, SemanticsVersion: tree.SemanticsVersion}
+	oldManifest := mustPolicyManifest(t, "tree", "example.com/tree/v1", 1, protocol, policy)
+	newManifest := mustPolicyManifest(t, "tree", "example.com/tree/v1", 2, protocol, policy)
 
 	old, err := tree.New("old")
 	if err != nil {
@@ -708,9 +767,9 @@ func TestCheckpointRebaseRejectsOldEpochORTreeAnchorsAndParents(t *testing.T) {
 		name   string
 		change Change
 	}{
-		{"old anchor", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 1}, mustMarshalORTreeDelta(t, oldRootDelta), policy)},
-		{"old parent reference", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 2}, mustMarshalORTreeDelta(t, oldChildDelta), policy)},
-		{"old anchor tombstone", mustExperimentalChange(t, oldManifest, Dot{Actor: "old", Counter: 3}, mustMarshalORTreeDelta(t, oldRemoveDelta), policy)},
+		{"old anchor", mustPolicyChange(t, oldManifest, Dot{Actor: "old", Counter: 1}, mustMarshalORTreeDelta(t, oldRootDelta), policy)},
+		{"old parent reference", mustPolicyChange(t, oldManifest, Dot{Actor: "old", Counter: 2}, mustMarshalORTreeDelta(t, oldChildDelta), policy)},
+		{"old anchor tombstone", mustPolicyChange(t, oldManifest, Dot{Actor: "old", Counter: 3}, mustMarshalORTreeDelta(t, oldRemoveDelta), policy)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := inbox.Receive(test.change); !errors.Is(err, ErrManifestMismatch) {
@@ -729,7 +788,7 @@ func TestCheckpointRebaseRejectsOldEpochORTreeAnchorsAndParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	change := mustExperimentalChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalORTreeDelta(t, future), policy)
+	change := mustPolicyChange(t, newManifest, Dot{Actor: "rebased", Counter: 1}, mustMarshalORTreeDelta(t, future), policy)
 	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
 		t.Fatalf("Receive(new epoch) = %#v, %v", delivery, err)
 	}
@@ -901,7 +960,7 @@ func testCheckpoint(t *testing.T) (Manifest, Checkpoint) {
 	return manifest, checkpoint
 }
 
-func mustExperimentalManifest(t testing.TB, groupID, schemaID string, epoch uint64, protocol Protocol, policy crdt.ProtocolPolicy) Manifest {
+func mustPolicyManifest(t testing.TB, groupID, schemaID string, epoch uint64, protocol Protocol, policy crdt.ProtocolPolicy) Manifest {
 	t.Helper()
 	manifest, err := NewManifest(groupID, schemaID, epoch, protocol, policy)
 	if err != nil {
@@ -910,7 +969,7 @@ func mustExperimentalManifest(t testing.TB, groupID, schemaID string, epoch uint
 	return manifest
 }
 
-func mustExperimentalChange(t testing.TB, manifest Manifest, dot Dot, delta []byte, policy crdt.ProtocolPolicy) Change {
+func mustPolicyChange(t testing.TB, manifest Manifest, dot Dot, delta []byte, policy crdt.ProtocolPolicy) Change {
 	t.Helper()
 	change, err := NewChangeWithPolicy(manifest, dot, delta, policy)
 	if err != nil {

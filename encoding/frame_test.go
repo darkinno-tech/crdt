@@ -5,6 +5,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -150,17 +151,119 @@ func TestReadUvarintRejectsNonCanonicalEncoding(t *testing.T) {
 	}
 }
 
+func TestFrameV2CompressesAndRoundTripsWithoutChangingPayload(t *testing.T) {
+	t.Parallel()
+	want := Frame{TypeID: 7, CodecID: "example.com/repeated-text/v1", Payload: []byte(strings.Repeat("same author and same value; ", 1_024))}
+	v1, err := MarshalFrame(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := MarshalFrameV2(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v2) >= len(v1) {
+		t.Fatalf("v2 frame length = %d, want less than v1 length %d", len(v2), len(v1))
+	}
+	decoded, err := UnmarshalFrame(v2, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Version() != FormatVersionV2 || decoded.TypeID != want.TypeID || decoded.CodecID != want.CodecID || !reflect.DeepEqual(decoded.Payload, want.Payload) {
+		t.Fatalf("v2 decode = %#v (version %d), want payload %d bytes", decoded, decoded.Version(), len(want.Payload))
+	}
+
+	legacy, err := ConvertFrameV2ToV1(v2, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(legacy, v1) {
+		t.Fatal("v2 to v1 conversion changed canonical v1 frame")
+	}
+	reencoded, err := ConvertFrameV1ToV2(v1, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, err := UnmarshalFrame(reencoded, DefaultLimits())
+	if err != nil || converted.Version() != FormatVersionV2 || !reflect.DeepEqual(converted.Payload, want.Payload) {
+		t.Fatalf("v1 to v2 conversion = %#v, %v", converted, err)
+	}
+}
+
+func TestFrameV2BoundsInflationAndRejectsWrongConversionDirection(t *testing.T) {
+	t.Parallel()
+	encoded, err := MarshalFrameV2(Frame{TypeID: 1, Payload: []byte(strings.Repeat("x", 8<<10))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tight := DefaultLimits()
+	tight.MaxPayload = 64
+	if _, err := UnmarshalFrame(encoded, tight); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("bounded v2 decode error = %v, want ErrFrameLimit", err)
+	}
+	if _, err := ConvertFrameV1ToV2(encoded, DefaultLimits()); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("v2 as v1 conversion error = %v, want ErrInvalidFrame", err)
+	}
+
+	v1, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("legacy")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConvertFrameV2ToV1(v1, DefaultLimits()); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("v1 as v2 conversion error = %v, want ErrInvalidFrame", err)
+	}
+}
+
+func TestFrameV2RawAndDeflateDecoderBoundaries(t *testing.T) {
+	raw, err := MarshalFrameV2(Frame{TypeID: 1, Payload: []byte("raw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalFrameView(raw, DefaultLimits())
+	if err != nil || decoded.Version() != FormatVersionV2 || string(decoded.Payload) != "raw" {
+		t.Fatalf("raw v2 decode = %#v, %v", decoded, err)
+	}
+	if _, err := MarshalFrameV2WithLimits(Frame{}, DefaultLimits()); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("zero TypeID error = %v", err)
+	}
+
+	compressed, err := deflatePayload([]byte("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inflated, err := inflatePayload(compressed, len("payload")); err != nil || string(inflated) != "payload" {
+		t.Fatalf("inflate = %q, %v", inflated, err)
+	}
+	if _, err := inflatePayload(compressed, 3); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("short inflate limit error = %v", err)
+	}
+	if _, err := inflatePayload([]byte("not-deflate"), 1); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("invalid deflate error = %v", err)
+	}
+	if _, _, ok := ReadBytes([]byte{1, 'x'}, 0, -1); ok {
+		t.Fatal("ReadBytes accepted negative limit")
+	}
+	if _, _, ok := ReadBytes([]byte{2, 'x'}, 0, 2); ok {
+		t.Fatal("ReadBytes accepted truncated bytes")
+	}
+}
+
 func FuzzUnmarshalFrame(f *testing.F) {
 	seed, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("seed")})
 	if err != nil {
 		f.Fatalf("MarshalFrame() error = %v", err)
 	}
 	f.Add(seed)
+	v2Seed, err := MarshalFrameV2(Frame{TypeID: 1, Payload: []byte(strings.Repeat("fuzz", 64))})
+	if err != nil {
+		f.Fatalf("MarshalFrameV2: %v", err)
+	}
+	f.Add(v2Seed)
 	f.Add([]byte("CRDT"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		decoded, err := UnmarshalFrame(data, DefaultLimits())
-		if err == nil && decoded.TypeID == 0 {
-			t.Fatal("successful frame decode returned an invalid type ID")
+		if err == nil && (decoded.TypeID == 0 || (decoded.Version() != FormatVersion && decoded.Version() != FormatVersionV2)) {
+			t.Fatal("successful frame decode returned invalid metadata")
 		}
 	})
 }

@@ -1,6 +1,6 @@
 // Command experimental-collaboration demonstrates bounded framed replication
-// for LWW-Map, RGA, and OR-Tree after an application has authenticated and
-// negotiated the experimental protocol policy for its replication group.
+// for experimental LWW-Map and legacy RGA plus stable observed-remove tree v1
+// after an application has authenticated the matching replication manifest.
 package main
 
 import (
@@ -51,7 +51,7 @@ func run(writer io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("replicate text: %w", err)
 	}
-	nodeCount, err := replicateAssetTree(policy)
+	nodeCount, err := replicateAssetTree(crdt.ProtocolPolicy{})
 	if err != nil {
 		return fmt.Errorf("replicate asset tree: %w", err)
 	}

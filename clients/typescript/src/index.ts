@@ -45,6 +45,7 @@ export type {
   NativeMapDeleteOperation,
   NativeMapSetOperation,
   NativeOperation,
+  NativePersistenceMetadata,
   NativeRoot,
   NativeSnapshot,
   NativeTypeEvent,
@@ -54,3 +55,52 @@ export type {
   NativeUpdateListener,
   NativeValue,
 } from "./native.js";
+export {
+  createBrowserReplicaID,
+  BroadcastChannelNativeTransport,
+  IndexedDBNativePersistence,
+  MemoryNativeBrowserPersistence,
+  NativeBrowserDocument,
+  NativeBrowserError,
+  openNativeBrowserDocument,
+} from "./browser.js";
+export type {
+  BrowserNativeDocumentOptions,
+  BrowserPersistenceLimits,
+  BrowserPersistedUpdate,
+  BrowserStoredDocument,
+  NativeBrowserErrorCode,
+  NativeBrowserPersistence,
+  NativeBrowserTransport,
+  NativeBrowserUpdateEvent,
+} from "./browser.js";
+export {
+  bindMonacoPlainText,
+  bindProseMirrorPlainText,
+  bindQuillPlainText,
+  bindRGAPlainText,
+  bindSlatePlainText,
+  RGAPlainTextBinding,
+} from "./bindings.js";
+export type {
+  BindRGAPlainTextOptions,
+  MonacoTextPort,
+  PlainTextEditorPort,
+  QuillTextPort,
+  RGAFrameListener,
+} from "./bindings.js";
+export {
+  NativeNestedArray,
+  NativeNestedDocument,
+  NativeNestedMap,
+  NATIVE_NESTED_SEMANTICS,
+} from "./nested.js";
+export type {
+  NativeNestedContainerSnapshot,
+  NativeNestedDocumentOptions,
+  NativeNestedSnapshot,
+  NativeNestedType,
+  NativeNestedTypeEvent,
+  NativeNestedTypeListener,
+  NativeNestedValue,
+} from "./nested.js";

@@ -9,8 +9,21 @@ import (
 	"sort"
 
 	"github.com/DarkInno/crdt/counter"
+	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/set"
 )
+
+// receiveLimits are an example receive budget, not a production capacity
+// recommendation. An application must derive these limits from its own
+// authenticated transport and resource budget.
+var receiveLimits = frame.DecoderLimits{
+	MaxFrameBytes:  4 << 10,
+	MaxPayload:     3 << 10,
+	MaxCodecID:     128,
+	MaxElements:    64,
+	MaxTags:        128,
+	MaxStringBytes: 256,
+}
 
 type taskCodec struct{}
 
@@ -145,7 +158,7 @@ func deliverCounter(target *counter.GCounter, delta counter.GCounterDelta) error
 	if err != nil {
 		return err
 	}
-	decoded, err := counter.UnmarshalGCounterDelta(encoded)
+	decoded, err := counter.UnmarshalGCounterDeltaWithLimits(encoded, receiveLimits)
 	if err != nil {
 		return err
 	}
@@ -157,7 +170,7 @@ func deliverORSet(target *set.ORSet[string], delta set.ORSetDelta[string], codec
 	if err != nil {
 		return err
 	}
-	decoded, err := set.UnmarshalORSetDelta(encoded, codec)
+	decoded, err := set.UnmarshalORSetDeltaWithLimits(encoded, codec, receiveLimits)
 	if err != nil {
 		return err
 	}

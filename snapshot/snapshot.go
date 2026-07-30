@@ -79,7 +79,7 @@ func NewValidatedWithClockState(state []byte, frontier map[string]crdt.Tag, cloc
 
 func newSnapshot(decoded frame.Frame, state []byte, frontier map[string]crdt.Tag, clockState *clock.State) Snapshot {
 	snapshot := Snapshot{
-		FormatVersion: frame.FormatVersion,
+		FormatVersion: decoded.Version(),
 		TypeID:        decoded.TypeID,
 		CodecID:       decoded.CodecID,
 		state:         append([]byte(nil), state...),
@@ -133,7 +133,7 @@ func NewRecoveryPlan(snapshot Snapshot, deltas [][]byte, maxDeltaBytes int) (Rec
 			return RecoveryPlan{}, ErrLimit
 		}
 		decoded, err := frame.UnmarshalFrame(delta, frame.DefaultLimits())
-		if err != nil || decoded.TypeID != expectedTypeID || decoded.CodecID != snapshot.CodecID {
+		if err != nil || decoded.Version() != snapshot.FormatVersion || decoded.TypeID != expectedTypeID || decoded.CodecID != snapshot.CodecID {
 			return RecoveryPlan{}, ErrInvalid
 		}
 		cloned = append(cloned, append([]byte(nil), delta...))
@@ -158,7 +158,7 @@ func (p RecoveryPlan) Deltas() [][]byte {
 
 func (s Snapshot) valid() bool {
 	decoded, err := frame.UnmarshalFrame(s.state, frame.DefaultLimits())
-	if err != nil || s.FormatVersion != frame.FormatVersion || s.TypeID != decoded.TypeID ||
+	if err != nil || s.FormatVersion != decoded.Version() || s.TypeID != decoded.TypeID ||
 		s.CodecID != decoded.CodecID || !isStateType(s.TypeID) || !validFrontier(s.frontier) ||
 		(s.clockState != nil && (!isHLCStateType(s.TypeID) || !validClockState(*s.clockState))) {
 		return false

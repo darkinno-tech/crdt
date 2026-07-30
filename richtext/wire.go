@@ -45,7 +45,8 @@ func UnmarshalDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, e
 		return Delta{}, err
 	}
 	canonical, err := marshalDelta(delta, limits)
-	if err != nil || !bytes.Equal(canonical, data) {
+	canonicalFrame, canonicalErr := frame.UnmarshalFrameView(canonical, limits)
+	if err != nil || canonicalErr != nil || !bytes.Equal(canonicalFrame.Payload, decoded.Payload) {
 		return Delta{}, ErrInvalidDelta
 	}
 	return delta, nil
@@ -386,7 +387,8 @@ func unmarshalState(data []byte, limits frame.DecoderLimits) (richState, error) 
 		return richState{}, ErrInvalidDelta
 	}
 	canonical, err := marshalState(state, limits)
-	if err != nil || !bytes.Equal(canonical, data) {
+	canonicalFrame, canonicalErr := frame.UnmarshalFrameView(canonical, limits)
+	if err != nil || canonicalErr != nil || !bytes.Equal(canonicalFrame.Payload, decoded.Payload) {
 		return richState{}, ErrInvalidDelta
 	}
 	return state, nil

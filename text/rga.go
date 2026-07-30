@@ -40,6 +40,12 @@ var (
 	ErrUndoAnchorGone = errors.New("text: undo anchor is no longer retained")
 )
 
+// RunV2SemanticsVersion is the immutable semantics version for the stable
+// run-v2 text protocol (TypeIDs 19/20). It belongs in every run-v2 replica
+// manifest. Legacy scalar-v1 frames use a distinct, explicitly negotiated
+// protocol and must never be substituted for run-v2 frames.
+const RunV2SemanticsVersion uint64 = 2
+
 // Position is a stable, opaque identifier for one Unicode scalar value.
 // It remains valid after inserts before it and after it has been deleted.
 type Position = crdt.Tag
@@ -259,6 +265,12 @@ type RGA struct {
 var _ crdt.CRDT[*RGA] = (*RGA)(nil)
 var _ crdt.DeltaCapable[*RGA, Delta] = (*RGA)(nil)
 
+// StableFrameType returns the stable run-v2 state/delta pair for new text
+// replication groups. It is equivalent to crdt.DefaultRGAFrameType and is
+// provided here so callers can bind the text package's semantic version and
+// frame pair without treating legacy scalar-v1 helpers as the default.
+func StableFrameType() crdt.FrameType { return crdt.DefaultRGAFrameType() }
+
 func New(replicaID string) (*RGA, error) { return NewWithOptions(replicaID, DefaultOptions()) }
 
 // NewWithOptions constructs an RGA with explicit retention limits.
@@ -302,6 +314,24 @@ func (r *RGA) ClockState() clock.State {
 		return clock.State{}
 	}
 	return r.clock.Snapshot()
+}
+
+// RetainsPosition reports whether position is still retained as an integrated
+// node or an out-of-order pending node. It intentionally differs from
+// visibility: a deleted position remains an ordering anchor until a safe
+// tombstone compaction removes it. Callers can use it to retire metadata that
+// is attached to a position only after that compaction boundary.
+func (r *RGA) RetainsPosition(position Position) bool {
+	if r == nil || !position.Valid() {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.nodes[position]; ok {
+		return true
+	}
+	_, ok := r.pending[position]
+	return ok
 }
 
 type deltaEncoder func(Delta, frame.DecoderLimits) ([]byte, error)
@@ -481,6 +511,50 @@ func (r *RGA) DeleteBinaryWithLimits(offset, count int, limits frame.DecoderLimi
 func (r *RGA) DeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
 	_, encoded, err := r.delete(offset, count, &limits, Delta.MarshalRunBinaryWithLimits)
 	return encoded, err
+}
+
+// ReplaceBinaryWithLimits atomically replaces count visible runes at offset
+// with value and returns one preflighted scalar-v1 delta. A rejected frame or
+// state-limit check leaves both visible text and tombstones unchanged. The HLC
+// may reserve un-emitted insertion tags, which are safe to skip.
+func (r *RGA) ReplaceBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.replace(offset, count, value, limits, Delta.MarshalBinaryWithLimits)
+	return encoded, err
+}
+
+// ReplaceRunBinaryWithLimits atomically replaces count visible runes at offset
+// with value and returns one preflighted run-v2 delta. It is the editor-facing
+// operation: a text binding must never publish a delete and insert half-pair
+// when a local frame or retention bound rejects the replacement.
+func (r *RGA) ReplaceRunBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.replace(offset, count, value, limits, Delta.MarshalRunBinaryWithLimits)
+	return encoded, err
+}
+
+func (r *RGA) replace(offset, count int, value string, limits frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
+	if r == nil || r.clock == nil {
+		return Delta{}, nil, ErrNilText
+	}
+	if !utf8.ValidString(value) {
+		return Delta{}, nil, ErrInvalidText
+	}
+	deleted, _, err := r.prepareDelete(offset, count, nil, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	inserted, _, err := r.prepareInsert(offset, value, nil, encode)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	delta := Delta{nodes: inserted.nodes, tombstones: deleted.tombstones}
+	encoded, err := encode(delta, limits)
+	if err != nil {
+		return Delta{}, nil, err
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, nil, err
+	}
+	return delta, encoded, nil
 }
 
 // PrepareDeleteRunBinaryWithLimits returns a canonical run-v2 deletion delta

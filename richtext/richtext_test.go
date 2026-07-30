@@ -9,6 +9,7 @@ import (
 
 	"github.com/DarkInno/crdt"
 	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/DarkInno/crdt/replica"
 	"github.com/DarkInno/crdt/text"
 )
 
@@ -398,7 +399,7 @@ func TestFormatBeforeTextAndRemovalBeforeAssignmentConverge(t *testing.T) {
 	}
 }
 
-func TestSnapshotMergeAndExperimentalManifest(t *testing.T) {
+func TestSnapshotMergeAndStableManifest(t *testing.T) {
 	source := mustDocument(t, "source")
 	if _, err := source.InsertWithAttributes(0, "stable", Attributes{"bold": "true"}); err != nil {
 		t.Fatal(err)
@@ -434,11 +435,55 @@ func TestSnapshotMergeAndExperimentalManifest(t *testing.T) {
 	if got := restored.String(); len([]rune(got)) != 7 {
 		t.Fatalf("merged String() = %q", got)
 	}
-	if (crdt.ProtocolPolicy{}).SupportsFrame(crdt.TypeIDRichTextDelta) {
-		t.Fatal("zero policy accepted rich text")
+	if !(crdt.ProtocolPolicy{}).SupportsFrame(crdt.TypeIDRichTextDelta) {
+		t.Fatal("zero policy rejected stable rich text")
 	}
-	if !(crdt.ProtocolPolicy{AllowExperimental: true}).SupportsFrame(crdt.TypeIDRichTextState) {
-		t.Fatal("experimental policy rejected rich text")
+	if crdt.IsExperimentalFrame(crdt.TypeIDRichTextState) {
+		t.Fatal("stable rich-text state remained experimental")
+	}
+}
+
+func TestRichTextStableManifestDeliversCanonicalDelta(t *testing.T) {
+	manifest, err := replica.NewManifest("document", "example.com/richtext/inline/v1", 1, replica.Protocol{
+		StateID: crdt.TypeIDRichTextState, DeltaID: crdt.TypeIDRichTextDelta, SemanticsVersion: SemanticsVersion,
+	}, crdt.ProtocolPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustDocument(t, "target")
+	frontier, err := replica.NewFrontier(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := replica.NewInbox(manifest, frontier, 8, frame.DefaultLimits().MaxFrameBytes, func(encoded []byte) error {
+		delta, err := UnmarshalDelta(encoded)
+		if err != nil {
+			return err
+		}
+		return target.ApplyDelta(delta)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := mustDocument(t, "source")
+	delta, err := source.InsertWithAttributes(0, "stable", Attributes{"bold": "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, err := replica.NewChange(manifest, replica.Dot{Actor: "source", Counter: 1}, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivery, err := inbox.Receive(change); err != nil || len(delivery.Applied) != 1 {
+		t.Fatalf("Receive() = %#v, %v", delivery, err)
+	}
+	if got, want := target.Spans(), source.Spans(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("target spans = %#v, want %#v", got, want)
 	}
 }
 

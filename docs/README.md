@@ -8,11 +8,15 @@ be committed.
 
 - [Developer getting-started guide](getting-started.md)
 - [开发者入门指南](getting-started.zh-CN.md)
+- [Minimal bounded-delivery example](../examples/getting-started)
+- [最小有界投递示例](../examples/getting-started)
 
 ## Integration
 
 - [End-to-end integration tutorial](integration/overview.md)
 - [端到端集成教程](integration/overview.zh-CN.md)
+- [Local bbolt checkpoint reference](integration/local-checkpoint.md)
+- [本地 bbolt 检查点参考实现](integration/local-checkpoint.zh-CN.md)
 - [Durable WebSocket relay reference](integration/durable-provider.md)
 - [可持久化 WebSocket relay 参考实现](integration/durable-provider.zh-CN.md)
 - [WebSocket provider reference](integration/websocket-provider.md)
@@ -30,6 +34,10 @@ be committed.
 - [Membership protocol](protocol/membership.md)
 - [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
+- [Awareness / presence v1](protocol/awareness-v1.md)
+- [Awareness / presence v1 协议](protocol/awareness-v1.zh-CN.md)
+- [Rich-text v1 wire protocol](protocol/richtext-v1.md)
+- [Observed-remove tree v1 wire protocol](protocol/or-tree-v1.md)
 - [Bounded rich-text inline-format design](design/rich-text.md)
 
 ## Operations and architecture
@@ -40,6 +48,8 @@ be committed.
 - [跨机器同步探针部署手册](operations/cross-host-probe.zh-CN.md)
 - [Durable relay benchmark](operations/durable-benchmark-2026-07-29.md)
 - [Durable relay 基准测试](operations/durable-benchmark-2026-07-29.zh-CN.md)
+- [Local checkpoint benchmark](operations/local-checkpoint-benchmark-2026-07-30.md)
+- [本地检查点基准](operations/local-checkpoint-benchmark-2026-07-30.zh-CN.md)
 - [Controlled benchmark evidence — 2026-07-29](operations/benchmark-2026-07-29.md)
 - [受控压测记录 — 2026-07-29](operations/benchmark-2026-07-29.zh-CN.md)
 - [Historical cross-device RGA baseline — 2026-07-29](operations/cross-device-rga-2026-07-29.md)

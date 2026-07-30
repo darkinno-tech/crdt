@@ -1,4 +1,4 @@
-.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark wasm-benchmark sync-main
+.PHONY: fmt-check test test-unit test-integration test-extreme race vet fuzz coverage benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark wasm-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -18,7 +18,7 @@ test:
 	go test ./...
 
 test-unit:
-	for package in . ./attachment ./clock ./counter ./delta ./durable ./encoding ./extensions ./list ./lww ./merkle ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./xml ./cmd/crdt-analyze ./cmd/crdt-merkle-sync ./cmd/crdt-sync-probe ./examples/extensions-provider; do go test $$package; done
+	for package in . ./attachment ./awareness ./clock ./counter ./delta ./durable ./encoding ./extensions ./list ./lww ./merkle ./persistence ./register ./replica ./set ./snapshot ./text ./tombstonegc ./tree ./xml ./cmd/crdt-analyze ./cmd/crdt-merkle-sync ./cmd/crdt-sync-probe ./examples/extensions-provider ./examples/persistent-replica; do go test $$package; done
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -36,6 +36,7 @@ vet:
 fuzz:
 	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
+	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./awareness
 	go test -run=^$$ -fuzz=Fuzz -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./encoding
 	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./counter
 	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./counter
@@ -47,6 +48,7 @@ fuzz:
 	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./replica
 	go test -run=^$$ -fuzz=FuzzWireDecoders -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./extensions
 	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
+	go test -run=^$$ -fuzz=FuzzUnmarshalCheckpoint -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./persistence
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
 	go test -run=^$$ -fuzz=FuzzRGARunUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
 	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./list
@@ -85,6 +87,9 @@ typescript-benchmark:
 
 typescript-native-benchmark:
 	$(NPM) --prefix clients/typescript run bench:native
+
+typescript-browser-benchmark:
+	$(NPM) --prefix clients/typescript run bench:browser
 
 wasm-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts
