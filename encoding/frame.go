@@ -105,8 +105,26 @@ func MarshalFrameWithPayload(typeID uint64, codecID string, payloadLength int, w
 	return binary.BigEndian.AppendUint32(buf, checksum), nil
 }
 
-// UnmarshalFrame validates and decodes one complete canonical v1 frame.
+// UnmarshalFrame validates and decodes one complete canonical v1 frame. Its
+// returned payload is independent of data and remains safe to retain.
 func UnmarshalFrame(data []byte, limits Limits) (Frame, error) {
+	frame, err := UnmarshalFrameView(data, limits)
+	if err != nil {
+		return Frame{}, err
+	}
+	frame.Payload = append([]byte(nil), frame.Payload...)
+	return frame, nil
+}
+
+// UnmarshalFrameView validates and decodes one complete canonical v1 frame
+// without copying the payload. The returned Payload aliases data, so callers
+// must not retain it or modify data while the view is in use. Use
+// UnmarshalFrame when a caller-owned payload is required.
+//
+// This is intended for bounded decoders that validate and copy only the fields
+// they retain. Validation, including the checksum, completes before the view is
+// returned.
+func UnmarshalFrameView(data []byte, limits Limits) (Frame, error) {
 	if !limits.valid() || len(data) > limits.MaxFrameBytes || len(data) < 9 {
 		return Frame{}, ErrFrameLimit
 	}
@@ -140,7 +158,7 @@ func UnmarshalFrame(data []byte, limits Limits) (Frame, error) {
 	if !ok || payloadLength > uint64(limits.MaxPayload) || payloadLength != uint64(len(data)-4-next) {
 		return Frame{}, ErrFrameLimit
 	}
-	payload := append([]byte(nil), data[next:len(data)-4]...)
+	payload := data[next : len(data)-4]
 	return Frame{TypeID: typeID, CodecID: codecID, Payload: payload}, nil
 }
 

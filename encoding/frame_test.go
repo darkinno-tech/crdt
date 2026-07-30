@@ -55,6 +55,33 @@ func TestMarshalFrameWithPayloadMatchesFrameAndRejectsWriterFailures(t *testing.
 	}
 }
 
+func TestUnmarshalFrameViewBorrowsPayloadWhileUnmarshalFrameOwnsIt(t *testing.T) {
+	encoded, err := MarshalFrame(Frame{TypeID: 7, Payload: []byte("state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err := UnmarshalFrame(encoded, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := UnmarshalFrameView(encoded, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(view.Payload) != "state" {
+		t.Fatalf("view payload = %q", view.Payload)
+	}
+	view.Payload[0] = 'S'
+	if got := encoded[len(encoded)-4-len(view.Payload)]; got != 'S' {
+		t.Fatalf("view did not borrow input: got %q", got)
+	}
+
+	owned.Payload[0] = 'X'
+	if got := encoded[len(encoded)-4-len(owned.Payload)]; got != 'S' {
+		t.Fatalf("owned payload modified input: got %q", got)
+	}
+}
+
 func TestFrameRejectsLimitsAndMalformedBytes(t *testing.T) {
 	t.Parallel()
 	encoded, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("x")})
