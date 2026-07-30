@@ -59,6 +59,8 @@ be committed.
 - [受控压测记录 — 2026-07-29](operations/benchmark-2026-07-29.zh-CN.md)
 - [Historical cross-device RGA baseline — 2026-07-29](operations/cross-device-rga-2026-07-29.md)
 - [WebSocket batch latency evidence — 2026-07-29](operations/websocket-batch-latency-2026-07-29.md)
+- [Controlled performance-regression CI](operations/performance-regression-ci.md)
+- [受控性能回归 CI](operations/performance-regression-ci.zh-CN.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 

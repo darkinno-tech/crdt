@@ -80,6 +80,77 @@ jobs:
       - name: Enforce per-package coverage
         run: make coverage
 
+  performance:
+    # Compare source revisions on one runner. Absolute benchmark values vary
+    # across GitHub hosts and must not be treated as capacity guarantees.
+    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: performance-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
+      - name: Select comparison baseline
+        id: baseline
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            baseline="${PR_BASE_SHA}"
+          else
+            baseline="${PUSH_BEFORE}"
+          fi
+          if [[ -z "${baseline}" || "${baseline}" =~ ^0+$ ]]; then
+            baseline="$(git rev-parse HEAD^)"
+          fi
+          echo "sha=${baseline}" >> "${GITHUB_OUTPUT}"
+      - name: Check out comparison baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.baseline.outputs.sha }}
+          path: .benchmark-baseline
+      - name: Compare controlled benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .benchmark-results
+          benchmark_args=(
+            -run='^$'
+            -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain|BenchmarkProviderEndToEndRelayFanout)$'
+            -benchmem
+            -benchtime=100ms
+            -count=5
+            -cpu=1
+            ./counter
+            ./text
+            ./examples/websocket-provider/provider
+          )
+          (
+            cd .benchmark-baseline
+            GOMAXPROCS=1 go test "${benchmark_args[@]}"
+          ) > .benchmark-results/baseline.txt
+          GOMAXPROCS=1 go test "${benchmark_args[@]}" > .benchmark-results/candidate.txt
+          go run ./cmd/crdt-benchmark-check \
+            -base .benchmark-results/baseline.txt \
+            -candidate .benchmark-results/candidate.txt \
+            -minimum-samples 5 \
+            -max-time-regression 1.00 \
+            -max-bytes-regression 0.05 \
+            -max-allocs-regression 0.05 \
+            -require BenchmarkGCounterApplyDelta \
+            -require BenchmarkRGAApplyDeltaLinearChain \
+            -require BenchmarkProviderEndToEndRelayFanout/receivers_1 \
+            -require BenchmarkProviderEndToEndRelayFanout/receivers_4 \
+            -require BenchmarkProviderEndToEndRelayFanout/receivers_16
+
   docker:
     if: github.event_name != 'pull_request' || github.head_ref != 'beta'
     runs-on: ubuntu-latest
