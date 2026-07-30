@@ -187,9 +187,9 @@ New Go RGA groups need special attention:
   the [RGA run-v2 wire protocol](protocol/rga-run-v2.md) and its canonical
   vectors; never silently reinterpret a v1 frame as run-v2 or vice versa.
 
-LWW-Set, LWW-Map, legacy RGA v1, and generic RGA list require the same explicit
-experimental opt-in at every manifest, change, inbox, checkpoint, and session
-boundary. Stable observed-remove tree v1 instead binds `tree.SemanticsVersion`
+LWW-Set, LWW-Map, legacy RGA v1, and generic RGA list are stable and bind their
+own exact frame pair and semantics version at every manifest, change, inbox,
+checkpoint, and session boundary. Stable observed-remove tree v1 binds `tree.SemanticsVersion`
 and an exact node-value schema under the zero-value policy; it supports only
 immutable-parent add/remove, not in-place moves. Read the
 [collection extension design](design/crdt-extension.md) and

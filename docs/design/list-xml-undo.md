@@ -1,10 +1,9 @@
 # Generic list, XML fragments, and local undo/redo
 
-This document defines the first safe collaboration boundary for ordered
-application values and XML-like documents. These APIs are experimental: a
-replication group must advertise `crdt.ProtocolPolicy{AllowExperimental: true}`
-and bind the exact state/delta IDs, codec ID, and semantics version in its
-authenticated `replica.Manifest`.
+This document defines the stable collaboration boundary for ordered application
+values and XML-like documents. A replication group must bind the exact
+state/delta IDs, codec ID, and semantics version in its authenticated
+`replica.Manifest`.
 
 ## Generic RGA list
 

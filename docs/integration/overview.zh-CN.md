@@ -100,7 +100,7 @@ rm -rf "$scenario_dir"
 ### RGA 诊断边界
 
 `/rga` 默认使用稳定的 RGA run-v2（TypeID 19/20）。它仅用于受控诊断，不会协商 Manifest
-或生产级 `ProtocolPolicy`。旧标量 v1（TypeID 11/12）仍是实验性格式，发送端和接收端都必须
+或生产级 `ProtocolPolicy`。旧标量 v1（TypeID 11/12）是稳定的兼容格式，发送端和接收端都必须
 显式使用 `-rga-protocol=v1`；格式不匹配的帧会在修改文本前被拒绝。该路由的单个 delta
 最多为 16 MiB、最多生成 200,000 个 rune，成功后返回空 `204`，最终收敛信息只从 `/state`
 获取。
@@ -133,9 +133,8 @@ go run ./cmd/crdt-sync-probe -mode send \
    持久化、认证或业务授权。
 5. 定期交换完整状态或 Merkle 摘要以发现缺失历史，再合并状态修复。单靠重试队列
    无法修复进入队列前已经丢失的 delta。
-6. 交换实验性 LWW-Set、LWW-Map、旧标量 RGA v1 或通用 RGA list 帧前，必须对由
-   `crdt.ProtocolPolicy{AllowExperimental: true}.FrameTypes()` 生成的连接/建链
-   能力通告完成认证。只有双方都通告同一组 state/delta 类型时才可发送该类型；
+6. 交换任何 state 或 delta 帧前，必须认证绑定精确 state/delta pair 的 Manifest。
+   只有双方确认同一 pair 后才可发送该类型；
    未知、仅预留或未共同启用的类型都应作为协议错误处理。
 
 OR-Set 接收端的核心形态如下：
@@ -164,7 +163,7 @@ G-Set 与 MV-Register 是零值 `crdt.ProtocolPolicy` 默认包含的稳定 fram
 
 必须在同一 outbox/接收记录事务中，原子持久化 MV-Register 状态帧和 `Snapshot()`。复用
 同一 ID 的副本必须通过 `register.NewMVRegisterFromSnapshot` 恢复；仅有状态字节会丢失
-因果上下文。G-Set 和 MV-Register 帧不需要实验性 opt-in。
+因果上下文。G-Set 和 MV-Register 帧使用零值策略。
 
 ## 5. 稳定文本、富文本与 observed-remove tree 集成
 
@@ -172,7 +171,7 @@ run-v2 RGA（`text`，TypeID 19/20）是零值策略包含的稳定 framed 协�
 Manifest 中绑定 `text.StableFrameType()` 和 `text.RunV2SemanticsVersion`，使用
 `text.UnmarshalRGARunDeltaWithLimits` 解码 delta，且不能因帧不匹配而回退到旧 v1。
 旧标量 RGA v1（11/12）、LWW-Set（`lww.Set`）、LWW-Map（`lww.Map`）与通用 RGA list（`list.RGA`）
-仍为实验性能力，必须通过上述能力检查；该策略仅属于一个复制组，并不是动态插件机制。不能仅因
+均为稳定能力，必须通过上述精确 Manifest 检查；该策略仅属于一个复制组，并不是动态插件机制。不能仅因
 不可信帧的校验和有效就按某种类型分派它。
 
 行内富文本（`richtext`，TypeID 23/24）同样是零值策略允许的稳定协议。必须在独立 Manifest
@@ -193,11 +192,11 @@ add/remove：move 必须表示为 remove 后创建新节点，绝不能重写父
 为处理乱序投递而保留删除墓碑。RGA 的 `CompactTombstones` 只能移除已删除的叶节点；应用
 必须先建立经过认证的精确确认纪元、持久化压缩后快照并淘汰旧 delta。Tree 的
 `CompactEligibleTombstones` 可按叶到根回收已精确确认的已删除分支；未选择或仍存活的子节点仍是锚点。
-LWW-Set 与 LWW-Map 尚无精确确认式回收，因此实验性接入仍须为墓碑设定预算并监控、继续保留它们，不能调用通用 GC。
+LWW-Set 与 LWW-Map 仅能通过精确确认协调器回收；证明完成前仍须为墓碑设定预算并监控。
 
 ### 5.1 附件引用
 
-`attachment.Register` 是 LWW-Map 帧面向图片、音频、视频和任意数据引用的实验性、受 schema
+`attachment.Register` 是 LWW-Map 帧面向图片、音频、视频和任意数据引用的稳定、受 schema
 限制的用法。每个附件复制组都要单独建立 Manifest：状态/增量 ID 为 9/10，schema ID 为
 `github.com/DarkInno/crdt/attachment-reference/v1`，codec ID 为空，语义版本使用
 `attachment.SemanticsVersion`。不得用同一个 Manifest 承载 RGA 文本：一个 Manifest 只能绑定一种
@@ -260,7 +259,7 @@ make test-integration
 | 分区修复 | 副本经快照引导或状态/Merkle 交换修复后收敛。 |
 | 输入安全 | 解码前已认证；有边界的解码器拒绝损坏、超限、类型或 codec 不匹配帧。 |
 | 业务语义 | 产品方已接受 add-wins、只增长 G-Set、计数器及 MV-Register 并发值语义。 |
-| 实验协议一致性 | 只有经过认证的双方 `ProtocolPolicy.FrameTypes()` 比对一致后才启用 LWW-Set/LWW-Map/旧版 RGA v1/通用 RGA list；所有 HLC 协议都持久化时钟状态，并在精确确认允许回收前保留墓碑。 |
+| 协议一致性 | 所有稳定 frame pair 都必须经认证的精确 Manifest 比对后启用；所有 HLC 协议都持久化时钟状态，并在精确确认允许回收前保留墓碑。 |
 | 运维归属 | outbox 重试、监控、备份、成员退役和墓碑策略均有明确负责人。 |
 
 `go test` 通过只证明当前修订中的库和示例；它不证明浏览器、移动端、生产网络、

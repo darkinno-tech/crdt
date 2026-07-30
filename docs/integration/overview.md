@@ -108,7 +108,7 @@ public Internet.
 
 `/rga` defaults to stable RGA run-v2 (TypeIDs 19/20). It is only a controlled
 probe and does not negotiate a manifest or a production `ProtocolPolicy`. The
-legacy scalar v1 format (TypeIDs 11/12) is experimental and requires explicit
+legacy scalar v1 format (TypeIDs 11/12) is stable compatibility mode and requires explicit
 `-rga-protocol=v1` on both sender and receiver; mismatched frames are rejected
 before text mutates. The route allows at most 16 MiB and 200,000 generated
 runes per delta, sends an empty `204` acknowledgement, and reports only final
@@ -149,11 +149,9 @@ The probe demonstrates the boundary that a consuming application owns:
 5. Periodically exchange full state or Merkle summaries to discover missing
    history, then merge state to repair it. A retry queue alone cannot repair a
    delta lost before it entered that queue.
-6. Before exchanging experimental LWW-Set, LWW-Map, legacy scalar RGA v1, or
-   generic RGA list frames, authenticate a
-   connection/setup capability advertisement built from
-   `crdt.ProtocolPolicy{AllowExperimental: true}.FrameTypes()`. Both peers must
-   advertise the same state/delta pair before either sends that type. Unknown,
+6. Before exchanging any state or delta frame, authenticate one exact manifest
+   agreement that binds its state/delta pair. Both peers must advertise the
+   same pair before either sends that type. Unknown,
    reserved, or not-mutually-enabled types remain a protocol error.
 
 An OR-Set receive path has this essential shape:
@@ -186,7 +184,7 @@ a single last writer wins.
 Persist an MV-Register state frame and its `Snapshot()` atomically with the
 outbox/receipt transaction. Restore a same-ID replica with
 `register.NewMVRegisterFromSnapshot`; state bytes alone omit its causal context.
-No experimental opt-in is required for G-Set or MV-Register frames.
+G-Set and MV-Register frames use the zero-value policy.
 
 ## 5. Stable text, rich text, and observed-remove tree integration
 
@@ -195,8 +193,8 @@ zero-value policy. Bind `text.StableFrameType()` and
 `text.RunV2SemanticsVersion` in the authenticated manifest, decode deltas with
 `text.UnmarshalRGARunDeltaWithLimits`, and never fall back to legacy v1 based
 on a frame that failed to match. The legacy scalar RGA v1 (`11/12`), LWW-Set
-(`lww.Set`), LWW-Map (`lww.Map`), and generic RGA list (`list.RGA`) remain
-experimental and require the capability check above. The policy is local to a replication group
+(`lww.Set`), LWW-Map (`lww.Map`), and generic RGA list (`list.RGA`) are stable
+and require the exact-manifest check above. The policy is local to a replication group
 and is not a dynamic plugin mechanism. Do not dispatch an untrusted frame to a
 type merely because it has a valid checksum.
 
@@ -227,13 +225,13 @@ remove only deleted leaves; the application must first establish an authenticate
 exact-acknowledgement epoch, durably save a post-compaction snapshot, and retire
 old deltas. Tree's `CompactEligibleTombstones` can compact an already
 exact-acknowledged deleted branch leaf-to-root; an unselected or live child
-remains an anchor. LWW-Set and LWW-Map still have no exact-acknowledgement
-compaction, so integrations must budget, monitor, and retain their tombstones
-rather than calling a generic GC.
+remains an anchor. LWW-Set and LWW-Map compact only through an
+exact-acknowledgement coordinator; integrations must budget and monitor
+tombstones until that proof is complete.
 
 ### 5.1 Attachment references
 
-`attachment.Register` is an experimental, schema-constrained use of the LWW-Map
+`attachment.Register` is a stable, schema-constrained use of the LWW-Map
 frames for image, audio, video, and arbitrary data references. Create one
 separate manifest per attachment group with state/delta IDs 9/10, schema ID
 `github.com/DarkInno/crdt/attachment-reference/v1`, an empty codec ID, and
@@ -312,7 +310,7 @@ make test-integration
 | Partition repair | A replica is bootstrapped from a snapshot or repaired through state/Merkle exchange, then converges. |
 | Input safety | Authentication precedes decode; bounded decoders reject malformed, oversized, and type/codec-mismatched frames. |
 | Business semantics | Product owners have accepted add-wins, grow-only G-Set and counter limits, and concurrent MV-Register value semantics. |
-| Experimental protocol agreement | LWW-Set/LWW-Map/legacy RGA v1/generic RGA list are enabled only after authenticated bilateral `ProtocolPolicy.FrameTypes()` comparison; all HLC-backed protocols persist their clock state and retain tombstones until exact-ack compaction is authorized. |
+| Protocol agreement | Every stable frame pair is enabled only after authenticated bilateral exact-manifest comparison; all HLC-backed protocols persist their clock state and retain tombstones until exact-ack compaction is authorized. |
 | Operations | Outbox retry, monitoring, backups, member retirement, and tombstone policy have a clear owner. |
 
 Passing `go test` proves the library and examples at this revision. It does not

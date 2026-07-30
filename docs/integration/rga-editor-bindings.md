@@ -38,7 +38,7 @@ HTML/CSS, selection presence, shared undo history, persistence, replay, TLS,
 identity, authorization, and network transport remain application-owned.
 
 Do not silently map a rich editor tree to plain text. For inline attributes,
-use the separate experimental `richtext.Document` protocol with its manifest,
+use the separate stable `richtext.Document` protocol with its manifest,
 policy, renderer validation, and atomic state/clock persistence. Block and
 embed schemas require their own negotiated CRDT contract.
 

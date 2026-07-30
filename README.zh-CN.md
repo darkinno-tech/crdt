@@ -65,7 +65,7 @@ go test ./...
 - 可选、由 Manifest 协商的[压缩感知外层帧 v2](docs/protocol/frame-v2.md)，提供显式 v1 转换，但不改变 CRDT TypeID 或语义。
 - [RGA 诊断混淆](docs/integration/debug-obfuscation.zh-CN.md)：替换文本内容，同时保留隔离调试时间线的结构。
 
-实验协议（LWW-Set、LWW-Map、legacy scalar RGA v1、list RGA）需要在每个参与边界显式启用 `ProtocolPolicy{AllowExperimental: true}`。稳定 run-v2 RGA、rich-text v1 和 observed-remove tree v1 使用零值策略，但帧类型本身从来不是已协商的协议、已认证的 peer，也不是 compact tombstone 的许可。
+所有已实现的 frame pair 均为稳定协议，使用零值 `ProtocolPolicy`。LWW-Set/Map、scalar RGA v1、list RGA、run-v2 RGA、rich-text v1 和 observed-remove tree v1 仍必须绑定经过认证的精确 Manifest：帧类型本身从来不是已协商的协议、已认证的 peer，也不是 compact tombstone 的许可。
 
 ## 按目标选择入口
 

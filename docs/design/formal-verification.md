@@ -13,8 +13,8 @@ scope are documented beside the Lean source.
 
 ## Why this boundary first
 
-This repository has stable framed protocols, experimental framed protocols,
-and local-only APIs. A proof that ignores those boundaries would give a false
+This repository has stable framed protocols and local-only APIs. A proof that
+ignores those boundaries would give a false
 sense of security. The first formal surface is therefore only the stable RGA
 state algebra; parser limits, authentication, relay policy, checkpoint
 durability and garbage-collection acknowledgement remain explicit external
