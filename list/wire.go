@@ -312,11 +312,11 @@ func unmarshalRGA(data []byte, expectedType uint64, codecID string, limits frame
 
 func validateCodecValues[T any](delta Delta, codec ElementCodec[T]) error {
 	for _, item := range delta.nodes {
-		decoded, err := codec.Unmarshal(item.value)
+		decoded, err := unmarshalCodec(codec, item.value)
 		if err != nil {
 			return ErrInvalidCodec
 		}
-		canonical, err := codec.Marshal(decoded)
+		canonical, err := marshalCodec(codec, decoded)
 		if err != nil || string(canonical) != string(item.value) {
 			return ErrInvalidCodec
 		}

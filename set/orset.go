@@ -519,7 +519,7 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec boundElementC
 	}
 	entries := make([]entry, 0, len(plan.entries))
 	for _, source := range plan.entries {
-		encoded, err := codec.value.Marshal(source.element)
+		encoded, err := codec.marshal(source.element)
 		if err != nil {
 			return nil, fmt.Errorf("%w: marshal element: %v", ErrInvalidCodec, err)
 		}
@@ -670,11 +670,11 @@ func unmarshalORSetWithCodec[T comparable](data []byte, expectedTypeID uint64, c
 			return nil, nil, frame.ErrInvalidFrame
 		}
 		pos = next
-		element, err := codec.value.Unmarshal(elementBytes)
+		element, err := codec.unmarshal(elementBytes)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: unmarshal element: %v", ErrInvalidCodec, err)
 		}
-		canonical, err := codec.value.Marshal(element)
+		canonical, err := codec.marshal(element)
 		if err != nil || !bytes.Equal(canonical, elementBytes) {
 			return nil, nil, ErrInvalidCodec
 		}
