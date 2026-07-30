@@ -60,11 +60,14 @@ the delta or batch formats:
 ```
 
 The existing `0x01` change and `0x02` change-batch envelopes retain their v1/v2
-meaning under v3. A server enables awareness by putting an `*awareness.Store`
-on `provider.GroupConfig` and supplying `Config.AuthorizeAwareness`. Both the
-server and client reject awareness operations unless v3 was actually negotiated.
-New v3 peers receive the group's non-expired in-memory states after the normal
-manifest handshake. There is no durable replay.
+meaning under v3. The relay sends `0x03` only to connections that negotiated
+v3, so connected v1/v2 peers continue receiving CRDT changes without being
+disconnected by an unknown envelope. A server enables awareness by putting an
+`*awareness.Store` on `provider.GroupConfig` and supplying
+`Config.AuthorizeAwareness`. Both the server and client reject awareness
+operations unless v3 was actually negotiated. New v3 peers receive the group's
+non-expired in-memory states after the normal manifest handshake. There is no
+durable replay.
 
 ```go
 store, _ := awareness.NewStore(awareness.DefaultOptions())

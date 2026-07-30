@@ -48,11 +48,12 @@ scalar、`null`、坏 JSON、尾随字节、非规范 varint、未知 status 和
 0x03 | awareness-v1 update
 ```
 
-`0x01` change 和 `0x02` change batch 在 v3 中仍保持原 v1/v2 语义。服务端要在
-`provider.GroupConfig` 提供 `*awareness.Store`，并在 `Config.AuthorizeAwareness`
-实现 actor-to-authenticated-peer 绑定。服务端和客户端只要未实际协商 v3，就会拒绝
-awareness 操作。新 v3 peer 完成 manifest handshake 后会收到当前未过期的内存状态；
-没有持久化回放。
+`0x01` change 和 `0x02` change batch 在 v3 中仍保持原 v1/v2 语义。relay 只向实际
+协商 v3 的连接发送 `0x03`，已连接的 v1/v2 peer 因而会继续接收 CRDT change，而不会因
+未知 envelope 断线。服务端要在 `provider.GroupConfig` 提供 `*awareness.Store`，并在
+`Config.AuthorizeAwareness` 实现 actor-to-authenticated-peer 绑定。服务端和客户端只要未
+实际协商 v3，就会拒绝 awareness 操作。新 v3 peer 完成 manifest handshake 后会收到当前
+未过期的内存状态；没有持久化回放。
 
 文本光标建议在 JSON 中传应用自定义的 `text.Anchor` 编码。只有 actor 授权后才能验证
 并调用 `text.ResolveAnchor`；遇到未知/已 compact 的 anchor 必须清空光标，不能猜测
