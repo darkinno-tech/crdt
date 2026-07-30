@@ -5,6 +5,7 @@ export {
   DEFAULT_FRAME_LIMITS,
   FORMAT_VERSION,
   FrameDecodeError,
+  FrameSemanticsVersion,
   FrameType,
 } from "./frame.js";
 export type { Frame, FrameDecoderLimits, FrameDecodeErrorCode } from "./frame.js";

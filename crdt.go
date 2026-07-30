@@ -9,16 +9,17 @@ import (
 // table is deliberately closed: reserving an ID alone must not make a payload
 // eligible for batching or recovery before its concrete codec is available.
 type FrameType struct {
-	StateID uint64
-	DeltaID uint64
-	UsesHLC bool
+	StateID          uint64
+	DeltaID          uint64
+	SemanticsVersion uint64
+	UsesHLC          bool
 }
 
 // DefaultRGAFrameType returns the compact run-v2 protocol for new RGA
 // replication groups. Legacy scalar RGA v1 frames remain a separately selected
 // stable migration contract.
 func DefaultRGAFrameType() FrameType {
-	return FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true}
+	return FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, SemanticsVersion: SemanticsVersionRGARun, UsesHLC: true}
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group

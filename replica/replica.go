@@ -117,7 +117,8 @@ func (m Manifest) validate(policy crdt.ProtocolPolicy) error {
 		return ErrInvalidManifest
 	}
 	kind, ok := crdt.FrameTypeForState(m.Protocol.StateID)
-	if !ok || kind.DeltaID != m.Protocol.DeltaID || !policy.SupportsFrame(m.Protocol.StateID) || !policy.SupportsFrame(m.Protocol.DeltaID) {
+	if !ok || kind.DeltaID != m.Protocol.DeltaID || kind.SemanticsVersion != m.Protocol.SemanticsVersion ||
+		!policy.SupportsFrame(m.Protocol.StateID) || !policy.SupportsFrame(m.Protocol.DeltaID) {
 		return ErrInvalidManifest
 	}
 	return nil

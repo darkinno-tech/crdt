@@ -1,4 +1,4 @@
-import { FrameType } from "./frame.js";
+import { FrameSemanticsVersion, FrameType } from "./frame.js";
 
 /** The global installed by the Go js/wasm entrypoint after it has started. */
 export const RGA_WASM_GLOBAL = "__darkinnoCRDTRGA";
@@ -16,14 +16,14 @@ export interface RGAProtocolExpectation {
 export const RGA_PROTOCOL_V1: Readonly<RGAProtocolExpectation> = Object.freeze({
   stateTypeID: FrameType.RGAState,
   deltaTypeID: FrameType.RGADelta,
-  semanticsVersion: 1n,
+  semanticsVersion: FrameSemanticsVersion.RGA,
 });
 
 /** Default compatibility contract for new Go RGA replication groups. */
 export const RGA_PROTOCOL_RUN_V2: Readonly<RGAProtocolExpectation> = Object.freeze({
   stateTypeID: FrameType.RGARunState,
   deltaTypeID: FrameType.RGARunDelta,
-  semanticsVersion: 2n,
+  semanticsVersion: FrameSemanticsVersion.RGARun,
 });
 
 export interface InitRGAWasmOptions {

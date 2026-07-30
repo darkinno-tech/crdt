@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRegistryValidate(t *testing.T) {
 	t.Parallel()
@@ -8,8 +11,8 @@ func TestRegistryValidate(t *testing.T) {
 	valid := registry{
 		FormatVersion: 1,
 		FrameTypes: []frameType{
-			{Name: "Counter", StateID: 1, DeltaID: 2},
-			{Name: "Register", StateID: 3, DeltaID: 4, UsesHLC: true},
+			{Name: "Counter", StateID: 1, DeltaID: 2, SemanticsVersion: 1},
+			{Name: "Register", StateID: 3, DeltaID: 4, SemanticsVersion: 1, UsesHLC: true},
 		},
 	}
 	if err := valid.validate(); err != nil {
@@ -50,6 +53,12 @@ func TestRegistryValidate(t *testing.T) {
 				value.FrameTypes[1].Name = "lowercase"
 			},
 		},
+		{
+			name: "zero semantics version",
+			mutate: func(value *registry) {
+				value.FrameTypes[1].SemanticsVersion = 0
+			},
+		},
 	}
 	for _, test := range tests {
 		test := test
@@ -62,5 +71,23 @@ func TestRegistryValidate(t *testing.T) {
 				t.Fatal("validate accepted malformed registry")
 			}
 		})
+	}
+}
+
+func TestRenderRegistryIncludesSemanticVersions(t *testing.T) {
+	t.Parallel()
+
+	value := registry{FormatVersion: 1, FrameTypes: []frameType{{
+		Name: "Counter", StateID: 1, DeltaID: 2, SemanticsVersion: 7,
+	}}}
+	if err := value.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if output := string(renderGo(value)); !strings.Contains(output, "SemanticsVersionCounter uint64 = 7") ||
+		!strings.Contains(output, "SemanticsVersion: SemanticsVersionCounter") || strings.Contains(output, "experimentalFrameTypes") {
+		t.Fatalf("renderGo omitted stable semantic binding:\n%s", output)
+	}
+	if output := string(renderTypeScript(value)); !strings.Contains(output, "FrameSemanticsVersion") || !strings.Contains(output, "Counter: 7n") {
+		t.Fatalf("renderTypeScript omitted semantic version:\n%s", output)
 	}
 }

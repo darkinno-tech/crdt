@@ -1,17 +1,17 @@
 {
   "format_version": 1,
   "frame_types": [
-    { "name": "GCounter", "state_id": 1, "delta_id": 3, "uses_hlc": false, "experimental": false },
-    { "name": "ORSet", "state_id": 2, "delta_id": 4, "uses_hlc": true, "experimental": false },
-    { "name": "PNCounter", "state_id": 5, "delta_id": 6, "uses_hlc": false, "experimental": false },
-    { "name": "LWWSet", "state_id": 7, "delta_id": 8, "uses_hlc": true, "experimental": false },
-    { "name": "LWWMap", "state_id": 9, "delta_id": 10, "uses_hlc": true, "experimental": false },
-    { "name": "RGA", "state_id": 11, "delta_id": 12, "uses_hlc": true, "experimental": false },
-    { "name": "GSet", "state_id": 13, "delta_id": 14, "uses_hlc": false, "experimental": false },
-    { "name": "MVRegister", "state_id": 15, "delta_id": 16, "uses_hlc": false, "experimental": false },
-    { "name": "ORTree", "state_id": 17, "delta_id": 18, "uses_hlc": true, "experimental": false },
-    { "name": "RGARun", "state_id": 19, "delta_id": 20, "uses_hlc": true, "experimental": false },
-    { "name": "ListRGA", "state_id": 21, "delta_id": 22, "uses_hlc": true, "experimental": false },
-    { "name": "RichText", "state_id": 23, "delta_id": 24, "uses_hlc": true, "experimental": false }
+    { "name": "GCounter", "state_id": 1, "delta_id": 3, "semantics_version": 1, "uses_hlc": false },
+    { "name": "ORSet", "state_id": 2, "delta_id": 4, "semantics_version": 1, "uses_hlc": true },
+    { "name": "PNCounter", "state_id": 5, "delta_id": 6, "semantics_version": 1, "uses_hlc": false },
+    { "name": "LWWSet", "state_id": 7, "delta_id": 8, "semantics_version": 1, "uses_hlc": true },
+    { "name": "LWWMap", "state_id": 9, "delta_id": 10, "semantics_version": 1, "uses_hlc": true },
+    { "name": "RGA", "state_id": 11, "delta_id": 12, "semantics_version": 1, "uses_hlc": true },
+    { "name": "GSet", "state_id": 13, "delta_id": 14, "semantics_version": 1, "uses_hlc": false },
+    { "name": "MVRegister", "state_id": 15, "delta_id": 16, "semantics_version": 1, "uses_hlc": false },
+    { "name": "ORTree", "state_id": 17, "delta_id": 18, "semantics_version": 1, "uses_hlc": true },
+    { "name": "RGARun", "state_id": 19, "delta_id": 20, "semantics_version": 2, "uses_hlc": true },
+    { "name": "ListRGA", "state_id": 21, "delta_id": 22, "semantics_version": 1, "uses_hlc": true },
+    { "name": "RichText", "state_id": 23, "delta_id": 24, "semantics_version": 1, "uses_hlc": true }
   ]
 }

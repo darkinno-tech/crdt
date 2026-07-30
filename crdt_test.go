@@ -78,25 +78,26 @@ func TestTagCompare(t *testing.T) {
 
 func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 	for _, test := range []struct {
-		stateID uint64
-		deltaID uint64
-		usesHLC bool
+		stateID          uint64
+		deltaID          uint64
+		semanticsVersion uint64
+		usesHLC          bool
 	}{
-		{TypeIDGCounterState, TypeIDGCounterDelta, false},
-		{TypeIDORSetState, TypeIDORSetDelta, true},
-		{TypeIDPNCounterState, TypeIDPNCounterDelta, false},
-		{TypeIDLWWSetState, TypeIDLWWSetDelta, true},
-		{TypeIDLWWMapState, TypeIDLWWMapDelta, true},
-		{TypeIDRGAState, TypeIDRGADelta, true},
-		{TypeIDGSetState, TypeIDGSetDelta, false},
-		{TypeIDMVRegisterState, TypeIDMVRegisterDelta, false},
-		{TypeIDORTreeState, TypeIDORTreeDelta, true},
-		{TypeIDRGARunState, TypeIDRGARunDelta, true},
-		{TypeIDListRGAState, TypeIDListRGADelta, true},
-		{TypeIDRichTextState, TypeIDRichTextDelta, true},
+		{TypeIDGCounterState, TypeIDGCounterDelta, SemanticsVersionGCounter, false},
+		{TypeIDORSetState, TypeIDORSetDelta, SemanticsVersionORSet, true},
+		{TypeIDPNCounterState, TypeIDPNCounterDelta, SemanticsVersionPNCounter, false},
+		{TypeIDLWWSetState, TypeIDLWWSetDelta, SemanticsVersionLWWSet, true},
+		{TypeIDLWWMapState, TypeIDLWWMapDelta, SemanticsVersionLWWMap, true},
+		{TypeIDRGAState, TypeIDRGADelta, SemanticsVersionRGA, true},
+		{TypeIDGSetState, TypeIDGSetDelta, SemanticsVersionGSet, false},
+		{TypeIDMVRegisterState, TypeIDMVRegisterDelta, SemanticsVersionMVRegister, false},
+		{TypeIDORTreeState, TypeIDORTreeDelta, SemanticsVersionORTree, true},
+		{TypeIDRGARunState, TypeIDRGARunDelta, SemanticsVersionRGARun, true},
+		{TypeIDListRGAState, TypeIDListRGADelta, SemanticsVersionListRGA, true},
+		{TypeIDRichTextState, TypeIDRichTextDelta, SemanticsVersionRichText, true},
 	} {
 		kind, ok := FrameTypeForState(test.stateID)
-		if !ok || kind.DeltaID != test.deltaID || kind.UsesHLC != test.usesHLC {
+		if !ok || kind.DeltaID != test.deltaID || kind.SemanticsVersion != test.semanticsVersion || kind.UsesHLC != test.usesHLC {
 			t.Fatalf("FrameTypeForState(%d) = %#v, %v", test.stateID, kind, ok)
 		}
 		fromDelta, ok := FrameTypeForDelta(test.deltaID)
@@ -112,6 +113,9 @@ func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 		t.Fatalf("stable protocol count = %d, want 12", len(stable))
 	}
 	for _, kind := range stable {
+		if kind.SemanticsVersion == 0 {
+			t.Fatalf("default policy advertised a protocol without semantics %#v", kind)
+		}
 		if IsExperimentalFrame(kind.StateID) || IsExperimentalFrame(kind.DeltaID) {
 			t.Fatalf("default policy advertised experimental protocol %#v", kind)
 		}
@@ -157,7 +161,7 @@ func TestProtocolPolicyCompatibilityFlagAndUnknownFrameHandling(t *testing.T) {
 
 func TestDefaultRGAFrameTypeUsesRunV2(t *testing.T) {
 	kind := DefaultRGAFrameType()
-	if kind.StateID != TypeIDRGARunState || kind.DeltaID != TypeIDRGARunDelta || !kind.UsesHLC {
+	if kind.StateID != TypeIDRGARunState || kind.DeltaID != TypeIDRGARunDelta || kind.SemanticsVersion != SemanticsVersionRGARun || !kind.UsesHLC {
 		t.Fatalf("DefaultRGAFrameType() = %#v", kind)
 	}
 }

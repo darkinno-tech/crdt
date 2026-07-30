@@ -91,7 +91,7 @@ func TestStableFrameTypeUsesGenericListV1Contract(t *testing.T) {
 	if SemanticsVersion != 1 {
 		t.Fatalf("SemanticsVersion = %d, want 1", SemanticsVersion)
 	}
-	if got, want := StableFrameType(), (crdt.FrameType{StateID: crdt.TypeIDListRGAState, DeltaID: crdt.TypeIDListRGADelta, UsesHLC: true}); got != want {
+	if got, want := StableFrameType(), (crdt.FrameType{StateID: crdt.TypeIDListRGAState, DeltaID: crdt.TypeIDListRGADelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}); got != want {
 		t.Fatalf("StableFrameType() = %#v, want %#v", got, want)
 	}
 }

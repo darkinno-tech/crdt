@@ -29,11 +29,11 @@ type registry struct {
 }
 
 type frameType struct {
-	Name         string `json:"name"`
-	StateID      uint64 `json:"state_id"`
-	DeltaID      uint64 `json:"delta_id"`
-	UsesHLC      bool   `json:"uses_hlc"`
-	Experimental bool   `json:"experimental"`
+	Name             string `json:"name"`
+	StateID          uint64 `json:"state_id"`
+	DeltaID          uint64 `json:"delta_id"`
+	SemanticsVersion uint64 `json:"semantics_version"`
+	UsesHLC          bool   `json:"uses_hlc"`
 }
 
 func main() {
@@ -98,6 +98,9 @@ func (r registry) validate() error {
 		if frame.StateID == 0 || frame.DeltaID == 0 || frame.StateID == frame.DeltaID {
 			return fmt.Errorf("%s has invalid state/delta IDs %d/%d", frame.Name, frame.StateID, frame.DeltaID)
 		}
+		if frame.SemanticsVersion == 0 {
+			return fmt.Errorf("%s has zero semantics_version", frame.Name)
+		}
 		for _, entry := range []struct {
 			id   uint64
 			kind string
@@ -134,23 +137,16 @@ func renderGo(r registry) []byte {
 	for _, frame := range r.FrameTypes {
 		fmt.Fprintf(&output, "\tTypeID%sState uint64 = %d\n", frame.Name, frame.StateID)
 		fmt.Fprintf(&output, "\tTypeID%sDelta uint64 = %d\n", frame.Name, frame.DeltaID)
+		fmt.Fprintf(&output, "\tSemanticsVersion%s uint64 = %d\n", frame.Name, frame.SemanticsVersion)
 	}
 	output.WriteString(")\n\n")
 	output.WriteString("var frameTypes = [...]FrameType{\n")
 	for _, frame := range r.FrameTypes {
-		fmt.Fprintf(&output, "\t{StateID: TypeID%sState, DeltaID: TypeID%sDelta", frame.Name, frame.Name)
+		fmt.Fprintf(&output, "\t{StateID: TypeID%sState, DeltaID: TypeID%sDelta, SemanticsVersion: SemanticsVersion%s", frame.Name, frame.Name, frame.Name)
 		if frame.UsesHLC {
 			output.WriteString(", UsesHLC: true")
 		}
 		output.WriteString("},\n")
-	}
-	output.WriteString("}\n\n")
-	output.WriteString("var experimentalFrameTypes = map[uint64]struct{}{\n")
-	for _, frame := range r.FrameTypes {
-		if frame.Experimental {
-			fmt.Fprintf(&output, "\tTypeID%sState: {},\n", frame.Name)
-			fmt.Fprintf(&output, "\tTypeID%sDelta: {},\n", frame.Name)
-		}
 	}
 	output.WriteString("}\n")
 	formatted, err := format.Source(output.Bytes())
@@ -167,6 +163,11 @@ func renderTypeScript(r registry) []byte {
 	for _, frame := range r.FrameTypes {
 		fmt.Fprintf(&output, "  %sState: %dn,\n", frame.Name, frame.StateID)
 		fmt.Fprintf(&output, "  %sDelta: %dn,\n", frame.Name, frame.DeltaID)
+	}
+	output.WriteString("} as const;\n\n")
+	output.WriteString("export const FrameSemanticsVersion = {\n")
+	for _, frame := range r.FrameTypes {
+		fmt.Fprintf(&output, "  %s: %dn,\n", frame.Name, frame.SemanticsVersion)
 	}
 	output.WriteString("} as const;\n")
 	return output.Bytes()

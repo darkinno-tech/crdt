@@ -7,7 +7,7 @@
 
 export const FORMAT_VERSION = 1n;
 
-export { FrameType } from "./type_ids.generated.js";
+export { FrameSemanticsVersion, FrameType } from "./type_ids.generated.js";
 
 export interface FrameDecoderLimits {
   /** Maximum total bytes accepted before copying a payload. */

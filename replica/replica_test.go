@@ -34,8 +34,31 @@ func TestManifestRejectsDisabledAndMismatchedProtocols(t *testing.T) {
 	}
 	remote := stable
 	remote.Protocol.SemanticsVersion = 2
-	if err := stable.Compatible(remote); !errors.Is(err, ErrProtocolMismatch) {
-		t.Fatalf("semantic mismatch error = %v", err)
+	if err := stable.Compatible(remote); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("tampered semantic version error = %v, want ErrInvalidManifest", err)
+	}
+}
+
+func TestManifestBindsSemanticVersionToFramePair(t *testing.T) {
+	valid := []Protocol{
+		{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: crdt.SemanticsVersionRGA},
+		{StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: crdt.SemanticsVersionRGARun},
+	}
+	for _, protocol := range valid {
+		if _, err := NewManifest("text", "example.com/text/v1", 1, protocol, crdt.ProtocolPolicy{}); err != nil {
+			t.Fatalf("NewManifest(%#v) = %v", protocol, err)
+		}
+	}
+
+	invalid := []Protocol{
+		{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: crdt.SemanticsVersionRGARun},
+		{StateID: crdt.TypeIDRGARunState, DeltaID: crdt.TypeIDRGARunDelta, SemanticsVersion: crdt.SemanticsVersionRGA},
+		{StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: crdt.SemanticsVersionLWWSet + 1},
+	}
+	for _, protocol := range invalid {
+		if _, err := NewManifest("text", "example.com/text/v1", 1, protocol, crdt.ProtocolPolicy{}); !errors.Is(err, ErrInvalidManifest) {
+			t.Fatalf("NewManifest(%#v) = %v, want ErrInvalidManifest", protocol, err)
+		}
 	}
 }
 

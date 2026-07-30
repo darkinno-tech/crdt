@@ -13,10 +13,10 @@ func TestStableLWWFrameTypes(t *testing.T) {
 	if SemanticsVersion != 1 {
 		t.Fatalf("SemanticsVersion = %d, want 1", SemanticsVersion)
 	}
-	if got, want := SetFrameType(), (crdt.FrameType{StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, UsesHLC: true}); got != want {
+	if got, want := SetFrameType(), (crdt.FrameType{StateID: crdt.TypeIDLWWSetState, DeltaID: crdt.TypeIDLWWSetDelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}); got != want {
 		t.Fatalf("SetFrameType() = %#v, want %#v", got, want)
 	}
-	if got, want := MapFrameType(), (crdt.FrameType{StateID: crdt.TypeIDLWWMapState, DeltaID: crdt.TypeIDLWWMapDelta, UsesHLC: true}); got != want {
+	if got, want := MapFrameType(), (crdt.FrameType{StateID: crdt.TypeIDLWWMapState, DeltaID: crdt.TypeIDLWWMapDelta, SemanticsVersion: crdt.SemanticsVersionLWWMap, UsesHLC: true}); got != want {
 		t.Fatalf("MapFrameType() = %#v, want %#v", got, want)
 	}
 }

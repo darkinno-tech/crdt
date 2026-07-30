@@ -30,11 +30,11 @@ var (
 
 // SemanticsVersion is the immutable generic list RGA v1 contract. It must
 // match the value negotiated in a replica manifest.
-const SemanticsVersion uint64 = 1
+const SemanticsVersion uint64 = crdt.SemanticsVersionListRGA
 
 // StableFrameType returns the stable generic list RGA v1 state/delta pair.
 func StableFrameType() crdt.FrameType {
-	return crdt.FrameType{StateID: crdt.TypeIDListRGAState, DeltaID: crdt.TypeIDListRGADelta, UsesHLC: true}
+	return crdt.FrameType{StateID: crdt.TypeIDListRGAState, DeltaID: crdt.TypeIDListRGADelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}
 }
 
 // Position is a stable, opaque list-element identity.

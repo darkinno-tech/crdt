@@ -26,3 +26,18 @@ export const FrameType = {
   RichTextState: 23n,
   RichTextDelta: 24n,
 } as const;
+
+export const FrameSemanticsVersion = {
+  GCounter: 1n,
+  ORSet: 1n,
+  PNCounter: 1n,
+  LWWSet: 1n,
+  LWWMap: 1n,
+  RGA: 1n,
+  GSet: 1n,
+  MVRegister: 1n,
+  ORTree: 1n,
+  RGARun: 2n,
+  ListRGA: 1n,
+  RichText: 1n,
+} as const;

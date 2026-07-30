@@ -43,11 +43,11 @@ var (
 const (
 	// LegacySemanticsVersion is the immutable scalar RGA v1 contract for
 	// TypeIDs 11/12. It is stable but remains a distinct protocol from run-v2.
-	LegacySemanticsVersion uint64 = 1
+	LegacySemanticsVersion uint64 = crdt.SemanticsVersionRGA
 	// RunV2SemanticsVersion is the immutable semantics version for the stable
 	// run-v2 text protocol (TypeIDs 19/20). It belongs in every run-v2 replica
 	// manifest. Scalar-v1 frames must never be substituted for run-v2 frames.
-	RunV2SemanticsVersion uint64 = 2
+	RunV2SemanticsVersion uint64 = crdt.SemanticsVersionRGARun
 )
 
 // Position is a stable, opaque identifier for one Unicode scalar value.
@@ -278,7 +278,7 @@ func StableFrameType() crdt.FrameType { return crdt.DefaultRGAFrameType() }
 // LegacyFrameType returns the stable scalar RGA v1 state/delta pair. It is a
 // migration-compatible contract, not the default for new text groups.
 func LegacyFrameType() crdt.FrameType {
-	return crdt.FrameType{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, UsesHLC: true}
+	return crdt.FrameType{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: LegacySemanticsVersion, UsesHLC: true}
 }
 
 func New(replicaID string) (*RGA, error) { return NewWithOptions(replicaID, DefaultOptions()) }

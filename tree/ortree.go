@@ -25,7 +25,7 @@ var (
 
 // SemanticsVersion is the immutable observed-remove tree v1 contract. It must
 // match the value negotiated in a replica manifest.
-const SemanticsVersion uint64 = 1
+const SemanticsVersion uint64 = crdt.SemanticsVersionORTree
 
 // NodeID is an immutable node-instance identity. The zero ID is the synthetic root.
 type NodeID = crdt.Tag
@@ -94,7 +94,7 @@ var _ crdt.DeltaCapable[*ORTree, Delta] = (*ORTree)(nil)
 // Tree v1 supports immutable parent links with add and observed-remove only;
 // a future move protocol requires a distinct frame pair and semantic version.
 func StableFrameType() crdt.FrameType {
-	return crdt.FrameType{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, UsesHLC: true}
+	return crdt.FrameType{StateID: crdt.TypeIDORTreeState, DeltaID: crdt.TypeIDORTreeDelta, SemanticsVersion: SemanticsVersion, UsesHLC: true}
 }
 
 func New(replicaID string) (*ORTree, error) { return NewWithOptions(replicaID, DefaultOptions()) }

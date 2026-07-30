@@ -20,7 +20,7 @@ func TestLegacyFrameTypeUsesScalarV1Contract(t *testing.T) {
 	if LegacySemanticsVersion != 1 {
 		t.Fatalf("LegacySemanticsVersion = %d, want 1", LegacySemanticsVersion)
 	}
-	if got, want := LegacyFrameType(), (crdt.FrameType{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, UsesHLC: true}); got != want {
+	if got, want := LegacyFrameType(), (crdt.FrameType{StateID: crdt.TypeIDRGAState, DeltaID: crdt.TypeIDRGADelta, SemanticsVersion: LegacySemanticsVersion, UsesHLC: true}); got != want {
 		t.Fatalf("LegacyFrameType() = %#v, want %#v", got, want)
 	}
 }

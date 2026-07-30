@@ -6,45 +6,55 @@ package crdt
 // must never be reused for a different payload shape. The source of truth is
 // docs/protocol/type-ids.json.
 const (
-	TypeIDGCounterState   uint64 = 1
-	TypeIDGCounterDelta   uint64 = 3
-	TypeIDORSetState      uint64 = 2
-	TypeIDORSetDelta      uint64 = 4
-	TypeIDPNCounterState  uint64 = 5
-	TypeIDPNCounterDelta  uint64 = 6
-	TypeIDLWWSetState     uint64 = 7
-	TypeIDLWWSetDelta     uint64 = 8
-	TypeIDLWWMapState     uint64 = 9
-	TypeIDLWWMapDelta     uint64 = 10
-	TypeIDRGAState        uint64 = 11
-	TypeIDRGADelta        uint64 = 12
-	TypeIDGSetState       uint64 = 13
-	TypeIDGSetDelta       uint64 = 14
-	TypeIDMVRegisterState uint64 = 15
-	TypeIDMVRegisterDelta uint64 = 16
-	TypeIDORTreeState     uint64 = 17
-	TypeIDORTreeDelta     uint64 = 18
-	TypeIDRGARunState     uint64 = 19
-	TypeIDRGARunDelta     uint64 = 20
-	TypeIDListRGAState    uint64 = 21
-	TypeIDListRGADelta    uint64 = 22
-	TypeIDRichTextState   uint64 = 23
-	TypeIDRichTextDelta   uint64 = 24
+	TypeIDGCounterState        uint64 = 1
+	TypeIDGCounterDelta        uint64 = 3
+	SemanticsVersionGCounter   uint64 = 1
+	TypeIDORSetState           uint64 = 2
+	TypeIDORSetDelta           uint64 = 4
+	SemanticsVersionORSet      uint64 = 1
+	TypeIDPNCounterState       uint64 = 5
+	TypeIDPNCounterDelta       uint64 = 6
+	SemanticsVersionPNCounter  uint64 = 1
+	TypeIDLWWSetState          uint64 = 7
+	TypeIDLWWSetDelta          uint64 = 8
+	SemanticsVersionLWWSet     uint64 = 1
+	TypeIDLWWMapState          uint64 = 9
+	TypeIDLWWMapDelta          uint64 = 10
+	SemanticsVersionLWWMap     uint64 = 1
+	TypeIDRGAState             uint64 = 11
+	TypeIDRGADelta             uint64 = 12
+	SemanticsVersionRGA        uint64 = 1
+	TypeIDGSetState            uint64 = 13
+	TypeIDGSetDelta            uint64 = 14
+	SemanticsVersionGSet       uint64 = 1
+	TypeIDMVRegisterState      uint64 = 15
+	TypeIDMVRegisterDelta      uint64 = 16
+	SemanticsVersionMVRegister uint64 = 1
+	TypeIDORTreeState          uint64 = 17
+	TypeIDORTreeDelta          uint64 = 18
+	SemanticsVersionORTree     uint64 = 1
+	TypeIDRGARunState          uint64 = 19
+	TypeIDRGARunDelta          uint64 = 20
+	SemanticsVersionRGARun     uint64 = 2
+	TypeIDListRGAState         uint64 = 21
+	TypeIDListRGADelta         uint64 = 22
+	SemanticsVersionListRGA    uint64 = 1
+	TypeIDRichTextState        uint64 = 23
+	TypeIDRichTextDelta        uint64 = 24
+	SemanticsVersionRichText   uint64 = 1
 )
 
 var frameTypes = [...]FrameType{
-	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta},
-	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, UsesHLC: true},
-	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta},
-	{StateID: TypeIDLWWSetState, DeltaID: TypeIDLWWSetDelta, UsesHLC: true},
-	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, UsesHLC: true},
-	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, UsesHLC: true},
-	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta},
-	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta},
-	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, UsesHLC: true},
-	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, UsesHLC: true},
-	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, UsesHLC: true},
-	{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, UsesHLC: true},
+	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta, SemanticsVersion: SemanticsVersionGCounter},
+	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, SemanticsVersion: SemanticsVersionORSet, UsesHLC: true},
+	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta, SemanticsVersion: SemanticsVersionPNCounter},
+	{StateID: TypeIDLWWSetState, DeltaID: TypeIDLWWSetDelta, SemanticsVersion: SemanticsVersionLWWSet, UsesHLC: true},
+	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, SemanticsVersion: SemanticsVersionLWWMap, UsesHLC: true},
+	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, SemanticsVersion: SemanticsVersionRGA, UsesHLC: true},
+	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta, SemanticsVersion: SemanticsVersionGSet},
+	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta, SemanticsVersion: SemanticsVersionMVRegister},
+	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, SemanticsVersion: SemanticsVersionORTree, UsesHLC: true},
+	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, SemanticsVersion: SemanticsVersionRGARun, UsesHLC: true},
+	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, SemanticsVersion: SemanticsVersionListRGA, UsesHLC: true},
+	{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, SemanticsVersion: SemanticsVersionRichText, UsesHLC: true},
 }
-
-var experimentalFrameTypes = map[uint64]struct{}{}
