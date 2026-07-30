@@ -242,6 +242,30 @@ func (d *Document) Len() int {
 	return d.text.Len()
 }
 
+// AnchorAt returns the existing text.Anchor representation for a visible rune
+// boundary. Anchors are local or ephemeral-presence metadata, never embedded
+// in a rich-text frame. Keeping this API typed as text.Anchor deliberately
+// avoids creating a second relative-position format for rich text.
+func (d *Document) AnchorAt(offset int) (text.Anchor, error) {
+	if d == nil || d.text == nil {
+		return text.Anchor{}, ErrNilDocument
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.text.AnchorAt(offset)
+}
+
+// ResolveAnchor returns the current visible rune boundary for an existing
+// text.Anchor. A compacted anchor fails closed with text.ErrAnchorGone.
+func (d *Document) ResolveAnchor(anchor text.Anchor) (int, error) {
+	if d == nil || d.text == nil {
+		return 0, ErrNilDocument
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.text.ResolveAnchor(anchor)
+}
+
 // AttributesAt returns a copy of the live attributes at a visible rune offset.
 func (d *Document) AttributesAt(offset int) (Attributes, bool) {
 	if d == nil || d.text == nil || offset < 0 {
@@ -393,7 +417,45 @@ func (d *Document) FormatWithLimits(offset, count int, changes []AttributeChange
 	if offset < 0 || count < 0 || offset > len(positions) || count > len(positions)-offset {
 		return Delta{}, text.ErrRange
 	}
-	if count == 0 || len(changes) == 0 {
+	return d.formatPositionsLocked(positions[offset:offset+count], changes, limits)
+}
+
+// FormatAnchoredWithLimits resolves both relative boundaries and formats the
+// resulting exact positions while holding one document lock. This prevents a
+// concurrent insertion from changing the selected range between resolution
+// and mutation. The end boundary is exclusive.
+func (d *Document) FormatAnchoredWithLimits(start, end text.Anchor, changes []AttributeChange, limits frame.DecoderLimits) (Delta, error) {
+	if d == nil || d.text == nil {
+		return Delta{}, ErrNilDocument
+	}
+	changes = canonicalChanges(changes)
+	if err := validateChanges(changes); err != nil {
+		return Delta{}, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	startOffset, err := d.text.ResolveAnchor(start)
+	if err != nil {
+		return Delta{}, err
+	}
+	endOffset, err := d.text.ResolveAnchor(end)
+	if err != nil {
+		return Delta{}, err
+	}
+	if startOffset > endOffset {
+		return Delta{}, text.ErrRange
+	}
+	positions := d.text.Positions()
+	return d.formatPositionsLocked(positions[startOffset:endOffset], changes, limits)
+}
+
+// FormatAnchored resolves relative boundaries using default decoder limits.
+func (d *Document) FormatAnchored(start, end text.Anchor, changes []AttributeChange) (Delta, error) {
+	return d.FormatAnchoredWithLimits(start, end, changes, frame.DefaultLimits())
+}
+
+func (d *Document) formatPositionsLocked(positions []text.Position, changes []AttributeChange, limits frame.DecoderLimits) (Delta, error) {
+	if len(positions) == 0 || len(changes) == 0 {
 		delta := Delta{}
 		_, err := delta.MarshalBinaryWithLimits(limits)
 		return delta, err
@@ -405,7 +467,7 @@ func (d *Document) FormatWithLimits(offset, count int, changes []AttributeChange
 	if err != nil {
 		return Delta{}, err
 	}
-	targets := append([]text.Position(nil), positions[offset:offset+count]...)
+	targets := append([]text.Position(nil), positions...)
 	sort.Slice(targets, func(left, right int) bool { return targets[left].Compare(targets[right]) < 0 })
 	delta := Delta{operations: []formatOperation{{
 		tag: tag, targets: targets, changes: changes,

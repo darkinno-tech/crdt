@@ -86,6 +86,22 @@ func BenchmarkRichTextRenderSpansTenThousandFormattedRunes(b *testing.B) {
 	}
 }
 
+func BenchmarkRichTextSemanticBlockFormatTenThousandRunes(b *testing.B) {
+	seed := benchmarkRichTextSeed(b, benchmarkRichTextRunes)
+	b.ReportAllocs()
+	for iteration := 0; iteration < b.N; iteration++ {
+		b.StopTimer()
+		document := mustDocument(b, "semantic-block-target")
+		if err := document.ApplyDelta(seed); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		if _, err := document.FormatBlocks(0, benchmarkRichTextRunes, BlockFormat{Kind: "quote"}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func benchmarkRichTextSeed(b testing.TB, runes int) Delta {
 	b.Helper()
 	document := mustDocument(b, "seed")
