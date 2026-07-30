@@ -97,6 +97,7 @@ func TestNewRejectsUnsafeOptions(t *testing.T) {
 func TestReporterDefaultTimeCloseAndNilBoundaries(t *testing.T) {
 	var nilReporter *Reporter
 	nilReporter.Record(Event{})
+	nilReporter.Close()
 	if nilReporter.Dropped() != 0 || nilReporter.Done() != nil {
 		t.Fatal("nil Reporter did not remain a no-op")
 	}
