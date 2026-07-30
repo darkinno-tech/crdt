@@ -507,7 +507,7 @@ func newCounterHandler(t *testing.T, features Feature, mutate func(*Config)) (*h
 	return server, group, manifest, relay
 }
 
-func newCounterInbox(t *testing.T, manifest replica.Manifest, actor string) (*counter.GCounter, *replica.Inbox) {
+func newCounterInbox(t testing.TB, manifest replica.Manifest, actor string) (*counter.GCounter, *replica.Inbox) {
 	t.Helper()
 	state, err := counter.NewGCounter(actor)
 	if err != nil {
@@ -530,7 +530,7 @@ func newCounterInbox(t *testing.T, manifest replica.Manifest, actor string) (*co
 	return state, inbox
 }
 
-func incrementChange(t *testing.T, state *counter.GCounter, manifest replica.Manifest, actor string, sequence, amount uint64) replica.Change {
+func incrementChange(t testing.TB, state *counter.GCounter, manifest replica.Manifest, actor string, sequence, amount uint64) replica.Change {
 	t.Helper()
 	delta, err := state.Increment(amount)
 	if err != nil {
@@ -539,7 +539,7 @@ func incrementChange(t *testing.T, state *counter.GCounter, manifest replica.Man
 	return newCounterChange(t, manifest, actor, sequence, delta)
 }
 
-func newCounterChange(t *testing.T, manifest replica.Manifest, actor string, sequence uint64, delta counter.GCounterDelta) replica.Change {
+func newCounterChange(t testing.TB, manifest replica.Manifest, actor string, sequence uint64, delta counter.GCounterDelta) replica.Change {
 	t.Helper()
 	encoded, err := delta.MarshalBinary()
 	if err != nil {

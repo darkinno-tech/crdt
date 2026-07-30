@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package darkinno.crdt.extensions.v1;
+
+option go_package = "github.com/DarkInno/crdt/extensions;extensions";
+
+// Relay is a manifest-bound, live-only CRDT transport. The first message from
+// each side is a Hello. All later messages are independently identified,
+// canonical CRDT change envelopes.
+service Relay {
+  rpc Sync(stream SyncMessage) returns (stream SyncMessage);
+}
+
+message SyncMessage {
+  oneof payload {
+    bytes hello = 1;
+    bytes change = 2;
+  }
+}

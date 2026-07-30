@@ -120,9 +120,37 @@ scheme、path、query、fragment、空值或 `*`。HTTP/SSE 与 WebSocket 使用
 3. TLS、认证/session 生命周期、按租户的 group 查询、限流、滥用防护、可观测性和容量规划。
 4. 已授权的成员关系、checkpoint 分发、副本退役和墓碑生命周期。
 
-本次先提供 WebSocket 和 HTTP/SSE，而没有直接添加 gRPC：前两者覆盖浏览器和普通 HTTP
-接入，同时不虚构一个未经协商的 gRPC streaming 契约。未来的 gRPC transport 应成为单独的
-Manifest-bound feature，并具备等价的 deadline、背压、授权、重复/乱序和恢复测试。
+## gRPC 原生 relay
+
+`extensions.Relay` 提供原生双向 gRPC stream；其生成式 schema 位于
+[`extensions/relay.proto`](../../extensions/relay.proto)。首个双向消息都是精确的
+`replica.Manifest` 编码，之后只承载既有规范 change envelope，不会为 gRPC 另造 CRDT
+frame 或混入 WebSocket 子协议。
+
+```go
+server, relay, err := extensions.NewGRPCServer(extensions.GRPCConfig{
+	Groups:                []*extensions.Group{group},
+	Authenticate:          authenticateGRPC, // mTLS、可信 interceptor 或已验证 metadata。
+	Authorize:             authorizeWrite,
+	AuthorizeSubscription: authorizeRead,
+})
+_ = relay
+_ = server // 由宿主以自己的 listener、TLS 与 graceful shutdown 提供服务。
+```
+
+共享 `grpc.Server` 时，先创建 `NewGRPCRelay`，在构造 server 时传入
+`relay.ServerOptions()`，再调用 `RegisterRelayServer`。这样保留宿主自己的 mTLS、
+interceptor、health、指标和生命周期。`GRPCAuthenticate` 收到的是 context；metadata
+在完成凭据验证前不可信，绝不能把 CRDT actor 当作身份。
+
+relay 在注册订阅后才发回 manifest 确认，因此客户端成功握手就是 live subscription 的
+线性化点。它复用 `Group` 的 Manifest/policy 校验、读写授权、有界 Inbox、重复/乱序收敛和
+仅首次接受 dot 的 fan-out。HTTP/2 的 gRPC flow control 不等于应用内存上限；每 stream 仍有
+有界 queue，慢消费者会被断开。
+
+客户端必须设置现实的 deadline，并在 stream context 取消时停止自己的工作。`Send` 成功仅表示
+gRPC transport 接收了消息，不能证明对端已持久化。持久 outbox、snapshot/frontier 恢复及重连后
+的反熵仍由应用负责。
 
 ## 多维设计审查
 
@@ -132,7 +160,7 @@ Manifest-bound feature，并具备等价的 deadline、背压、授权、重复/
 | 安全 | 默认关闭；应用拥有认证并分离读写授权；严格 host pattern；关闭压缩。 | 仅 import 包不会出现匿名端点；两种传输的跨域策略一致。 |
 | 性能 | 固定帧与队列上限；断开慢 peer；HTTP 发布是单个有界请求。 | 每 peer 内存有上限；调高限制前必须在目标负载上测量。 |
 | 可用性 | 不隐藏 listener、存储、重试或重连循环。 | 宿主可沿用自己的 HTTP/TLS/可观测性栈并控制生命周期。 |
-| 兼容性 | 使用子协议 `crdt-sync-v1` 和 Manifest 协商，与 CRDT 帧版本分离。 | 未知 transport 版本和不兼容 group 会 fail closed，而不是猜测兼容。 |
+| 兼容性 | WebSocket 使用 `crdt-sync-v1`；gRPC 使用生成的 `Relay.Sync`；二者均协商精确 Manifest 并承载同一 CRDT envelope。 | 未知 transport 版本和不兼容 group 会 fail closed，而不是猜测兼容。 |
 
 ## 验证命令
 

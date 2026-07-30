@@ -4,6 +4,9 @@ set -eu
 
 threshold=${COVERAGE_THRESHOLD:-90}
 failed=0
+profile=$(mktemp)
+filtered_profile=$(mktemp)
+trap 'rm -f "$profile" "$filtered_profile"' EXIT HUP INT TERM
 
 for package in $(go list ./...); do
 	# Examples and generator/benchmark commands are compiled and exercised by
@@ -13,9 +16,13 @@ for package in $(go list ./...); do
 	case "$package" in
 		*/examples/*|*/cmd/crdt-compare|*/internal/cmd/*) continue ;;
 	esac
-	output=$(go test -cover "$package")
+	output=$(go test -coverprofile="$profile" "$package")
 	printf '%s\n' "$output"
-	coverage=$(printf '%s\n' "$output" | sed -n 's/.*coverage: \([0-9.][0-9.]*\)%.*/\1/p')
+	# Protobuf and gRPC stubs are generated directly from checked-in schemas;
+	# exercising their every accessor is not evidence about our relay code. Keep
+	# the 90% gate focused on handwritten CRDT and transport behaviour.
+	grep -v '\.pb\.go:' "$profile" >"$filtered_profile" || true
+	coverage=$(go tool cover -func="$filtered_profile" | awk '/^total:/ { sub(/%$/, "", $3); print $3 }')
 	if [ -z "$coverage" ]; then
 		echo "coverage: no result for $package" >&2
 		failed=1
