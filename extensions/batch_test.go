@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -34,7 +35,7 @@ func TestChangeBatchWireRoundTripAndBounds(t *testing.T) {
 		t.Fatalf("decoded changes = %d, want %d", len(decoded), len(changes))
 	}
 	for index, change := range changes {
-		if decoded[index].dot != change.Dot || string(decoded[index].delta) != string(change.Delta()) {
+		if decoded[index].dot != change.Dot || !bytes.Equal(decoded[index].delta, change.Delta()) {
 			t.Fatalf("decoded change %d differs", index)
 		}
 	}

@@ -1,6 +1,8 @@
 package list
 
 import (
+	"bytes"
+
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
 	frame "github.com/DarkInno/crdt/encoding"
@@ -317,7 +319,7 @@ func validateCodecValues[T any](delta Delta, codec ElementCodec[T]) error {
 			return ErrInvalidCodec
 		}
 		canonical, err := marshalCodec(codec, decoded)
-		if err != nil || string(canonical) != string(item.value) {
+		if err != nil || !bytes.Equal(canonical, item.value) {
 			return ErrInvalidCodec
 		}
 	}

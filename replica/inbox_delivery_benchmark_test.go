@@ -37,3 +37,39 @@ func BenchmarkInboxReceiveInstalledDuplicate(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkInboxReceiveBufferedDuplicate covers duplicate detection while a
+// future change remains queued. This is the hot path that compares delta
+// bytes to distinguish an idempotent resend from a conflicting dot.
+func BenchmarkInboxReceiveBufferedDuplicate(b *testing.B) {
+	manifest, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
+		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1,
+	}, crdt.ProtocolPolicy{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	frontier, err := NewFrontier(nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	inbox, err := NewInbox(manifest, frontier, 2, 1<<20, func([]byte) error { return nil })
+	if err != nil {
+		b.Fatal(err)
+	}
+	change, err := NewChange(manifest, Dot{Actor: "writer", Counter: 2}, mustFramePayload(b, crdt.TypeIDGCounterDelta, "", make([]byte, 4096)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	if delivery, err := inbox.Receive(change); err != nil || !delivery.Buffered {
+		b.Fatalf("initial buffering = %#v, %v", delivery, err)
+	}
+	b.SetBytes(int64(len(change.delta)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		delivery, err := inbox.Receive(change)
+		if err != nil || !delivery.Buffered || !delivery.Duplicate {
+			b.Fatalf("buffered duplicate = %#v, %v", delivery, err)
+		}
+	}
+}

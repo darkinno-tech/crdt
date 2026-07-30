@@ -9,6 +9,7 @@
 package replica
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -340,7 +341,7 @@ func (i *Inbox) Receive(change Change) (Delivery, error) {
 	if change.Dot.Counter > current+1 {
 		return i.buffer(change)
 	}
-	if existing, ok := i.pending[change.Dot.Actor][change.Dot.Counter]; ok && string(existing.delta) != string(change.delta) {
+	if existing, ok := i.pending[change.Dot.Actor][change.Dot.Counter]; ok && !bytes.Equal(existing.delta, change.delta) {
 		return Delivery{}, ErrDotConflict
 	}
 	if err := i.apply(change.Delta()); err != nil {
@@ -385,7 +386,7 @@ func (i *Inbox) Receive(change Change) (Delivery, error) {
 func (i *Inbox) buffer(change Change) (Delivery, error) {
 	byCounter := i.pending[change.Dot.Actor]
 	if existing, ok := byCounter[change.Dot.Counter]; ok {
-		if string(existing.delta) != string(change.delta) {
+		if !bytes.Equal(existing.delta, change.delta) {
 			return Delivery{}, ErrDotConflict
 		}
 		return Delivery{Buffered: true, Duplicate: true}, nil
