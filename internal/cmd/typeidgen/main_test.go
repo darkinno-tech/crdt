@@ -74,18 +74,33 @@ func TestRegistryValidate(t *testing.T) {
 	}
 }
 
-func TestRenderRegistryIncludesSemanticVersions(t *testing.T) {
+func TestRenderGoIncludesSemanticVersionsAndRegistrationNames(t *testing.T) {
 	t.Parallel()
 
-	value := registry{FormatVersion: 1, FrameTypes: []frameType{{
-		Name: "Counter", StateID: 1, DeltaID: 2, SemanticsVersion: 7,
-	}}}
+	value := registry{
+		FormatVersion: 1,
+		FrameTypes: []frameType{
+			{Name: "Counter", StateID: 1, DeltaID: 2, SemanticsVersion: 7},
+			{Name: "Register", StateID: 3, DeltaID: 4, SemanticsVersion: 8, UsesHLC: true},
+		},
+	}
 	if err := value.validate(); err != nil {
 		t.Fatal(err)
 	}
-	if output := string(renderGo(value)); !strings.Contains(output, "SemanticsVersionCounter uint64 = 7") ||
-		!strings.Contains(output, "SemanticsVersion: SemanticsVersionCounter") || strings.Contains(output, "experimentalFrameTypes") {
-		t.Fatalf("renderGo omitted stable semantic binding:\n%s", output)
+	output := string(renderGo(value))
+	for _, want := range []string{
+		`Name: "Counter"`,
+		`Name: "Register"`,
+		"var frameTypeRegistrations",
+		"SemanticsVersionCounter uint64 = 7",
+		"SemanticsVersion: SemanticsVersionCounter",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("generated Go registry omitted %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "experimentalFrameTypes") {
+		t.Fatalf("generated Go registry retained stale experimental table:\n%s", output)
 	}
 	if output := string(renderTypeScript(value)); !strings.Contains(output, "FrameSemanticsVersion") || !strings.Contains(output, "Counter: 7n") {
 		t.Fatalf("renderTypeScript omitted semantic version:\n%s", output)

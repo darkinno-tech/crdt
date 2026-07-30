@@ -140,13 +140,13 @@ func renderGo(r registry) []byte {
 		fmt.Fprintf(&output, "\tSemanticsVersion%s uint64 = %d\n", frame.Name, frame.SemanticsVersion)
 	}
 	output.WriteString(")\n\n")
-	output.WriteString("var frameTypes = [...]FrameType{\n")
+	output.WriteString("var frameTypeRegistrations = [...]FrameTypeRegistration{\n")
 	for _, frame := range r.FrameTypes {
-		fmt.Fprintf(&output, "\t{StateID: TypeID%sState, DeltaID: TypeID%sDelta, SemanticsVersion: SemanticsVersion%s", frame.Name, frame.Name, frame.Name)
+		fmt.Fprintf(&output, "\t{Name: %q, FrameType: FrameType{StateID: TypeID%sState, DeltaID: TypeID%sDelta, SemanticsVersion: SemanticsVersion%s", frame.Name, frame.Name, frame.Name, frame.Name)
 		if frame.UsesHLC {
 			output.WriteString(", UsesHLC: true")
 		}
-		output.WriteString("},\n")
+		output.WriteString("}},\n")
 	}
 	output.WriteString("}\n")
 	formatted, err := format.Source(output.Bytes())

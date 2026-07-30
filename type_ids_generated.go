@@ -47,18 +47,18 @@ const (
 	SemanticsVersionMoveRGA    uint64 = 1
 )
 
-var frameTypes = [...]FrameType{
-	{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta, SemanticsVersion: SemanticsVersionGCounter},
-	{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, SemanticsVersion: SemanticsVersionORSet, UsesHLC: true},
-	{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta, SemanticsVersion: SemanticsVersionPNCounter},
-	{StateID: TypeIDLWWSetState, DeltaID: TypeIDLWWSetDelta, SemanticsVersion: SemanticsVersionLWWSet, UsesHLC: true},
-	{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, SemanticsVersion: SemanticsVersionLWWMap, UsesHLC: true},
-	{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, SemanticsVersion: SemanticsVersionRGA, UsesHLC: true},
-	{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta, SemanticsVersion: SemanticsVersionGSet},
-	{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta, SemanticsVersion: SemanticsVersionMVRegister},
-	{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, SemanticsVersion: SemanticsVersionORTree, UsesHLC: true},
-	{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, SemanticsVersion: SemanticsVersionRGARun, UsesHLC: true},
-	{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, SemanticsVersion: SemanticsVersionListRGA, UsesHLC: true},
-	{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, SemanticsVersion: SemanticsVersionRichText, UsesHLC: true},
-	{StateID: TypeIDMoveRGAState, DeltaID: TypeIDMoveRGADelta, SemanticsVersion: SemanticsVersionMoveRGA, UsesHLC: true},
+var frameTypeRegistrations = [...]FrameTypeRegistration{
+	{Name: "GCounter", FrameType: FrameType{StateID: TypeIDGCounterState, DeltaID: TypeIDGCounterDelta, SemanticsVersion: SemanticsVersionGCounter}},
+	{Name: "ORSet", FrameType: FrameType{StateID: TypeIDORSetState, DeltaID: TypeIDORSetDelta, SemanticsVersion: SemanticsVersionORSet, UsesHLC: true}},
+	{Name: "PNCounter", FrameType: FrameType{StateID: TypeIDPNCounterState, DeltaID: TypeIDPNCounterDelta, SemanticsVersion: SemanticsVersionPNCounter}},
+	{Name: "LWWSet", FrameType: FrameType{StateID: TypeIDLWWSetState, DeltaID: TypeIDLWWSetDelta, SemanticsVersion: SemanticsVersionLWWSet, UsesHLC: true}},
+	{Name: "LWWMap", FrameType: FrameType{StateID: TypeIDLWWMapState, DeltaID: TypeIDLWWMapDelta, SemanticsVersion: SemanticsVersionLWWMap, UsesHLC: true}},
+	{Name: "RGA", FrameType: FrameType{StateID: TypeIDRGAState, DeltaID: TypeIDRGADelta, SemanticsVersion: SemanticsVersionRGA, UsesHLC: true}},
+	{Name: "GSet", FrameType: FrameType{StateID: TypeIDGSetState, DeltaID: TypeIDGSetDelta, SemanticsVersion: SemanticsVersionGSet}},
+	{Name: "MVRegister", FrameType: FrameType{StateID: TypeIDMVRegisterState, DeltaID: TypeIDMVRegisterDelta, SemanticsVersion: SemanticsVersionMVRegister}},
+	{Name: "ORTree", FrameType: FrameType{StateID: TypeIDORTreeState, DeltaID: TypeIDORTreeDelta, SemanticsVersion: SemanticsVersionORTree, UsesHLC: true}},
+	{Name: "RGARun", FrameType: FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, SemanticsVersion: SemanticsVersionRGARun, UsesHLC: true}},
+	{Name: "ListRGA", FrameType: FrameType{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, SemanticsVersion: SemanticsVersionListRGA, UsesHLC: true}},
+	{Name: "RichText", FrameType: FrameType{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, SemanticsVersion: SemanticsVersionRichText, UsesHLC: true}},
+	{Name: "MoveRGA", FrameType: FrameType{StateID: TypeIDMoveRGAState, DeltaID: TypeIDMoveRGADelta, SemanticsVersion: SemanticsVersionMoveRGA, UsesHLC: true}},
 }

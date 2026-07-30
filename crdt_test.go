@@ -108,6 +108,33 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 	}
 }
 
+func TestFrameTypeRegistrationsAreCompleteAndIsolated(t *testing.T) {
+	registrations := RegisteredFrameTypes()
+	if len(registrations) != 12 {
+		t.Fatalf("registration count = %d, want 12", len(registrations))
+	}
+	if got, want := registrations[0].Name, "GCounter"; got != want {
+		t.Fatalf("first registration name = %q, want %q", got, want)
+	}
+
+	for _, registration := range registrations {
+		for _, typeID := range []uint64{registration.StateID, registration.DeltaID} {
+			got, ok := FrameTypeRegistrationForID(typeID)
+			if !ok || got != registration {
+				t.Fatalf("FrameTypeRegistrationForID(%d) = %#v, %v", typeID, got, ok)
+			}
+		}
+	}
+	if _, ok := FrameTypeRegistrationForID(999); ok {
+		t.Fatal("unknown type ID returned a registration")
+	}
+
+	registrations[0] = FrameTypeRegistration{}
+	if got := RegisteredFrameTypes()[0]; got.Name == "" || got.StateID == 0 {
+		t.Fatal("RegisteredFrameTypes returned a shared slice")
+	}
+}
+
 func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 	stable := (ProtocolPolicy{}).FrameTypes()
 	if len(stable) != 13 {
