@@ -98,15 +98,15 @@ wasm-v1:
 	$(MAKE) wasm WASM_RGA_PROTOCOL=v1 WASM_DIR=.tmp/crdt-rga-v1-wasm
 
 wasm-v1-test: wasm-v1
-	$(NPM) --prefix clients/typescript ci --ignore-scripts
+	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/.tmp/crdt-rga-v1-wasm" CRDT_RGA_PROTOCOL=v1 $(NPM) --prefix clients/typescript run test:compat
 
 typescript-test:
-	$(NPM) --prefix clients/typescript ci --ignore-scripts
+	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	$(NPM) --prefix clients/typescript run test
 
 wasm-test: wasm
-	$(NPM) --prefix clients/typescript ci --ignore-scripts
+	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run test:compat
 
 typescript-benchmark:
@@ -119,7 +119,7 @@ typescript-browser-benchmark:
 	$(NPM) --prefix clients/typescript run bench:browser
 
 wasm-benchmark: wasm
-	$(NPM) --prefix clients/typescript ci --ignore-scripts
+	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm
 
 docker-test:
