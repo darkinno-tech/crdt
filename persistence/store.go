@@ -12,20 +12,28 @@ import (
 
 var checkpointBucket = []byte("crdt-checkpoints-v1")
 
-// Store owns a bbolt file containing checkpoints for one concrete CRDT state
+// BoltStore owns a bbolt file containing checkpoints for one concrete CRDT state
 // codec. bbolt serializes writes and permits concurrent read transactions;
 // callers must still run one active process for a database path.
-type Store struct {
+type BoltStore struct {
 	db     *bolt.DB
 	config Config
 	closed atomic.Bool
 }
 
+var _ Store = (*BoltStore)(nil)
+
 // Open opens or creates a checkpoint store at path with mode 0600. The parent
 // directory must already exist and be protected by the host. A store is bound
 // to Config.Validate, so a type or codec change must use an explicit migration
 // rather than silently reinterpreting old bytes.
-func Open(path string, config Config) (*Store, error) {
+func Open(path string, config Config) (*BoltStore, error) {
+	return OpenBolt(path, config)
+}
+
+// OpenBolt opens or creates a bbolt-backed checkpoint Store. It is the
+// compatibility entry point for callers that previously used Open.
+func OpenBolt(path string, config Config) (*BoltStore, error) {
 	if path == "" {
 		return nil, ErrInvalidConfig
 	}
@@ -53,7 +61,7 @@ func Open(path string, config Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open persistence store: %w", err)
 	}
-	store := &Store{db: db, config: config}
+	store := &BoltStore{db: db, config: config}
 	if err := db.Update(func(transaction *bolt.Tx) error {
 		_, err := transaction.CreateBucketIfNotExists(checkpointBucket)
 		return err
@@ -65,7 +73,7 @@ func Open(path string, config Config) (*Store, error) {
 }
 
 // Close releases the database file lock. Calls after Close return ErrClosed.
-func (store *Store) Close() error {
+func (store *BoltStore) Close() error {
 	if store == nil || store.db == nil || !store.closed.CompareAndSwap(false, true) {
 		return ErrClosed
 	}
@@ -79,14 +87,14 @@ func (store *Store) Close() error {
 // return from Save is the durable boundary for its snapshot, frontier, clock,
 // cursor, and outbox; it does not acknowledge a remote peer or a separate
 // database transaction.
-func (store *Store) Save(name string, checkpoint Checkpoint) error {
+func (store *BoltStore) Save(name string, checkpoint Checkpoint) error {
 	if store == nil || store.db == nil {
 		return ErrClosed
 	}
 	if store.closed.Load() {
 		return ErrClosed
 	}
-	if !store.validName(name) {
+	if !store.config.validName(name) {
 		return ErrInvalidCheckpoint
 	}
 	normalized, err := normalizeCheckpoint(checkpoint, store.config)
@@ -120,11 +128,11 @@ func (store *Store) Save(name string, checkpoint Checkpoint) error {
 // ErrCorruptStore and never returns a partial checkpoint. If configured,
 // accepted legacy records are migrated and rewritten atomically before Load
 // returns them.
-func (store *Store) Load(name string) (checkpoint Checkpoint, found bool, err error) {
+func (store *BoltStore) Load(name string) (checkpoint Checkpoint, found bool, err error) {
 	if store == nil || store.db == nil || store.closed.Load() {
 		return Checkpoint{}, false, ErrClosed
 	}
-	if !store.validName(name) {
+	if !store.config.validName(name) {
 		return Checkpoint{}, false, ErrInvalidCheckpoint
 	}
 	err = store.db.View(func(transaction *bolt.Tx) error {
@@ -164,7 +172,7 @@ func (store *Store) Load(name string) (checkpoint Checkpoint, found bool, err er
 
 var errLegacyRecord = errors.New("crdt persistence: legacy record")
 
-func (store *Store) migrateAndLoad(name string) (checkpoint Checkpoint, found bool, err error) {
+func (store *BoltStore) migrateAndLoad(name string) (checkpoint Checkpoint, found bool, err error) {
 	err = store.db.Update(func(transaction *bolt.Tx) error {
 		bucket := transaction.Bucket(checkpointBucket)
 		if bucket == nil {
@@ -205,8 +213,8 @@ func (store *Store) migrateAndLoad(name string) (checkpoint Checkpoint, found bo
 	return checkpoint, found, nil
 }
 
-func (store *Store) validName(name string) bool {
-	if len(name) == 0 || len(name) > store.config.MaxNameBytes {
+func (config Config) validName(name string) bool {
+	if len(name) == 0 || len(name) > config.MaxNameBytes {
 		return false
 	}
 	for _, character := range name {

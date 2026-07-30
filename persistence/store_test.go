@@ -277,7 +277,7 @@ func TestStoreConfigurationAndClosedBoundaries(t *testing.T) {
 	if err := store.Save("maintenance", Checkpoint{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Save() after Close error = %v, want %v", err, ErrClosed)
 	}
-	var nilStore *Store
+	var nilStore *BoltStore
 	if err := nilStore.Save("maintenance", Checkpoint{}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("nil Save() error = %v, want %v", err, ErrClosed)
 	}
@@ -317,7 +317,7 @@ func TestStoreOpenAndBucketCorruptionBoundaries(t *testing.T) {
 	if _, _, err := store.Load("maintenance"); !errors.Is(err, ErrCorruptStore) {
 		t.Fatalf("Load() missing bucket error = %v, want %v", err, ErrCorruptStore)
 	}
-	if store.validName("") || store.validName("name/with-slash") || store.validName(string(make([]byte, store.config.MaxNameBytes+1))) {
+	if store.config.validName("") || store.config.validName("name/with-slash") || store.config.validName(string(make([]byte, store.config.MaxNameBytes+1))) {
 		t.Fatal("invalid checkpoint name accepted")
 	}
 }
@@ -334,7 +334,7 @@ func testConfig() Config {
 	}
 }
 
-func testStore(t *testing.T, path string, config Config) *Store {
+func testStore(t *testing.T, path string, config Config) *BoltStore {
 	t.Helper()
 	store, err := Open(path, config)
 	if err != nil {

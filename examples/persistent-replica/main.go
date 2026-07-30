@@ -81,7 +81,7 @@ func run(writer io.Writer) error {
 	return err
 }
 
-func openStore(path string) (*persistence.Store, error) {
+func openStore(path string) (persistence.Store, error) {
 	return persistence.Open(path, persistence.Config{
 		MaxRecordBytes:     1 << 20,
 		MaxStateBytes:      512 << 10,

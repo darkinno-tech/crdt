@@ -200,3 +200,18 @@ func (config Config) validatorFor(version byte) snapshot.StateValidator {
 	}
 	return config.Validate
 }
+
+// Store is the local recovery-store contract. Save must atomically replace one
+// complete checkpoint: its snapshot, frontier, HLC state (when required),
+// relay cursor, and outbox either all become durable or none do. Load must
+// validate stored data before returning it and must never return a partial
+// checkpoint.
+//
+// Store deliberately does not model a distributed transaction, remote
+// acknowledgement, identity, encryption, backup, or tombstone collection.
+// Applications own its lifetime and must not use a closed Store.
+type Store interface {
+	Save(name string, checkpoint Checkpoint) error
+	Load(name string) (checkpoint Checkpoint, found bool, err error)
+	Close() error
+}

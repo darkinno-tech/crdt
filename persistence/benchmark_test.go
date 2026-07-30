@@ -70,7 +70,7 @@ func BenchmarkStoreLoadLegacyMigration(b *testing.B) {
 	}
 }
 
-func benchmarkStore(b *testing.B) *Store {
+func benchmarkStore(b *testing.B) *BoltStore {
 	b.Helper()
 	store, err := Open(b.TempDir()+"/checkpoint.db", testConfig())
 	if err != nil {
