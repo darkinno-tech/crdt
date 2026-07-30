@@ -25,6 +25,11 @@ CRDT change envelopes remain unchanged.
   TTL (30 seconds by default). A client should publish a new clock before TTL;
   graceful close should publish `Remove`.
 
+For an unchanged local state, call `Store.Heartbeat(actor, now)` rather than
+calling `Set` with the same JSON again. It reuses the retained canonical object
+but still creates a strictly newer update for the transport. It rejects an
+unknown or removed actor: use `Set` to establish a new online state first.
+
 The protocol makes no statement about peer identity, membership, permission,
 or confidentiality. The transport must authenticate the connection and bind
 the update actor to that authenticated peer before relay. State JSON should be

@@ -20,6 +20,10 @@ Go 实现在 [`awareness`](../../awareness)。参考 WebSocket provider 只有�
 - 只有在 TTL 内收到较新的 heartbeat 才算在线（默认 30 秒）。客户端应在 TTL 前
   发出更大 clock 的 heartbeat；正常关闭时应发送 `Remove`。
 
+本地 state 未改变时，应调用 `Store.Heartbeat(actor, now)`，而不要以同一份 JSON
+重复调用 `Set`。它复用已保留的规范化 object，但仍会生成可发送的更大 clock。未知或
+已 remove 的 actor 会被拒绝；需要先用 `Set` 建立新的在线 state。
+
 协议不提供身份、成员资格、权限或保密性。传输层必须先认证连接，再把 update actor
 绑定到该 peer 才能转发。JSON 应仅含必要展示信息，绝不能放 token、密钥或敏感资料。
 
