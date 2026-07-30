@@ -31,6 +31,27 @@ the update actor to that authenticated peer before relay. State JSON should be
 minimal and must not contain credentials, access tokens, or sensitive profile
 data.
 
+## Local application observation
+
+`Store.Subscribe` and `Store.SubscribeAt` provide a bounded, latest-state
+mailbox for UI presence lists and cursors. A subscriber immediately receives a
+sorted snapshot, then receives a fresh snapshot after a local update, an
+accepted remote update, or an explicit expiry. Each subscription has one
+pending event, so a slow renderer skips superseded states and receives the
+newest complete snapshot with `Event.Coalesced > 0`; network and CRDT mutation
+paths never wait for a callback.
+
+Callbacks run outside the Store lock and receive a shared immutable snapshot;
+a panic stops only the failing subscription. `MaxSubscribers` defaults to
+1,024 and bounds this process-local UI resource. `Store.Expire(now)` makes timeout transitions
+observable without starting a hidden timer or goroutine; applications schedule
+it with their own lifecycle. Expiry neither sends a removal nor deletes the
+actor clock: only a strictly newer heartbeat can make that actor live again.
+
+These events are deliberately local. `Event.Version`, `Origin`, and
+`Coalesced` must not be transmitted, persisted, used for authorization, or
+treated as a CRDT causal frontier.
+
 ## awareness-v1 binary update
 
 All unsigned integers use the repository's shortest-form uvarint encoding.

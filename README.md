@@ -105,7 +105,7 @@ The `durable` package intentionally persists a relay operation log and replay cu
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
 | `persistence` | Local bounded bbolt CRDT checkpoint reference. |
-| `durable`, `extensions`, `observe` | Durable relay, bounded live relay, and process-local observation. |
+| `durable`, `extensions`, `awareness`, `observe` | Durable relay, bounded live relay, ephemeral presence, and process-local observation. |
 | `attachment` | Immutable media-reference metadata; never raw media bytes. |
 
 ## Verify and measure
