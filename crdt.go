@@ -38,8 +38,8 @@ const (
 	TypeIDListRGAState uint64 = 21
 	TypeIDListRGADelta uint64 = 22
 	// Rich text nests a run-v2 RGA frame with bounded inline formatting
-	// registers. It is experimental until cross-language vectors, renderer
-	// schema, and formatting-metadata GC rules are promoted.
+	// registers. Its renderer schema is bound by replica.Manifest.SchemaID;
+	// TypeIDs 23/24 and semantics version 1 are immutable.
 	TypeIDRichTextState uint64 = 23
 	TypeIDRichTextDelta uint64 = 24
 )
@@ -80,18 +80,16 @@ func DefaultRGAFrameType() FrameType {
 // ProtocolPolicy's zero value, so an application must opt in per replication
 // group before advertising or accepting them from a peer.
 var experimentalFrameTypes = map[uint64]struct{}{
-	TypeIDLWWSetState:   {},
-	TypeIDLWWSetDelta:   {},
-	TypeIDLWWMapState:   {},
-	TypeIDLWWMapDelta:   {},
-	TypeIDRGAState:      {},
-	TypeIDRGADelta:      {},
-	TypeIDORTreeState:   {},
-	TypeIDORTreeDelta:   {},
-	TypeIDListRGAState:  {},
-	TypeIDListRGADelta:  {},
-	TypeIDRichTextState: {},
-	TypeIDRichTextDelta: {},
+	TypeIDLWWSetState:  {},
+	TypeIDLWWSetDelta:  {},
+	TypeIDLWWMapState:  {},
+	TypeIDLWWMapDelta:  {},
+	TypeIDRGAState:     {},
+	TypeIDRGADelta:     {},
+	TypeIDORTreeState:  {},
+	TypeIDORTreeDelta:  {},
+	TypeIDListRGAState: {},
+	TypeIDListRGADelta: {},
 }
 
 // ProtocolPolicy controls which implemented frame types one replication group
@@ -104,8 +102,8 @@ var experimentalFrameTypes = map[uint64]struct{}{
 // authentication, authorization, limits, and decoder selection.
 type ProtocolPolicy struct {
 	// AllowExperimental includes framed LWW-Set, LWW-Map, legacy scalar RGA v1,
-	// generic list RGA, OR-Tree, and rich-text protocols. Keep it false until
-	// the replication group has accepted their experimental API and
+	// generic list RGA, and OR-Tree protocols. Keep it false until the
+	// replication group has accepted their experimental API and
 	// tombstone-retention lifecycle.
 	AllowExperimental bool
 }

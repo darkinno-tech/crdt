@@ -49,10 +49,10 @@ feature-parity, or performance claim.
   disabled unless an application explicitly enables them.
 - A single-writer durable WebSocket relay reference with a bbolt operation log,
   exact-dot binding, bounded replay, and reconnect support.
-- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, OR-Tree, and
-  inline rich-text formatting, enabled only by an explicit per-replication-group protocol
-  policy. New Go RGA groups use compact run-v2 frames; the RGA tombstone
-  lifecycle still requires careful retention and exact-acknowledgement handling.
+- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, and OR-Tree;
+  stable run-v2 text and stable inline rich text. New Go RGA groups use compact
+  run-v2 frames; every HLC-backed tombstone lifecycle still requires careful
+  retention and exact-acknowledgement handling.
 
 ## Scope
 
@@ -76,7 +76,7 @@ application supplies an authoritative, authenticated active-membership view.
 It does not discover, authenticate, or persist that view. A checksum detects
 accidental frame corruption; it is not an authenticity or encryption mechanism.
 
-## Experimental LWW-Set, LWW-Map, legacy RGA v1, OR-Tree, and rich-text protocols
+## Stable rich text and experimental collection protocols
 
 LWW-Set (`lww.Set`, TypeIDs 7/8) encodes generic elements through an
 application-supplied canonical `lww.ElementCodec`. It retains remove metadata,
@@ -99,13 +99,15 @@ its manifest with `text.RunV2SemanticsVersion`. The run encoding preserves
 scalar RGA position semantics, but a manifest still represents exactly one
 wire protocol: do not mix it with a legacy v1 client or frame stream.
 
-Experimental `richtext.Document` (TypeIDs 23/24) wraps a run-v2 RGA with
+Stable `richtext.Document` (TypeIDs 23/24) wraps a run-v2 RGA with
 bounded per-position LWW inline attributes. It supports opaque UTF-8 attribute
 strings for formatting such as bold, italics, links, and comments; it does not
 carry HTML, CSS, block structure, or media bytes. Use a distinct manifest with
-`richtext.SemanticsVersion` and `AllowExperimental`, persist its state with the
-shared RGA clock atomically, and render only through application-owned attribute
-validation. See the [rich-text design](docs/design/rich-text.md).
+`richtext.SemanticsVersion`, an exact renderer/attribute `SchemaID`, and the
+zero-value protocol policy; persist its state with the shared RGA clock
+atomically, and render only through application-owned attribute validation. See
+the [wire protocol](docs/protocol/richtext-v1.md) and
+[rich-text design](docs/design/rich-text.md).
 
 `CompactTombstones` is intentionally conservative: it can collect only deleted
 leaves after an authenticated exact-acknowledgement epoch has durably saved a
@@ -132,10 +134,11 @@ frame type IDs alone do not establish wire-semantic compatibility. The
 individual `*WithPolicy` constructors remain available for isolated use.
 
 The zero-value policy advertises G-Counter, G-Set, OR-Set, MV-Register,
-PN-Counter, and default RGA run-v2 protocols. The policy is neither a global
-switch nor a plugin registry: unknown and reserved frame types remain
-unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, OR-Tree, and rich-text replicas
-must persist HLC state with snapshots and retain their tombstones.
+PN-Counter, default RGA run-v2, and rich-text v1 protocols. The policy is
+neither a global switch nor a plugin registry: unknown and reserved frame types remain
+unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree
+replicas must persist HLC state with snapshots and retain their tombstones;
+stable rich-text replicas follow the same retention rule before authorized GC.
 
 ## Browser and JavaScript mobile clients
 
@@ -453,7 +456,7 @@ encoders for that.
 | `lww` | Experimental framed LWW-Set and LWW-Map. |
 | `attachment` | Experimental bounded media/data references with streaming size and SHA-256 verification. |
 | `text` | Stable run-v2 framed RGA text; legacy scalar-v1 frames remain experimental. |
-| `richtext` | Experimental bounded inline formatting over run-v2 RGA text. |
+| `richtext` | Stable bounded inline formatting over stable run-v2 RGA text. |
 | `tree` | Experimental framed observed-remove tree. |
 | `register` | In-memory LWW/max registers and framed causal MV-Register. |
 | `encoding` | Versioned bounded binary frames. |

@@ -175,6 +175,12 @@ Manifest 中绑定 `text.StableFrameType()` 和 `text.RunV2SemanticsVersion`，�
 仍为实验性能力，必须通过上述能力检查；该策略仅属于一个复制组，并不是动态插件机制。不能仅因
 不可信帧的校验和有效就按某种类型分派它。
 
+行内富文本（`richtext`，TypeID 23/24）同样是零值策略允许的稳定协议。必须在独立 Manifest
+中绑定 `richtext.SemanticsVersion` 与一个精确的应用渲染/属性 `SchemaID`，使用
+`richtext.UnmarshalDeltaWithLimits` 解码，并原子持久化状态、共享 RGA HLC 时钟、投递 frontier
+和 outbox。属性键和值不是 HTML 或授权声明：渲染前必须校验 Manifest 选择的 schema 并完成安全
+净化。[富文本 v1 协议](../protocol/richtext-v1.md)规定了规范向量、限制与精确确认式压缩。
+
 必须在同一 outbox/接收记录事务中，原子持久化本地 LWW-Set、LWW-Map、RGA 或 OR-Tree 状态帧及其 HLC
 状态。复用同一 replica ID 时，只能通过 `SnapshotCurrentState()` 和各包的
 `NewFromSnapshot` 恢复；仅有状态字节不能证明下一枚本地标签唯一。RGA 和 OR-Tree

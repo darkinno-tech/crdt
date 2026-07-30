@@ -31,8 +31,8 @@
 - 所提供 CRDT 实现均支持安全的并发访问。
 - 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
 - 单写者 durable WebSocket relay 参考实现：带 bbolt 操作日志、精确 Dot 绑定、有界重放与重连。
-- 实验性、带帧的 LWW-Set、LWW-Map、旧标量 RGA v1、OR-Tree 与行内富文本格式化；仅能通过每个复制组的
-  显式协议策略启用。新的 Go RGA 复制组使用紧凑的 run-v2 帧；RGA 墓碑生命周期仍要求谨慎
+- 实验性、带帧的 LWW-Set、LWW-Map、旧标量 RGA v1 与 OR-Tree；稳定的 run-v2 文本与稳定的
+  行内富文本。新的 Go RGA 复制组使用紧凑的 run-v2 帧；所有 HLC 协议的墓碑生命周期仍要求谨慎
   留存和精确确认处理。
 
 ## 范围
@@ -48,7 +48,7 @@ Manifest 的集成适配器；它不提供持久投递、恢复、TLS、成员�
 校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
 独立的 [`durable`](docs/integration/durable-provider.zh-CN.md) 参考实现为一个进程和一个受保护持久卷提供操作日志、重放与重连；它仍不提供集群存储、应用 CRDT checkpoint 事务、TLS、身份/session 生命周期、成员权威或墓碑 GC。
 
-## 实验性 LWW-Set、LWW-Map、旧版 RGA v1、OR-Tree 与富文本协议
+## 稳定富文本与实验性集合协议
 
 LWW-Set（`lww.Set`，TypeID 7/8）通过应用提供的规范化 `lww.ElementCodec`
 编码泛型元素，并保留删除元数据。必须原子持久化
@@ -66,11 +66,11 @@ RGA 文本 v1（`text`，TypeID 11/12）通过有边界的延迟集成队列处�
 中绑定相同 TypeID 与 `text.RunV2SemanticsVersion`。run 编码保留标量 RGA position
 语义，但一个 Manifest 仍只表示一种 wire 协议：不能与旧 v1 客户端或帧流混用。
 
-实验性的 `richtext.Document`（TypeID 23/24）在 run-v2 RGA 外组合有界的、按稳定位置保存的
+稳定的 `richtext.Document`（TypeID 23/24）在 run-v2 RGA 外组合有界的、按稳定位置保存的
 LWW 行内属性。它支持粗体、斜体、链接、评论等不透明 UTF-8 属性字符串；不承载 HTML、CSS、块级
-结构或媒体字节。必须使用独立 Manifest、`richtext.SemanticsVersion` 和
-`AllowExperimental`，并将状态和共享的 RGA 时钟原子持久化；属性校验与安全渲染由应用负责。详见
-[富文本设计](docs/design/rich-text.md)。
+结构或媒体字节。必须使用独立 Manifest、`richtext.SemanticsVersion`、精确的渲染/属性
+`SchemaID` 和零值协议策略，并将状态和共享的 RGA 时钟原子持久化；属性校验与安全渲染由应用负责。
+详见[线协议](docs/protocol/richtext-v1.md)和[富文本设计](docs/design/rich-text.md)。
 
 `CompactTombstones` 有意保持保守：只有在经过认证的精确确认纪元已持久化回收后快照
 并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Set、LWW-Map、
@@ -91,9 +91,10 @@ for _, kind := range policy.FrameTypes() {
 不是握手：零值 Policy 仍会拒绝实验 Manifest，且仅凭 Frame Type ID 不能证明线协议
 语义兼容。需要单独使用时，原有的 `*WithPolicy` 构造函数仍然可用。
 
-零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter 与默认 RGA run-v2
+零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter、默认 RGA run-v2 与富文本 v1
 协议。该策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
-旧版 RGA v1、OR-Tree 与富文本的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑。
+旧版 RGA v1 与 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；稳定富文本在获准
+GC 前也遵循同一留存要求。
 
 ## 浏览器与 JavaScript 移动端客户端
 
@@ -368,7 +369,7 @@ Manifest 字段、限制、存储边界、删除留存和校验要求见[附件�
 | `lww` | 实验性的、带帧 LWW-Set 与 LWW-Map。 |
 | `attachment` | 实验性的、有边界媒体/数据引用，带流式长度与 SHA-256 校验。 |
 | `text` | 稳定的 run-v2 带帧 RGA 文本；旧标量 v1 帧仍为实验性。 |
-| `richtext` | 基于 run-v2 RGA 文本的实验性、有界行内格式化。 |
+| `richtext` | 基于稳定 run-v2 RGA 文本的稳定、有界行内格式化。 |
 | `tree` | 实验性、带帧的观察移除树。 |
 | `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |
 | `encoding` | 带边界的版本化二进制帧。 |

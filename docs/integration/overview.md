@@ -200,6 +200,15 @@ require the capability check above. The policy is local to a replication group
 and is not a dynamic plugin mechanism. Do not dispatch an untrusted frame to a
 type merely because it has a valid checksum.
 
+Inline rich text (`richtext`, TypeIDs 23/24) is also stable under the zero-value
+policy. Bind `richtext.SemanticsVersion` and one exact application renderer /
+attribute `SchemaID` in its own manifest, decode with
+`richtext.UnmarshalDeltaWithLimits`, and persist its state, shared RGA HLC
+clock, delivery frontier, and outbox atomically. Attribute keys and values are
+not HTML or authorization claims: validate the manifest-selected schema and
+sanitize before rendering. The [rich-text v1 protocol](../protocol/richtext-v1.md)
+defines canonical vectors, limits, and exact-acknowledgement compaction.
+
 Persist a local LWW-Set, LWW-Map, RGA, or OR-Tree state frame and its HLC state atomically with the
 outbox/receipt transaction. Restore a same-ID replica only through
 `SnapshotCurrentState()` and the package's `NewFromSnapshot`; state bytes alone

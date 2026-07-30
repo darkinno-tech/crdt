@@ -108,8 +108,8 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 
 func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 	stable := (ProtocolPolicy{}).FrameTypes()
-	if len(stable) != 6 {
-		t.Fatalf("stable protocol count = %d, want 6", len(stable))
+	if len(stable) != 7 {
+		t.Fatalf("stable protocol count = %d, want 7", len(stable))
 	}
 	for _, kind := range stable {
 		if IsExperimentalFrame(kind.StateID) || IsExperimentalFrame(kind.DeltaID) {
@@ -121,6 +121,9 @@ func TestProtocolPolicyExcludesExperimentalProtocolsByDefault(t *testing.T) {
 	}
 	if !(ProtocolPolicy{}).SupportsFrame(TypeIDRGARunState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDRGARunDelta) {
 		t.Fatal("default policy omitted run RGA frames")
+	}
+	if !(ProtocolPolicy{}).SupportsFrame(TypeIDRichTextState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDRichTextDelta) {
+		t.Fatal("default policy omitted stable rich-text frames")
 	}
 	if (ProtocolPolicy{}).SupportsFrame(TypeIDORTreeDelta) {
 		t.Fatal("default policy supports OR-Tree delta")
@@ -139,7 +142,7 @@ func TestProtocolPolicyOptInAndUnknownFrameHandling(t *testing.T) {
 	if policy.SupportsFrame(999) {
 		t.Fatal("policy supported an unknown frame")
 	}
-	if !IsExperimentalFrame(TypeIDLWWSetDelta) || !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || IsExperimentalFrame(TypeIDRGARunState) || !IsExperimentalFrame(TypeIDListRGAState) || !IsExperimentalFrame(TypeIDORTreeDelta) || !IsExperimentalFrame(TypeIDRichTextState) {
+	if !IsExperimentalFrame(TypeIDLWWSetDelta) || !IsExperimentalFrame(TypeIDLWWMapDelta) || !IsExperimentalFrame(TypeIDRGAState) || IsExperimentalFrame(TypeIDRGARunState) || !IsExperimentalFrame(TypeIDListRGAState) || !IsExperimentalFrame(TypeIDORTreeDelta) || IsExperimentalFrame(TypeIDRichTextState) {
 		t.Fatal("implemented experimental protocol was not marked experimental")
 	}
 	if IsExperimentalFrame(999) {
