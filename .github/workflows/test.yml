@@ -188,9 +188,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # issues.new needs HEAD~ to distinguish pre-existing debt from a
-          # regression in this push; the default one-commit checkout has none.
-          fetch-depth: 2
+          # The beta lint policy compares against origin/main. Fetching all
+          # branches keeps that base available for push and PR validation.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
