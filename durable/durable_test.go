@@ -329,11 +329,14 @@ func TestThreeReplicaPartitionRecoverySimulation(t *testing.T) {
 	}
 	_ = awaitDurableEvent(t, installed)
 	_ = awaitDurableEvent(t, installed)
+	// Receiving the callback notification does not imply the callback has
+	// returned. The resume cursor advances only after that return.
+	waitUntil(t, func() bool { return offline.Cursor() == 2 })
 	value, err := offlineState.Value()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value != 5 || offlineInbox.Frontier().Counter("alice") != 2 || offline.Cursor() != 2 {
+	if value != 5 || offlineInbox.Frontier().Counter("alice") != 2 {
 		t.Fatalf("partition recovery value=%d frontier=%d cursor=%d", value, offlineInbox.Frontier().Counter("alice"), offline.Cursor())
 	}
 }
