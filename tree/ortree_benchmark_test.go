@@ -129,6 +129,21 @@ func BenchmarkORTreeCreateAndCompactLeafTombstones1024(b *testing.B) {
 	}
 }
 
+// BenchmarkORTreeCompactEligibleTombstones1024 measures one exact-acknowledged
+// batch. Unlike the all-or-nothing API, this path may make leaf-to-root
+// progress through a deleted structural branch.
+func BenchmarkORTreeCompactEligibleTombstones1024(b *testing.B) {
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		value, tags := benchmarkORTreeTombstones(b, 1024)
+		removed, err := value.CompactEligibleTombstones(tags)
+		if err != nil || removed != len(tags) {
+			b.Fatalf("CompactEligibleTombstones() = %d, %v; want %d, nil", removed, err, len(tags))
+		}
+	}
+}
+
 func BenchmarkORTreeApplyDeltaLinearChain(b *testing.B) {
 	delta := linearTreeDelta(100_000)
 	b.SetBytes(100_000)

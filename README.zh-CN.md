@@ -31,8 +31,8 @@
 - 所提供 CRDT 实现均支持安全的并发访问。
 - 可选、与 Manifest 绑定的 WebSocket 与 HTTP/SSE live relay 参考实现；只有应用显式开启时才暴露。
 - 单写者 durable WebSocket relay 参考实现：带 bbolt 操作日志、精确 Dot 绑定、有界重放与重连。
-- 实验性、带帧的 LWW-Set、LWW-Map、旧标量 RGA v1 与 OR-Tree；稳定的 run-v2 文本与稳定的
-  行内富文本。新的 Go RGA 复制组使用紧凑的 run-v2 帧；所有 HLC 协议的墓碑生命周期仍要求谨慎
+- 实验性、带帧的 LWW-Set、LWW-Map、旧标量 RGA v1 与通用 RGA list；稳定的 run-v2 文本、行内
+  富文本与 observed-remove tree v1。新的 Go RGA 复制组使用紧凑的 run-v2 帧；所有 HLC 协议的墓碑生命周期仍要求谨慎
   留存和精确确认处理。
 
 ## 范围
@@ -48,7 +48,7 @@ Manifest 的集成适配器；它不提供持久投递、恢复、TLS、成员�
 校验和只能检测意外的帧损坏，不能提供真实性校验或加密。
 独立的 [`durable`](docs/integration/durable-provider.zh-CN.md) 参考实现为一个进程和一个受保护持久卷提供操作日志、重放与重连；它仍不提供集群存储、应用 CRDT checkpoint 事务、TLS、身份/session 生命周期、成员权威或墓碑 GC。
 
-## 稳定富文本与实验性集合协议
+## 稳定文本、富文本与 observed-remove tree
 
 LWW-Set（`lww.Set`，TypeID 7/8）通过应用提供的规范化 `lww.ElementCodec`
 编码泛型元素，并保留删除元数据。必须原子持久化
@@ -72,9 +72,14 @@ LWW 行内属性。它支持粗体、斜体、链接、评论等不透明 UTF-8 
 `SchemaID` 和零值协议策略，并将状态和共享的 RGA 时钟原子持久化；属性校验与安全渲染由应用负责。
 详见[线协议](docs/protocol/richtext-v1.md)和[富文本设计](docs/design/rich-text.md)。
 
+稳定的 `tree.ORTree`（TypeID 17/18）在不可变父链接下保存应用拥有的透明节点值。它支持 add 和
+observed-remove，不支持原地并发 move；移动应表示为 remove 后在新父节点下创建新实例。必须在独立的零值
+策略 Manifest 中绑定 `tree.SemanticsVersion` 和精确的节点值 `SchemaID`，使用调用方选择的帧/恢复限制，并将
+状态与 HLC 原子持久化。[OR-Tree v1 协议](docs/protocol/or-tree-v1.md)规定了规范向量、安全限制和回收契约。
+
 `CompactTombstones` 有意保持保守：只有在经过认证的精确确认纪元已持久化回收后快照
 并淘汰旧 delta 后，才能回收已删除的叶节点；存在后代的节点仍是结构锚点。LWW-Set、LWW-Map、
-旧标量 RGA v1（TypeID 11/12）和 OR-Tree 仍为实验性能力，必须显式启用：
+旧标量 RGA v1（TypeID 11/12）和通用 RGA list 仍为实验性能力，必须显式启用：
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -91,9 +96,9 @@ for _, kind := range policy.FrameTypes() {
 不是握手：零值 Policy 仍会拒绝实验 Manifest，且仅凭 Frame Type ID 不能证明线协议
 语义兼容。需要单独使用时，原有的 `*WithPolicy` 构造函数仍然可用。
 
-零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter、默认 RGA run-v2 与富文本 v1
-协议。该策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
-旧版 RGA v1 与 OR-Tree 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；稳定富文本在获准
+零值策略通告 G-Counter、G-Set、OR-Set、MV-Register、PN-Counter、默认 RGA run-v2、富文本 v1 与
+observed-remove tree v1 协议。该策略既不是全局开关，也不是插件注册机制：未知帧类型仍不受支持。LWW-Set、LWW-Map、
+旧版 RGA v1 与通用 RGA list 的实验使用者必须原子持久化 HLC 状态和快照，并保留墓碑；稳定富文本和 tree 在获准
 GC 前也遵循同一留存要求。
 
 ## 浏览器与 JavaScript 移动端客户端
@@ -289,8 +294,9 @@ go run ./examples/collaborative-board
 go run ./examples/warehouse-replication
 ```
 
-[实验协作示例](examples/experimental-collaboration)为 LWW-Map、RGA 和 OR-Tree 使用
-明确且较小的接收帧/RGA 留存上限。仅在复制组已完成上文所述的、经过认证的实验协议握手后运行：
+[实验协作示例](examples/experimental-collaboration)为 LWW-Map、旧 RGA 与 OR-Tree 使用
+明确且较小的接收帧/RGA 留存上限。LWW-Map 和旧 RGA 仅在复制组已完成上文所述的、经过认证的
+实验协议握手后运行；tree 仍须采用其稳定协议规定的认证与回收约束：
 
 ```sh
 go run ./examples/experimental-collaboration
@@ -370,7 +376,7 @@ Manifest 字段、限制、存储边界、删除留存和校验要求见[附件�
 | `attachment` | 实验性的、有边界媒体/数据引用，带流式长度与 SHA-256 校验。 |
 | `text` | 稳定的 run-v2 带帧 RGA 文本；旧标量 v1 帧仍为实验性。 |
 | `richtext` | 基于稳定 run-v2 RGA 文本的稳定、有界行内格式化。 |
-| `tree` | 实验性、带帧的观察移除树。 |
+| `tree` | 稳定的、带帧观察移除树 v1，使用不可变父链接。 |
 | `register` | 内存内 LWW/max register，以及带帧的因果 MV-Register。 |
 | `encoding` | 带边界的版本化二进制帧。 |
 | `delta` | 带边界的增量批处理和合并器。 |

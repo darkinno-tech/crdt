@@ -142,9 +142,11 @@ frame ID、codec ID 和语义版本都必须匹配，之后对端才能发送数
   线协议](protocol/rga-run-v2.zh-CN.md)及其 canonical vector；绝不能把 v1 帧静默地
   重新解释成 run-v2，反之亦然。
 
-LWW-Set、LWW-Map、旧版 RGA v1 和 OR-Tree 在每个 manifest、change、inbox、checkpoint、
-session 边界都要求同样的显式实验性 opt-in。选择前先阅读
-[集合扩展设计](design/crdt-extension.md)。浏览器部署、持久化和 CSP 要求见
+LWW-Set、LWW-Map、旧版 RGA v1 和通用 RGA list 在每个 manifest、change、inbox、checkpoint、
+session 边界都要求同样的显式实验性 opt-in。稳定 observed-remove tree v1 则在零值策略下绑定
+`tree.SemanticsVersion` 与精确的节点值 schema；它仅支持不可变父链接 add/remove，不支持原地 move。
+选择前先阅读[集合扩展设计](design/crdt-extension.md)和
+[OR-Tree v1 协议](protocol/or-tree-v1.md)。浏览器部署、持久化和 CSP 要求见
 [TypeScript/Wasm 客户端指南](../clients/typescript/README.md)。
 
 ## 6. 按目标进入下一份指南

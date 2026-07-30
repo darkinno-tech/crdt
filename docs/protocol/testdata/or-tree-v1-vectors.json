@@ -1,0 +1,26 @@
+{
+  "protocol": "or-tree-v1",
+  "semantics_version": 1,
+  "frame_types": {
+    "state": 17,
+    "delta": 18
+  },
+  "vectors": [
+    {
+      "name": "root-and-deleted-child-delta",
+      "frame_type": 18,
+      "complete_state": false,
+      "hex": "435244540112002f0205616c69636501000004726f6f7405616c69636502000105616c6963650100056368696c640105616c696365020095e82122",
+      "visible_values": ["root"],
+      "tombstone_count": 1
+    },
+    {
+      "name": "complete-root-and-deleted-child-state",
+      "frame_type": 17,
+      "complete_state": true,
+      "hex": "435244540111002f0205616c69636501000004726f6f7405616c69636502000105616c6963650100056368696c640105616c6963650200b2014d08",
+      "visible_values": ["root"],
+      "tombstone_count": 1
+    }
+  ]
+}

@@ -11,22 +11,35 @@ import (
 
 // MarshalBinary returns a deterministic, bounded framed OR-Tree state.
 func (t *ORTree) MarshalBinary() ([]byte, error) {
+	return t.MarshalBinaryWithLimits(frame.DefaultLimits())
+}
+
+// MarshalBinaryWithLimits returns a deterministic complete OR-Tree state
+// while enforcing caller-selected frame limits.
+func (t *ORTree) MarshalBinaryWithLimits(limits frame.DecoderLimits) ([]byte, error) {
 	if t == nil {
 		return nil, ErrNilTree
 	}
 	t.mu.RLock()
 	nodes, tombstones := cloneNodes(t.nodes), cloneTombstones(t.tombstones)
 	t.mu.RUnlock()
-	return marshalTree(crdt.TypeIDORTreeState, nodes, tombstones)
+	return marshalTreeWithLimits(crdt.TypeIDORTreeState, nodes, tombstones, limits)
 }
+
 func (d Delta) MarshalBinary() ([]byte, error) {
+	return d.MarshalBinaryWithLimits(frame.DefaultLimits())
+}
+
+// MarshalBinaryWithLimits returns a deterministic OR-Tree delta while
+// enforcing caller-selected frame limits.
+func (d Delta) MarshalBinaryWithLimits(limits frame.DecoderLimits) ([]byte, error) {
 	if err := validate(d); err != nil {
 		return nil, err
 	}
-	return marshalTree(crdt.TypeIDORTreeDelta, d.nodes, d.tombstones)
+	return marshalTreeWithLimits(crdt.TypeIDORTreeDelta, d.nodes, d.tombstones, limits)
 }
-func marshalTree(typeID uint64, nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}) ([]byte, error) {
-	limits := frame.DefaultLimits()
+
+func marshalTreeWithLimits(typeID uint64, nodes map[NodeID]storedNode, tombstones map[NodeID]struct{}, limits frame.DecoderLimits) ([]byte, error) {
 	if err := validate(Delta{nodes: nodes, tombstones: tombstones}); err != nil {
 		return nil, err
 	}
@@ -68,7 +81,7 @@ func marshalTree(typeID uint64, nodes map[NodeID]storedNode, tombstones map[Node
 			return nil, err
 		}
 	}
-	return frame.MarshalFrameWithPayload(typeID, "", payloadSize, func(payload []byte) error {
+	return frame.MarshalFrameWithPayloadAndLimits(typeID, "", payloadSize, limits, func(payload []byte) error {
 		output := frame.AppendUvarint(payload[:0], uint64(len(nodeIDs)))
 		for _, id := range nodeIDs {
 			n := nodes[id]
@@ -263,16 +276,29 @@ func (t *ORTree) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimi
 }
 
 func (t *ORTree) MarshalBinaryWithClockState() ([]byte, clock.State, error) {
+	return t.MarshalBinaryWithClockStateAndLimits(frame.DefaultLimits())
+}
+
+// MarshalBinaryWithClockStateAndLimits returns a complete framed state and the
+// HLC state that must be persisted atomically before reusing the replica ID.
+func (t *ORTree) MarshalBinaryWithClockStateAndLimits(limits frame.DecoderLimits) ([]byte, clock.State, error) {
 	if t == nil || t.clock == nil {
 		return nil, clock.State{}, ErrNilTree
 	}
 	t.mu.RLock()
 	nodes, tombstones, state := cloneNodes(t.nodes), cloneTombstones(t.tombstones), t.clock.Snapshot()
 	t.mu.RUnlock()
-	encoded, err := marshalTree(crdt.TypeIDORTreeState, nodes, tombstones)
+	encoded, err := marshalTreeWithLimits(crdt.TypeIDORTreeState, nodes, tombstones, limits)
 	return encoded, state, err
 }
+
 func (t *ORTree) SnapshotCurrentState() (snapshot.Snapshot, error) {
+	return t.SnapshotCurrentStateWithLimits(frame.DefaultLimits())
+}
+
+// SnapshotCurrentStateWithLimits returns a validated HLC-backed snapshot
+// while enforcing caller-selected output limits.
+func (t *ORTree) SnapshotCurrentStateWithLimits(limits frame.DecoderLimits) (snapshot.Snapshot, error) {
 	if t == nil || t.clock == nil {
 		return snapshot.Snapshot{}, ErrNilTree
 	}
@@ -282,20 +308,28 @@ func (t *ORTree) SnapshotCurrentState() (snapshot.Snapshot, error) {
 	clockState := t.clock.Snapshot()
 	frontier := treeFrontier(nodes, tombstones)
 	t.mu.RUnlock()
-	state, err := marshalTree(crdt.TypeIDORTreeState, nodes, tombstones)
+	state, err := marshalTreeWithLimits(crdt.TypeIDORTreeState, nodes, tombstones, limits)
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}
-	return snapshot.NewWithClockState(state, frontier, clockState)
+	return snapshot.NewValidatedWithClockState(state, frontier, clockState, validateTreeState)
 }
+
 func NewFromSnapshot(saved snapshot.Snapshot) (*ORTree, error) {
-	return NewFromSnapshotWithOptions(saved, DefaultOptions())
+	return NewFromSnapshotWithOptionsAndLimits(saved, DefaultOptions(), frame.DefaultLimits())
 }
 
 // NewFromSnapshotWithOptions restores an OR-Tree snapshot while retaining the
 // application's local resource limits. A snapshot is not allowed to widen the
 // receiver's memory budget.
 func NewFromSnapshotWithOptions(saved snapshot.Snapshot, options Options) (*ORTree, error) {
+	return NewFromSnapshotWithOptionsAndLimits(saved, options, frame.DefaultLimits())
+}
+
+// NewFromSnapshotWithOptionsAndLimits restores an OR-Tree snapshot under the
+// caller's retained-state and decoder limits. A snapshot never widens either
+// budget on the recovering replica.
+func NewFromSnapshotWithOptionsAndLimits(saved snapshot.Snapshot, options Options, limits frame.DecoderLimits) (*ORTree, error) {
 	if saved.TypeID != crdt.TypeIDORTreeState {
 		return nil, ErrInvalidDelta
 	}
@@ -307,10 +341,18 @@ func NewFromSnapshotWithOptions(saved snapshot.Snapshot, options Options) (*ORTr
 	if err != nil {
 		return nil, err
 	}
-	if err := t.UnmarshalBinary(saved.Bytes()); err != nil {
+	if err := t.UnmarshalBinaryWithLimits(saved.Bytes(), limits); err != nil {
 		return nil, err
 	}
 	return t, nil
+}
+
+func validateTreeState(data []byte) error {
+	delta, err := unmarshalTree(data, crdt.TypeIDORTreeState, frame.DefaultLimits(), nil)
+	if err != nil || !hasCompleteTreeParents(delta.nodes) {
+		return frame.ErrInvalidFrame
+	}
+	return nil
 }
 func recordTreeFrontier(frontier map[string]crdt.Tag, id NodeID) {
 	if current, ok := frontier[id.ReplicaID]; !ok || current.Compare(id) < 0 {

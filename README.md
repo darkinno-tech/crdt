@@ -49,10 +49,10 @@ feature-parity, or performance claim.
   disabled unless an application explicitly enables them.
 - A single-writer durable WebSocket relay reference with a bbolt operation log,
   exact-dot binding, bounded replay, and reconnect support.
-- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, and OR-Tree;
-  stable run-v2 text and stable inline rich text. New Go RGA groups use compact
-  run-v2 frames; every HLC-backed tombstone lifecycle still requires careful
-  retention and exact-acknowledgement handling.
+- Experimental framed LWW-Set, LWW-Map, legacy scalar RGA v1, and generic RGA
+  list values; stable run-v2 text, inline rich text, and observed-remove tree
+  v1. New Go RGA groups use compact run-v2 frames; every HLC-backed tombstone
+  lifecycle still requires careful retention and exact-acknowledgement handling.
 
 ## Scope
 
@@ -76,7 +76,7 @@ application supplies an authoritative, authenticated active-membership view.
 It does not discover, authenticate, or persist that view. A checksum detects
 accidental frame corruption; it is not an authenticity or encryption mechanism.
 
-## Stable rich text and experimental collection protocols
+## Stable text, rich text, and observed-remove tree
 
 LWW-Set (`lww.Set`, TypeIDs 7/8) encodes generic elements through an
 application-supplied canonical `lww.ElementCodec`. It retains remove metadata,
@@ -109,11 +109,19 @@ atomically, and render only through application-owned attribute validation. See
 the [wire protocol](docs/protocol/richtext-v1.md) and
 [rich-text design](docs/design/rich-text.md).
 
+Stable `tree.ORTree` (TypeIDs 17/18) stores opaque application-owned node
+values below immutable parent links. It supports add and observed-remove, not
+an in-place concurrent move; represent a move as a remove plus a new node
+instance. Bind `tree.SemanticsVersion` and an exact node-value `SchemaID` in a
+separate zero-policy manifest, use caller-selected frame/recovery limits, and
+atomically persist state with its HLC. The [OR-Tree v1 protocol](docs/protocol/or-tree-v1.md)
+defines canonical vectors, security limits, and the compaction contract.
+
 `CompactTombstones` is intentionally conservative: it can collect only deleted
 leaves after an authenticated exact-acknowledgement epoch has durably saved a
 post-compaction snapshot and retired old deltas. Nodes with descendants remain
 structural anchors. LWW-Set, LWW-Map, legacy scalar RGA v1 (TypeIDs 11/12),
-and OR-Tree remain experimental and require explicit opt-in:
+and generic RGA list values remain experimental and require explicit opt-in:
 
 ```go
 policy := crdt.ProtocolPolicy{AllowExperimental: true}
@@ -134,11 +142,13 @@ frame type IDs alone do not establish wire-semantic compatibility. The
 individual `*WithPolicy` constructors remain available for isolated use.
 
 The zero-value policy advertises G-Counter, G-Set, OR-Set, MV-Register,
-PN-Counter, default RGA run-v2, and rich-text v1 protocols. The policy is
+PN-Counter, default RGA run-v2, rich-text v1, and observed-remove tree v1
+protocols. The policy is
 neither a global switch nor a plugin registry: unknown and reserved frame types remain
-unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, and OR-Tree
-replicas must persist HLC state with snapshots and retain their tombstones;
-stable rich-text replicas follow the same retention rule before authorized GC.
+unsupported. Experimental LWW-Set, LWW-Map, legacy RGA v1, and generic RGA
+list replicas must persist HLC state with snapshots and retain their tombstones;
+stable rich-text and tree replicas follow the same retention rule before
+authorized GC.
 
 ## Browser and JavaScript mobile clients
 
@@ -404,7 +414,7 @@ For the Chinese versions, see [集成教程](docs/integration/overview.zh-CN.md)
   restore a same-ID OR-Set from bytes alone.
 - For automatic tombstone collection, create a coordinator with a stable
   replication-group ID. Each active member reports its exact
-  `ORSet.TombstoneTags()` (or experimental `ORTree.TombstoneTags()`) under that
+  `ORSet.TombstoneTags()` (or `ORTree.TombstoneTags()`) under that
   ID and the current `tombstonegc.Coordinator` membership epoch; pass both
   values to `AcknowledgeAndCompact` (or `AcknowledgeAndCompactTarget` for the
   tree) for every received report. The tree target additionally refuses to
@@ -457,7 +467,7 @@ encoders for that.
 | `attachment` | Experimental bounded media/data references with streaming size and SHA-256 verification. |
 | `text` | Stable run-v2 framed RGA text; legacy scalar-v1 frames remain experimental. |
 | `richtext` | Stable bounded inline formatting over stable run-v2 RGA text. |
-| `tree` | Experimental framed observed-remove tree. |
+| `tree` | Stable framed observed-remove tree v1 with immutable parent links. |
 | `register` | In-memory LWW/max registers and framed causal MV-Register. |
 | `encoding` | Versioned bounded binary frames. |
 | `delta` | Bounded delta batches and coalescers. |

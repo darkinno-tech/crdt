@@ -31,6 +31,7 @@ be committed.
 - [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
 - [Rich-text v1 wire protocol](protocol/richtext-v1.md)
+- [Observed-remove tree v1 wire protocol](protocol/or-tree-v1.md)
 - [Bounded rich-text inline-format design](design/rich-text.md)
 
 ## Operations and architecture
