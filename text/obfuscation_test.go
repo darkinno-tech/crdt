@@ -5,6 +5,8 @@ import (
 	"errors"
 	"math/rand"
 	"testing"
+
+	frame "github.com/DarkInno/crdt/encoding"
 )
 
 func TestRGAObfuscatedStatePreservesStructureWithoutMutatingSource(t *testing.T) {
@@ -102,6 +104,37 @@ func TestDeltaObfuscateRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := invalid.Obfuscate(); !errors.Is(err, ErrInvalidDelta) {
 		t.Fatalf("invalid delta obfuscation error = %v, want ErrInvalidDelta", err)
+	}
+}
+
+func TestObfuscatedScalarDeltaAndStateLimits(t *testing.T) {
+	source := mustRGA(t, "scalar-obfuscation")
+	delta := mustInsertRGA(t, source, 0, "abc")
+	encoded, err := delta.MarshalObfuscatedBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalRGADelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.nodes) != 3 {
+		t.Fatalf("obfuscated scalar nodes = %d, want 3", len(decoded.nodes))
+	}
+	tight := frame.DefaultLimits()
+	tight.MaxElements = 1
+	if _, err := delta.MarshalObfuscatedBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded scalar delta error = %v", err)
+	}
+	if _, err := source.MarshalObfuscatedBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("bounded scalar state error = %v", err)
+	}
+	var nilDocument *RGA
+	if _, err := nilDocument.MarshalObfuscatedBinary(); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil scalar state error = %v", err)
+	}
+	if _, err := nilDocument.MarshalObfuscatedRunBinary(); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil run state error = %v", err)
 	}
 }
 

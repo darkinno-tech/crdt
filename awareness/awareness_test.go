@@ -2,6 +2,7 @@ package awareness
 
 import (
 	"errors"
+	"math"
 	"math/rand"
 	"sync"
 	"testing"
@@ -165,6 +166,59 @@ func TestStoreConcurrentUpdates(t *testing.T) {
 	group.Wait()
 	if active := store.ActiveAt(now); len(active) != actors {
 		t.Fatalf("active actors = %d, want %d", len(active), actors)
+	}
+}
+
+func TestStoreAndUpdateBoundaries(t *testing.T) {
+	if _, err := NewStore(Options{}); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("NewStore zero options error = %v", err)
+	}
+	options := DefaultOptions()
+	options.MaxActors = 1
+	store := mustStore(t, options)
+	if got := store.Options(); got != options {
+		t.Fatalf("Options = %#v, want %#v", got, options)
+	}
+	var nilStore *Store
+	if _, err := nilStore.Set("alice", []byte(`{}`), time.Time{}); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("nil Set error = %v", err)
+	}
+	if active := nilStore.ActiveAt(time.Time{}); active != nil {
+		t.Fatalf("nil ActiveAt = %#v", active)
+	}
+	if got := nilStore.Options(); got != (Options{}) {
+		t.Fatalf("nil Options = %#v", got)
+	}
+	if _, err := store.Set("alice", []byte(`{}`), time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := store.Remove("alice", time.Time{}); err != nil || removed.Online() || removed.Clock != 2 {
+		t.Fatalf("Remove = %#v, %v", removed, err)
+	}
+	if _, err := store.Apply(Update{Actor: "bob", Clock: 1, State: []byte(`{}`)}, time.Time{}); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("actor limit error = %v", err)
+	}
+	store.records["alice"] = record{update: Update{Actor: "alice", Clock: math.MaxUint64}}
+	if _, err := store.Set("alice", []byte(`{}`), time.Time{}); !errors.Is(err, ErrClockExhausted) {
+		t.Fatalf("clock exhaustion error = %v", err)
+	}
+
+	for _, update := range []Update{
+		{Actor: "alice", Clock: 0},
+		{Actor: "\xff", Clock: 1},
+		{Actor: "alice", Clock: 1, State: []byte(`[]`)},
+		{Actor: "alice", Clock: 1, State: []byte(`{} trailing`)},
+		{Actor: "alice", Clock: 1, State: make([]byte, options.MaxStateBytes+1)},
+	} {
+		if _, err := Normalize(update, options); err == nil {
+			t.Fatalf("Normalize(%#v) succeeded", update)
+		}
+	}
+	if _, err := UnmarshalUpdate([]byte{protocolVersion, 1, 'a', 1, 2}, options); !errors.Is(err, ErrInvalidUpdate) {
+		t.Fatalf("invalid wire status error = %v", err)
+	}
+	if _, err := UnmarshalUpdate([]byte{protocolVersion, 1, 'a', 1, 0}, Options{}); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("invalid options decode error = %v", err)
 	}
 }
 

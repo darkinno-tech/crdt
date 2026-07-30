@@ -214,6 +214,40 @@ func TestFrameV2BoundsInflationAndRejectsWrongConversionDirection(t *testing.T) 
 	}
 }
 
+func TestFrameV2RawAndDeflateDecoderBoundaries(t *testing.T) {
+	raw, err := MarshalFrameV2(Frame{TypeID: 1, Payload: []byte("raw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalFrameView(raw, DefaultLimits())
+	if err != nil || decoded.Version() != FormatVersionV2 || string(decoded.Payload) != "raw" {
+		t.Fatalf("raw v2 decode = %#v, %v", decoded, err)
+	}
+	if _, err := MarshalFrameV2WithLimits(Frame{}, DefaultLimits()); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("zero TypeID error = %v", err)
+	}
+
+	compressed, err := deflatePayload([]byte("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inflated, err := inflatePayload(compressed, len("payload")); err != nil || string(inflated) != "payload" {
+		t.Fatalf("inflate = %q, %v", inflated, err)
+	}
+	if _, err := inflatePayload(compressed, 3); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("short inflate limit error = %v", err)
+	}
+	if _, err := inflatePayload([]byte("not-deflate"), 1); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("invalid deflate error = %v", err)
+	}
+	if _, _, ok := ReadBytes([]byte{1, 'x'}, 0, -1); ok {
+		t.Fatal("ReadBytes accepted negative limit")
+	}
+	if _, _, ok := ReadBytes([]byte{2, 'x'}, 0, 2); ok {
+		t.Fatal("ReadBytes accepted truncated bytes")
+	}
+}
+
 func FuzzUnmarshalFrame(f *testing.F) {
 	seed, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("seed")})
 	if err != nil {

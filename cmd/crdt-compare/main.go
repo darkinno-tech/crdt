@@ -33,40 +33,59 @@ type report struct {
 }
 
 func main() {
+	if err := run(os.Args[1:], os.Stdout); err != nil {
+		fatalf("%v", err)
+	}
+}
+
+func run(args []string, writer io.Writer) (err error) {
+	flags := flag.NewFlagSet("crdt-compare", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
 	var (
-		sizesText  = flag.String("sizes", "4096,16384", "comma-separated UTF-8 rune counts")
-		samples    = flag.Int("samples", 5, "measured samples per size")
-		warmups    = flag.Int("warmups", 2, "unreported warmups per size")
-		iterations = flag.Int("iterations", 20, "operations per reported sample")
-		revision   = flag.String("revision", "unknown", "source revision recorded in output")
-		output     = flag.String("output", "-", "output path, or - for stdout")
+		sizesText  = flags.String("sizes", "4096,16384", "comma-separated UTF-8 rune counts")
+		samples    = flags.Int("samples", 5, "measured samples per size")
+		warmups    = flags.Int("warmups", 2, "unreported warmups per size")
+		iterations = flags.Int("iterations", 20, "operations per reported sample")
+		revision   = flags.String("revision", "unknown", "source revision recorded in output")
+		output     = flags.String("output", "-", "output path, or - for stdout")
 	)
-	flag.Parse()
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
 	if *samples <= 0 || *warmups < 0 || *iterations <= 0 {
-		fatalf("samples and iterations must be positive and warmups must be non-negative")
+		return fmt.Errorf("samples and iterations must be positive and warmups must be non-negative")
 	}
 	sizes, err := parseSizes(*sizesText)
 	if err != nil {
-		fatalf("parse sizes: %v", err)
+		return fmt.Errorf("parse sizes: %w", err)
 	}
 	reports := make([]report, 0, len(sizes))
 	for _, size := range sizes {
 		item, err := measure(size, *samples, *warmups, *iterations, *revision)
 		if err != nil {
-			fatalf("measure %d runes: %v", size, err)
+			return fmt.Errorf("measure %d runes: %w", size, err)
 		}
 		reports = append(reports, item)
 	}
-	writer, closeWriter, err := outputWriter(*output)
-	if err != nil {
-		fatalf("open output: %v", err)
+	destination := writer
+	closeWriter := func() error { return nil }
+	if *output != "-" {
+		destination, closeWriter, err = outputWriter(*output)
+		if err != nil {
+			return fmt.Errorf("open output: %w", err)
+		}
 	}
-	defer closeWriter()
-	encoder := json.NewEncoder(writer)
+	defer func() {
+		if closeErr := closeWriter(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close output: %w", closeErr)
+		}
+	}()
+	encoder := json.NewEncoder(destination)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(reports); err != nil {
-		fatalf("encode output: %v", err)
+		return fmt.Errorf("encode output: %w", err)
 	}
+	return nil
 }
 
 func measure(runes, samples, warmups, iterations int, revision string) (report, error) {
@@ -106,7 +125,7 @@ func runBatch(payload string, iterations int) (time.Duration, int, int, error) {
 	started := time.Now()
 	updateBytes, stateBytes := 0, 0
 	for index := 0; index < iterations; index++ {
-		updateSize, stateSize, err := run(payload)
+		updateSize, stateSize, err := runOnce(payload)
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -115,7 +134,7 @@ func runBatch(payload string, iterations int) (time.Duration, int, int, error) {
 	return time.Since(started), updateBytes, stateBytes, nil
 }
 
-func run(payload string) (int, int, error) {
+func runOnce(payload string) (int, int, error) {
 	source, err := text.New("comparison-source")
 	if err != nil {
 		return 0, 0, err

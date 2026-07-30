@@ -134,15 +134,19 @@ func deflatePayload(payload []byte) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
-func inflatePayload(encoded []byte, rawLength int) ([]byte, error) {
+func inflatePayload(encoded []byte, rawLength int) (payload []byte, err error) {
 	reader := flate.NewReader(bytes.NewReader(encoded))
-	defer reader.Close()
-	payload := make([]byte, rawLength+1)
+	defer func() {
+		if closeErr := reader.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	payload = make([]byte, rawLength+1)
 	count, err := io.ReadFull(reader, payload)
 	if count > rawLength {
 		return nil, ErrFrameLimit
 	}
-	if count != rawLength || (err != io.ErrUnexpectedEOF && !(rawLength == 0 && err == io.EOF)) {
+	if count != rawLength || (err != io.ErrUnexpectedEOF && (rawLength != 0 || err != io.EOF)) {
 		return nil, ErrInvalidFrame
 	}
 	return payload[:rawLength], nil
