@@ -169,6 +169,9 @@ func TestSemanticBoundaryAndParsingPaths(t *testing.T) {
 			t.Fatalf("parseBlockFormat(%q) = %#v, %t; want %#v, %t", test.value, got, ok, test.want, test.ok)
 		}
 	}
+	if got := blockLevel(10); got != "10" {
+		t.Fatalf("blockLevel(10) = %q, want 10", got)
+	}
 	if validSemanticKind("bad space") || !validSemanticKind("valid-kind_2") {
 		t.Fatal("semantic kind validation did not enforce the identifier grammar")
 	}
