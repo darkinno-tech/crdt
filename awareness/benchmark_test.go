@@ -18,6 +18,34 @@ func BenchmarkStoreApplyHeartbeat(b *testing.B) {
 	}
 }
 
+func BenchmarkStoreHeartbeat(b *testing.B) {
+	store := mustStore(b, DefaultOptions())
+	now := time.Date(2026, time.July, 31, 11, 0, 0, 0, time.UTC)
+	if _, err := store.Set("alice", []byte(`{"cursor":{"anchor":"actor:2048","association":"before"},"name":"Alice"}`), now); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if _, err := store.Heartbeat("alice", now); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkStoreSetUnchangedState(b *testing.B) {
+	store := mustStore(b, DefaultOptions())
+	now := time.Date(2026, time.July, 31, 11, 0, 0, 0, time.UTC)
+	state := []byte(`{"cursor":{"anchor":"actor:2048","association":"before"},"name":"Alice"}`)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if _, err := store.Set("alice", state, now); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkUpdateDecodeAndApply(b *testing.B) {
 	encoded, err := (Update{Actor: "alice", Clock: 1, State: []byte(`{"cursor":{"anchor":"actor:2048","association":"before"},"name":"Alice"}`)}).MarshalBinary()
 	if err != nil {

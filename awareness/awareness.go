@@ -31,6 +31,7 @@ var (
 	ErrResourceLimit  = errors.New("awareness: resource limit exceeded")
 	ErrStateConflict  = errors.New("awareness: conflicting update clock")
 	ErrClockExhausted = errors.New("awareness: actor clock exhausted")
+	ErrOfflineActor   = errors.New("awareness: actor has no online state")
 )
 
 const protocolVersion byte = 1
@@ -240,6 +241,37 @@ func NewStore(options Options) (*Store, error) {
 // publish the returned update and periodically call Set again as a heartbeat.
 func (store *Store) Set(actor string, state []byte, now time.Time) (Update, error) {
 	return store.next(actor, state, now)
+}
+
+// Heartbeat creates and installs the next online update without re-parsing an
+// unchanged state object. Call it only for an actor owned by this local
+// application; transports must still authorize that actor before relaying the
+// returned update. A removed or unknown actor must use Set to establish its
+// state again.
+func (store *Store) Heartbeat(actor string, now time.Time) (Update, error) {
+	if store == nil {
+		return Update{}, ErrInvalidOptions
+	}
+	if _, err := Normalize(Update{Actor: actor, Clock: 1}, store.options); err != nil {
+		return Update{}, err
+	}
+	now = normalizeTime(now)
+	store.mu.Lock()
+	current, exists := store.records[actor]
+	if !exists || !current.update.Online() {
+		store.mu.Unlock()
+		return Update{}, ErrOfflineActor
+	}
+	if current.update.Clock == math.MaxUint64 {
+		store.mu.Unlock()
+		return Update{}, ErrClockExhausted
+	}
+	update := cloneUpdate(current.update)
+	update.Clock++
+	store.records[actor] = record{update: update, lastSeen: now}
+	store.publishLocked(Local, update, now)
+	store.mu.Unlock()
+	return cloneUpdate(update), nil
 }
 
 // Remove creates and installs the next removal update for actor. It is useful

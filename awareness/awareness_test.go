@@ -78,6 +78,44 @@ func TestStoreExpiryNeedsNewerHeartbeat(t *testing.T) {
 	}
 }
 
+func TestStoreHeartbeatReusesOnlineStateAndRejectsOfflineActors(t *testing.T) {
+	options := DefaultOptions()
+	options.Timeout = time.Second
+	store := mustStore(t, options)
+	now := time.Date(2026, time.July, 31, 11, 0, 0, 0, time.UTC)
+	if _, err := store.Heartbeat("alice", now); !errors.Is(err, ErrOfflineActor) {
+		t.Fatalf("unknown Heartbeat = %v, want %v", err, ErrOfflineActor)
+	}
+	first, err := store.Set("alice", []byte(`{ "name":"Alice", "cursor":4 }`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Clock != 1 || string(first.State) != `{"cursor":4,"name":"Alice"}` {
+		t.Fatalf("initial state = %#v", first)
+	}
+	second, err := store.Heartbeat("alice", now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Clock != 2 || string(second.State) != string(first.State) {
+		t.Fatalf("heartbeat = %#v, want next canonical state", second)
+	}
+	second.State[0] = '!'
+	active := store.ActiveAt(now.Add(2 * time.Second))
+	if len(active) != 1 || active[0].Clock != 2 || string(active[0].State) != string(first.State) {
+		t.Fatalf("heartbeat mutated retained state = %#v", active)
+	}
+	if removed, err := store.Remove("alice", now.Add(3*time.Second)); err != nil || removed.Clock != 3 {
+		t.Fatalf("Remove = %#v, %v", removed, err)
+	}
+	if _, err := store.Heartbeat("alice", now.Add(4*time.Second)); !errors.Is(err, ErrOfflineActor) {
+		t.Fatalf("removed Heartbeat = %v, want %v", err, ErrOfflineActor)
+	}
+	if _, err := store.Heartbeat(" ", now); !errors.Is(err, ErrInvalidActor) {
+		t.Fatalf("invalid actor Heartbeat = %v, want %v", err, ErrInvalidActor)
+	}
+}
+
 func TestUpdateWireRoundTripAndRejectsInvalidInput(t *testing.T) {
 	options := DefaultOptions()
 	input := Update{Actor: "alice", Clock: 7, State: []byte(` {"name":"Alice","cursor":4} `)}
@@ -182,6 +220,9 @@ func TestStoreAndUpdateBoundaries(t *testing.T) {
 	var nilStore *Store
 	if _, err := nilStore.Set("alice", []byte(`{}`), time.Time{}); !errors.Is(err, ErrInvalidOptions) {
 		t.Fatalf("nil Set error = %v", err)
+	}
+	if _, err := nilStore.Heartbeat("alice", time.Time{}); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("nil Heartbeat error = %v", err)
 	}
 	if active := nilStore.ActiveAt(time.Time{}); active != nil {
 		t.Fatalf("nil ActiveAt = %#v", active)
