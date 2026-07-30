@@ -123,7 +123,7 @@ func marshalRunBlocks(typeID uint64, blocks [][]runNode, tombIDs []Position, lim
 	if err != nil {
 		return nil, err
 	}
-	return frame.MarshalFrameWithPayload(typeID, "", payloadSize, func(payload []byte) error {
+	return frame.MarshalFrameWithPayloadAndLimits(typeID, "", payloadSize, limits, func(payload []byte) error {
 		output := frame.AppendUvarint(payload[:0], uint64(len(blocks)))
 		for _, block := range blocks {
 			if len(block) == 1 {
@@ -528,7 +528,10 @@ func (r *RGA) installState(nodes map[Position]node, tombstones map[Position]stru
 
 func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimits, complete bool) (map[Position]node, map[Position]struct{}, error) {
 	decoded, err := frame.UnmarshalFrame(data, limits)
-	if err != nil || decoded.TypeID != expectedType || decoded.CodecID != "" {
+	if err != nil {
+		return nil, nil, err
+	}
+	if decoded.TypeID != expectedType || decoded.CodecID != "" {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	position := 0

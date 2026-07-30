@@ -177,7 +177,10 @@ the missing position to the start, end, or a nearby rune.
 Limits are part of deployment policy, not an excuse to accept partial input.
 At minimum, bound transport bytes, complete frame and payload bytes, codec and
 replica-ID lengths, node/tombstone counts, pending nodes and bytes, retained
-nodes and tombstones, and local edit bytes/runes. The Go/Wasm browser runtime
+nodes and tombstones, and local edit bytes/runes. A sender that preflights a
+local edit MUST apply the complete-frame limit, not merely its payload budget,
+before it mutates local text; otherwise it can create a delta its receiver
+policy necessarily rejects. The Go/Wasm browser runtime
 uses a conservative default of 1 MiB per frame, 100,000 tags, 64 KiB replica
 IDs, 100,000 retained nodes/tombstones, 10,000 pending nodes, and 512 KiB
 pending bytes; an application MAY choose lower compatible limits.

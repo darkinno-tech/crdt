@@ -210,6 +210,14 @@ func TestRGARunDeltaWithLimits(t *testing.T) {
 	if _, err := UnmarshalRGARunDeltaWithLimits(encoded, limited); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("bounded run delta decode limit = %v", err)
 	}
+	limited = limits
+	limited.MaxFrameBytes = len(encoded) - 1
+	if _, err := delta.MarshalRunBinaryWithLimits(limited); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded run delta marshal limit = %v", err)
+	}
+	if _, err := UnmarshalRGARunDeltaWithLimits(encoded, limited); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("whole-frame bounded run delta decode limit = %v", err)
+	}
 }
 
 func TestRGARunFramesRejectWrongTypeAndNonCanonicalPayload(t *testing.T) {

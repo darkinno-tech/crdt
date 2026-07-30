@@ -203,6 +203,14 @@ func TestRGARunMutationWithLimitsUsesRunFramesAndRejectsBeforeDocumentMutation(t
 	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
 		t.Fatalf("rejected run insert mutated document: text=%q state=%#v", got, value.State())
 	}
+	frameTight := frame.DefaultLimits()
+	frameTight.MaxFrameBytes = 1
+	if _, err := value.InsertRunBinaryWithLimits(0, "a", frameTight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("InsertRunBinaryWithLimits() whole-frame error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != "" || value.State().TombstoneCount != 0 {
+		t.Fatalf("whole-frame rejected run insert mutated document: text=%q state=%#v", got, value.State())
+	}
 
 	encoded, err := value.InsertRunBinaryWithLimits(0, "a", frame.DefaultLimits())
 	if err != nil {
