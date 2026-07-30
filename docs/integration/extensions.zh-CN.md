@@ -143,6 +143,32 @@ _ = server // 由宿主以自己的 listener、TLS 与 graceful shutdown 提供�
 interceptor、health、指标和生命周期。`GRPCAuthenticate` 收到的是 context；metadata
 在完成凭据验证前不可信，绝不能把 CRDT actor 当作身份。
 
+Go 宿主在建立带凭据的 `grpc.ClientConn` 后，可用受管 `OpenGRPC` 客户端。它校验本地和
+远端 Manifest、使用与 relay 相同的有界消息限制、串行化发送，并只将已校验的 change
+交给回调：
+
+```go
+streamContext, cancel := context.WithCancel(context.Background())
+defer cancel() // 应用关闭或准备重连时也要取消。
+
+client, err := extensions.OpenGRPC(
+	streamContext,
+	extensions.NewRelayClient(connection), // connection 自行负责 TLS/mTLS 和凭据
+	manifest,
+	extensions.GRPCClientConfig{OnChange: func(change replica.Change) error {
+		_, err := inbox.Receive(change)
+		return err
+	}},
+)
+if err != nil { /* 处理 live 握手失败 */ }
+defer client.Close() // 不会关闭 connection
+```
+
+stream context 有意作为整个 RPC 的生命周期与 deadline 控制；不可把短暂的握手超时直接
+传给 `OpenGRPC`，否则 deadline 到期会取消已经建立的订阅。`Publish` 会在等待另一条发送
+前检查其 context；但已经阻塞的 HTTP/2 send 由 stream context 释放，因此应按真实网络与
+关闭约束选择该 deadline。
+
 relay 在注册订阅后才发回 manifest 确认，因此客户端成功握手就是 live subscription 的
 线性化点。它复用 `Group` 的 Manifest/policy 校验、读写授权、有界 Inbox、重复/乱序收敛和
 仅首次接受 dot 的 fan-out。HTTP/2 的 gRPC flow control 不等于应用内存上限；每 stream 仍有

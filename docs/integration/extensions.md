@@ -179,6 +179,35 @@ interceptors, TLS/mTLS, health service, observability, and shutdown ownership.
 untrusted until the host validates its credentials; it must never use the CRDT
 actor as an identity.
 
+Go applications can use the managed `OpenGRPC` client after dialing their own
+credentialed `grpc.ClientConn`. It validates the local and remote manifests,
+sets the same bounded message limits as the relay, serializes sends, and
+delivers validated changes to the callback:
+
+```go
+streamContext, cancel := context.WithCancel(context.Background())
+defer cancel() // also cancel on application shutdown or reconnect.
+
+client, err := extensions.OpenGRPC(
+	streamContext,
+	extensions.NewRelayClient(connection), // connection owns TLS/mTLS and credentials
+	manifest,
+	extensions.GRPCClientConfig{OnChange: func(change replica.Change) error {
+		_, err := inbox.Receive(change)
+		return err
+	}},
+)
+if err != nil { /* handle failed live handshake */ }
+defer client.Close() // does not close connection
+```
+
+The stream context is deliberately the lifetime and deadline control for the
+whole RPC. Do not pass a short handshake-only timeout to `OpenGRPC`, because
+gRPC would cancel the established subscription when that deadline expires.
+`Publish` checks its supplied context before queuing behind another send, but a
+currently blocked HTTP/2 send is released by the stream context; choose that
+deadline from realistic network and shutdown constraints.
+
 The first response is sent only after the subscription is registered. As a
 result, the completed client handshake is the live-subscription linearization
 point, exactly as it is for WebSocket. `Group` still supplies manifest/policy

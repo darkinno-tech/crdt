@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/DarkInno/crdt"
@@ -65,6 +67,305 @@ func TestGRPCRelayReplicatesManifestBoundChange(t *testing.T) {
 		t.Fatalf("received gRPC envelope dot=%#v delta=%x err=%v", dot, delta, err)
 	}
 	eventually(t, func() bool { return counterValue(t, relayState) == 7 && group.Frontier().Counter("writer") == 1 })
+}
+
+func TestGRPCClientReplicatesAndFailsClosed(t *testing.T) {
+	group, manifest, _ := newGRPCCounterGroup(t)
+	server, _, err := NewGRPCServer(GRPCConfig{
+		Groups: []*Group{group},
+		Authenticate: func(ctx context.Context) (Peer, error) {
+			values := metadata.ValueFromIncomingContext(ctx, "peer")
+			if len(values) != 1 {
+				return Peer{}, ErrUnauthorized
+			}
+			return Peer{ID: values[0]}, nil
+		},
+		Authorize: func(peer Peer, _ replica.Manifest, dot replica.Dot) error {
+			if peer.ID != dot.Actor {
+				return ErrUnauthorized
+			}
+			return nil
+		},
+		AuthorizeSubscription: func(Peer, replica.Manifest) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := grpcBufconn(t, server)
+	observerState, observerInbox := newCounterInbox(t, manifest, "observer")
+	observerContext := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("peer", "observer"))
+	observer, err := OpenGRPC(observerContext, NewRelayClient(connection), manifest, GRPCClientConfig{
+		OnChange: func(change replica.Change) error {
+			_, err := observerInbox.Receive(change)
+			return err
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = observer.Close() })
+	writerContext := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("peer", "writer"))
+	writer, err := OpenGRPC(writerContext, NewRelayClient(connection), manifest, GRPCClientConfig{
+		OnChange: func(replica.Change) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+	writerState, _ := newCounterInbox(t, manifest, "writer")
+	change := incrementChange(t, writerState, manifest, "writer", 1, 11)
+	if err := writer.Publish(context.Background(), change); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return counterValue(t, observerState) == 11 })
+	if err := writer.Publish(context.Background(), replica.Change{}); err == nil {
+		t.Fatal("gRPC client published an invalid local change")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Publish(context.Background(), change); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed gRPC client publish error = %v", err)
+	}
+}
+
+func TestGRPCClientConfigurationAndCallbackFailure(t *testing.T) {
+	manifest := testManifest(t, "grpc-client-config")
+	if _, err := OpenGRPC(context.Background(), nil, manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil gRPC relay error = %v", err)
+	}
+	group, liveManifest, _ := newGRPCCounterGroup(t)
+	server, _, err := NewGRPCServer(GRPCConfig{
+		Groups:                []*Group{group},
+		Authenticate:          func(context.Context) (Peer, error) { return Peer{ID: "peer"}, nil },
+		Authorize:             func(Peer, replica.Manifest, replica.Dot) error { return nil },
+		AuthorizeSubscription: func(Peer, replica.Manifest) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := grpcBufconn(t, server)
+	if _, err := OpenGRPC(context.Background(), NewRelayClient(connection), liveManifest, GRPCClientConfig{}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("nil gRPC callback error = %v", err)
+	}
+	if _, err := OpenGRPC(context.Background(), NewRelayClient(connection), liveManifest, GRPCClientConfig{MaxMessageBytes: 1, OnChange: func(replica.Change) error { return nil }}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("invalid gRPC client limit error = %v", err)
+	}
+	callbackErr := errors.New("callback failed")
+	failed, err := OpenGRPC(context.Background(), NewRelayClient(connection), liveManifest, GRPCClientConfig{
+		OnChange: func(replica.Change) error { return callbackErr },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = failed.Close() }()
+	publisher, err := OpenGRPC(context.Background(), NewRelayClient(connection), liveManifest, GRPCClientConfig{
+		OnChange: func(replica.Change) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = publisher.Close() }()
+	publisherState, _ := newCounterInbox(t, liveManifest, "peer")
+	change := incrementChange(t, publisherState, liveManifest, "peer", 1, 1)
+	if err := publisher.Publish(context.Background(), change); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool {
+		select {
+		case <-failed.Done():
+			return errors.Is(failed.Err(), callbackErr)
+		default:
+			return false
+		}
+	})
+	var nilClient *GRPCClient
+	if nilClient.Done() != nil || !errors.Is(nilClient.Err(), ErrClosed) || !errors.Is(nilClient.Close(), ErrClosed) || !errors.Is(nilClient.Publish(context.Background(), replica.Change{}), ErrClosed) {
+		t.Fatal("nil gRPC client methods did not fail closed")
+	}
+}
+
+func TestGRPCClientRejectsRemoteContractViolations(t *testing.T) {
+	manifest := testManifest(t, "grpc-client-contract")
+	incompatible, err := replica.NewManifest(manifest.GroupID, "example.com/other/v1", manifest.Epoch, manifest.Protocol, crdt.ProtocolPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incompatibleHello, err := marshalHello(incompatible)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, first := range map[string]*SyncMessage{
+		"change before manifest": {Payload: &SyncMessage_Change{Change: []byte("bad")}},
+		"invalid manifest":       {Payload: &SyncMessage_Hello{Hello: []byte("bad")}},
+		"incompatible manifest":  {Payload: &SyncMessage_Hello{Hello: incompatibleHello}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			connection := grpcScriptedConnection(t, func(stream grpc.BidiStreamingServer[SyncMessage, SyncMessage]) error {
+				if _, err := stream.Recv(); err != nil {
+					return err
+				}
+				return stream.Send(first)
+			})
+			if _, err := OpenGRPC(context.Background(), NewRelayClient(connection), manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }}); err == nil {
+				t.Fatal("invalid remote gRPC contract connected")
+			}
+		})
+	}
+
+	for name, message := range map[string]*SyncMessage{
+		"repeated manifest": {Payload: &SyncMessage_Hello{Hello: incompatibleHello}},
+		"invalid change":    {Payload: &SyncMessage_Change{Change: []byte("bad")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			connection := grpcScriptedConnection(t, func(stream grpc.BidiStreamingServer[SyncMessage, SyncMessage]) error {
+				if _, err := stream.Recv(); err != nil {
+					return err
+				}
+				hello, err := marshalHello(manifest)
+				if err != nil {
+					return err
+				}
+				if err := stream.Send(&SyncMessage{Payload: &SyncMessage_Hello{Hello: hello}}); err != nil {
+					return err
+				}
+				return stream.Send(message)
+			})
+			client, err := OpenGRPC(context.Background(), NewRelayClient(connection), manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = client.Close() }()
+			eventually(t, func() bool {
+				select {
+				case <-client.Done():
+					return errors.Is(client.Err(), errInvalidWireMessage)
+				default:
+					return false
+				}
+			})
+		})
+	}
+}
+
+func TestGRPCClientPublishHonorsWaitingContext(t *testing.T) {
+	group, manifest, _ := newGRPCCounterGroup(t)
+	server, _, err := NewGRPCServer(GRPCConfig{
+		Groups:                []*Group{group},
+		Authenticate:          func(context.Context) (Peer, error) { return Peer{ID: "writer"}, nil },
+		Authorize:             benchmarkAuthorize,
+		AuthorizeSubscription: func(Peer, replica.Manifest) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := OpenGRPC(context.Background(), NewRelayClient(grpcBufconn(t, server)), manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	state, _ := newCounterInbox(t, manifest, "writer")
+	change := incrementChange(t, state, manifest, "writer", 1, 1)
+	<-client.send
+	defer func() { client.send <- struct{}{} }()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := client.Publish(cancelled, change); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled gRPC publish error = %v", err)
+	}
+}
+
+func TestGRPCClientOpenAndReceiveFailurePaths(t *testing.T) {
+	manifest := testManifest(t, "grpc-client-failures")
+	if _, err := OpenGRPC(context.Background(), failingRelayClient{err: errors.New("open failed")}, manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }}); err == nil {
+		t.Fatal("failed gRPC stream opened")
+	}
+	if _, err := OpenGRPC(context.Background(), failingRelayClient{stream: failingGRPCStream{sendErr: errors.New("send failed")}}, manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }}); err == nil {
+		t.Fatal("failed gRPC hello send succeeded")
+	}
+	large, err := replica.NewManifest(strings.Repeat("g", 1024), manifest.SchemaID, manifest.Epoch, manifest.Protocol, crdt.ProtocolPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenGRPC(context.Background(), failingRelayClient{}, large, GRPCClientConfig{MaxMessageBytes: 1024, OnChange: func(replica.Change) error { return nil }}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("oversized gRPC hello error = %v", err)
+	}
+
+	connection := grpcScriptedConnection(t, func(stream grpc.BidiStreamingServer[SyncMessage, SyncMessage]) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		hello, err := marshalHello(manifest)
+		if err != nil {
+			return err
+		}
+		if err := stream.Send(&SyncMessage{Payload: &SyncMessage_Hello{Hello: hello}}); err != nil {
+			return err
+		}
+		return status.Error(codes.Unavailable, "scripted receive failure")
+	})
+	client, err := OpenGRPC(context.Background(), NewRelayClient(connection), manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	eventually(t, func() bool {
+		select {
+		case <-client.Done():
+			return status.Code(client.Err()) == codes.Unavailable
+		default:
+			return false
+		}
+	})
+}
+
+func TestGRPCClientStopsOnPublishFailureAndEnforcesActorLimit(t *testing.T) {
+	manifest := testManifest(t, "grpc-client-publish-failure")
+	hello, err := marshalHello(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	stream := &publishFailGRPCStream{hello: hello, release: release}
+	client, err := OpenGRPC(context.Background(), failingRelayClient{stream: stream}, manifest, GRPCClientConfig{OnChange: func(replica.Change) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ := newCounterInbox(t, manifest, "writer")
+	change := incrementChange(t, state, manifest, "writer", 1, 1)
+	if err := client.Publish(context.Background(), change); err == nil {
+		t.Fatal("gRPC publish send failure succeeded")
+	}
+	close(release)
+	eventually(t, func() bool {
+		select {
+		case <-client.Done():
+			return client.Err() != nil
+		default:
+			return false
+		}
+	})
+
+	releaseLimited := make(chan struct{})
+	limited, err := OpenGRPC(context.Background(), failingRelayClient{stream: &publishFailGRPCStream{hello: hello, release: releaseLimited}}, manifest, GRPCClientConfig{
+		MaxActorBytes: 1,
+		OnChange:      func(replica.Change) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = limited.Close() }()
+	defer close(releaseLimited)
+	if err := limited.Publish(context.Background(), change); !errors.Is(err, errInvalidWireMessage) {
+		t.Fatalf("oversized gRPC actor error = %v", err)
+	}
 }
 
 func TestGRPCRelayRejectsInvalidFirstMessageAndForgedActor(t *testing.T) {
@@ -242,6 +543,71 @@ func grpcBufconn(t testing.TB, server *grpc.Server) *grpc.ClientConn {
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 	return connection
+}
+
+type scriptedGRPCRelay struct {
+	UnimplementedRelayServer
+	sync func(grpc.BidiStreamingServer[SyncMessage, SyncMessage]) error
+}
+
+func (relay scriptedGRPCRelay) Sync(stream grpc.BidiStreamingServer[SyncMessage, SyncMessage]) error {
+	return relay.sync(stream)
+}
+
+type failingRelayClient struct {
+	stream grpc.BidiStreamingClient[SyncMessage, SyncMessage]
+	err    error
+}
+
+func (client failingRelayClient) Sync(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[SyncMessage, SyncMessage], error) {
+	return client.stream, client.err
+}
+
+type failingGRPCStream struct {
+	grpc.ClientStream
+	sendErr error
+}
+
+func (stream failingGRPCStream) Send(*SyncMessage) error { return stream.sendErr }
+
+func (failingGRPCStream) Recv() (*SyncMessage, error) { return nil, errors.New("receive failed") }
+
+type publishFailGRPCStream struct {
+	grpc.ClientStream
+	mu       sync.Mutex
+	hello    []byte
+	received bool
+	sends    int
+	release  <-chan struct{}
+}
+
+func (stream *publishFailGRPCStream) Send(*SyncMessage) error {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	stream.sends++
+	if stream.sends == 1 {
+		return nil
+	}
+	return errors.New("publish send failed")
+}
+
+func (stream *publishFailGRPCStream) Recv() (*SyncMessage, error) {
+	stream.mu.Lock()
+	if !stream.received {
+		stream.received = true
+		stream.mu.Unlock()
+		return &SyncMessage{Payload: &SyncMessage_Hello{Hello: stream.hello}}, nil
+	}
+	stream.mu.Unlock()
+	<-stream.release
+	return nil, io.EOF
+}
+
+func grpcScriptedConnection(t testing.TB, script func(grpc.BidiStreamingServer[SyncMessage, SyncMessage]) error) *grpc.ClientConn {
+	t.Helper()
+	server := grpc.NewServer()
+	RegisterRelayServer(server, scriptedGRPCRelay{sync: script})
+	return grpcBufconn(t, server)
 }
 
 func grpcSync(t testing.TB, connection *grpc.ClientConn, manifest replica.Manifest, peer string) grpc.BidiStreamingClient[SyncMessage, SyncMessage] {
