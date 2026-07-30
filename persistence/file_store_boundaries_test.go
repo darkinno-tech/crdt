@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestFileStoreConfigurationAndClosedBoundaries(t *testing.T) {
@@ -100,6 +102,11 @@ func TestFileRecordEnvelopeRejectsCanonicalViolations(t *testing.T) {
 	if _, err := marshalFileRecords(map[string][]byte{"checkpoint": []byte("bad")}, config); !errors.Is(err, ErrCorruptStore) {
 		t.Fatalf("marshal invalid record error = %v", err)
 	}
+	tooSmall := config
+	tooSmall.MaxStoreBytes = len(encoded) - 1
+	if _, err := marshalFileRecords(map[string][]byte{"checkpoint": record}, tooSmall); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("marshal oversize store error = %v", err)
+	}
 
 	cases := []struct {
 		name string
@@ -108,6 +115,7 @@ func TestFileRecordEnvelopeRejectsCanonicalViolations(t *testing.T) {
 		{name: "too short", data: []byte("CRFS")},
 		{name: "bad magic", data: mutateFileEnvelope(encoded, func(data []byte) { data[0] ^= 1 })},
 		{name: "malformed count", data: mutateFileEnvelope(encoded, func(data []byte) { data[len(fileMagic)+1] = 0xff })},
+		{name: "excessive count", data: mutateFileEnvelope(encoded, func(data []byte) { data[len(fileMagic)+1] = 127 })},
 		{name: "bad count", data: mutateFileEnvelope(encoded, func(data []byte) { data[len(fileMagic)+1] = 2 })},
 		{name: "invalid name", data: mutateFileEnvelope(encoded, func(data []byte) { data[len(fileMagic)+3] = '/' })},
 		{name: "corrupt record", data: mutateFileEnvelope(encoded, func(data []byte) { data[len(data)-sha256.Size-1] ^= 1 })},
@@ -151,13 +159,76 @@ func TestReplaceFileWritesPrivateAtomically(t *testing.T) {
 }
 
 func TestFileStoreMissingAndInvalidCheckpointBoundaries(t *testing.T) {
-	store := testFileStore(t, filepath.Join(t.TempDir(), "checkpoint.store"), testFileConfig())
+	config := testFileConfig()
+	store := testFileStore(t, filepath.Join(t.TempDir(), "checkpoint.store"), config)
 	defer func() { _ = store.Close() }()
 	if checkpoint, found, err := store.Load("missing"); err != nil || found || checkpoint.Snapshot.TypeID != 0 {
 		t.Fatalf("Load missing checkpoint=%+v found=%t err=%v", checkpoint, found, err)
 	}
 	if err := store.Save("checkpoint", Checkpoint{}); !errors.Is(err, ErrInvalidCheckpoint) {
 		t.Fatalf("Save invalid checkpoint error = %v, want %v", err, ErrInvalidCheckpoint)
+	}
+	if err := store.Save("checkpoint", Checkpoint{Snapshot: testSnapshotForFuzz(t), Outbox: make([]byte, config.MaxOutboxBytes+1)}); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("Save oversized outbox error = %v, want %v", err, ErrInvalidCheckpoint)
+	}
+}
+
+func TestFileStoreDeleteFailureBoundaries(t *testing.T) {
+	var nilStore *FileStore
+	if deleted, err := nilStore.Delete("checkpoint"); deleted || !errors.Is(err, ErrClosed) {
+		t.Fatalf("nil Delete() deleted=%t err=%v", deleted, err)
+	}
+
+	root := t.TempDir()
+	path := filepath.Join(root, "checkpoint.store")
+	store := testFileStore(t, path, testFileConfig())
+	defer func() { _ = store.Close() }()
+	if err := store.Save("checkpoint", Checkpoint{Snapshot: testSnapshotForFuzz(t)}); err != nil {
+		t.Fatal(err)
+	}
+
+	store.mu.Lock()
+	store.closed.Store(true)
+	store.mu.Unlock()
+	if deleted, err := store.Delete("checkpoint"); deleted || !errors.Is(err, ErrClosed) {
+		t.Fatalf("Delete() after lock boundary deleted=%t err=%v", deleted, err)
+	}
+	store.closed.Store(false)
+
+	store.records["corrupt"] = []byte("not a checkpoint")
+	if deleted, err := store.Delete("checkpoint"); deleted || !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("Delete() corrupt retained record deleted=%t err=%v", deleted, err)
+	}
+	delete(store.records, "corrupt")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := store.Delete("checkpoint"); deleted || err == nil {
+		t.Fatalf("Delete() missing directory deleted=%t err=%v", deleted, err)
+	}
+	if checkpoint, found, err := store.Load("checkpoint"); err != nil || !found || checkpoint.Snapshot.TypeID == 0 {
+		t.Fatalf("failed Delete() changed in-memory checkpoint=%+v found=%t err=%v", checkpoint, found, err)
+	}
+}
+
+func TestBoltStoreDeleteFailureBoundaries(t *testing.T) {
+	var nilStore *BoltStore
+	if deleted, err := nilStore.Delete("checkpoint"); deleted || !errors.Is(err, ErrClosed) {
+		t.Fatalf("nil Delete() deleted=%t err=%v", deleted, err)
+	}
+
+	store := testStore(t, filepath.Join(t.TempDir(), "checkpoint.db"), testConfig())
+	defer func() { _ = store.Close() }()
+	if err := store.db.Update(func(transaction *bolt.Tx) error {
+		return transaction.DeleteBucket(checkpointBucket)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := store.Delete("checkpoint"); deleted || !errors.Is(err, ErrCorruptStore) {
+		t.Fatalf("Delete() missing bucket deleted=%t err=%v", deleted, err)
 	}
 }
 
