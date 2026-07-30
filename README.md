@@ -35,6 +35,8 @@ feature-parity, or performance claim.
   conflict rule.
 - Local, compensating **text Undo/Redo** that emits ordinary RGA deltas and
   never rolls back remote state.
+- Local **RGA cursor/selection anchors** that resolve without materializing a
+  full visible-position projection and fail closed after tombstone compaction.
 - Hybrid logical clock (HLC) tags and a persistable clock state for replica
   restarts.
 - Canonical, checksummed binary frames with bounded decoding and deterministic

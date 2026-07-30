@@ -62,6 +62,20 @@ child 按 tag 降序访问；被删除节点不输出 rune，但仍遍历子节�
 持久化单元必须是 `{state frame, HLC clock state, frontier/outbox position}`。回收墓碑还需要权威
 成员 epoch、每个 tag 的精确确认、回收后持久 checkpoint 和旧 epoch 帧退役。
 
+## 本地光标与选区锚点
+
+`text.Anchor` 是本地 RGA API，不是 run-v2 字段，也不改变 Manifest 或线协议。
+`AnchorAt(offset)` 锚定在该 offset 后面的第一个可见 Position 之前；可见文本末尾使用 synthetic
+root 的 `AnchorAfter`。两个 anchor 可表示一个选区，且 `ResolveAnchor` 直接利用可见性索引，复杂度
+为 `O(log n)`，不需要反复创建全部 Position 投影。收敛到同一 RGA 状态的副本会把同一仍被保留的
+anchor 解析到相同的 rune offset。显式的 `AnchorAfter` 表示一个 Position 本身之后、其后代之前的边界。
+
+anchor 是应用自有的临时光标元数据，不能放入 state/delta frame；CRC-32C 也不能认证某个 peer
+传来的 anchor。若应用把它作为 presence 发送，必须先认证和授权 peer 与复制组、验证 anchor，并限制
+presence 消息本身。墓碑保留期间仍能解析其结构边界；精确墓碑回收会移除 marker，此时
+`ResolveAnchor` 返回 `ErrAnchorGone`。客户端必须丢弃或刷新该光标，不能臆测映射到文本开头、末尾或
+附近位置。
+
 向量文件中的 hex 帧和元数据是跨语言契约；64 位值在 JSON 中以字符串表示。至少应验证外层、
 展开后的节点/parent/rune/墓碑、逐字节重编码和空文档应用后的文本；并对 checksum、varint、
 TypeID 和超限输入做原子拒绝测试。仓库通过 `go test ./text`、`make typescript-test`、

@@ -148,7 +148,31 @@ graph, canonical form, resource budgets, and manifest before changing visible
 text, HLC state, pending queues, or persistence. Duplicate frames and a delta
 whose contents are already present are successful no-ops.
 
-## 7. Limits and persistence
+## 7. Local cursor and selection anchors
+
+`text.Anchor` is a local RGA API, not a run-v2 field or a new negotiated
+protocol. `AnchorAt(offset)` records the boundary immediately before the
+following visible position; an anchor at the visible end uses the synthetic
+root's `AnchorAfter` boundary. Two anchors can therefore represent a selection
+without repeatedly materializing a full visible-position projection.
+
+`ResolveAnchor` uses the RGA visibility index and is `O(log n)`. Given the
+same converged RGA state, replicas resolve the same retained anchor to the same
+rune offset. A caller may explicitly use `AnchorAfter` for the boundary after
+one position itself and before that position's descendants. A tombstoned
+position remains a valid structural boundary, so resolution continues while
+the tombstone is retained.
+
+Anchors are application-owned, ephemeral cursor metadata. They MUST NOT be
+embedded in a state or delta frame, and a frame checksum does not authenticate
+an anchor sent by a peer. An application that transports anchors as presence
+data must authenticate and authorize its peer and replication group, validate
+the anchor, and bound its own presence messages. Exact tombstone compaction
+removes the referenced marker; `ResolveAnchor` then returns `ErrAnchorGone`.
+The application MUST drop or refresh that cursor rather than silently mapping
+the missing position to the start, end, or a nearby rune.
+
+## 8. Limits and persistence
 
 Limits are part of deployment policy, not an excuse to accept partial input.
 At minimum, bound transport bytes, complete frame and payload bytes, codec and
@@ -165,7 +189,7 @@ an authenticated authoritative membership epoch, exact acknowledgements for
 each requested tag, a durable post-compaction checkpoint, and retirement of
 old-epoch frames.
 
-## 8. Conformance vectors and verification
+## 9. Conformance vectors and verification
 
 [`testdata/rga-run-v2-vectors.json`](testdata/rga-run-v2-vectors.json) contains
 machine-readable canonical frames. Unsigned 64-bit values are JSON strings in
@@ -186,7 +210,7 @@ Run `make wasm-test` for a real Go/Wasm–TypeScript three-replica session, and
 `make wasm-v1-test` only when maintaining an explicitly negotiated legacy
 migration group.
 
-## 9. Versioning rule
+## 10. Versioning rule
 
 TypeIDs 19/20 and semantics version 2 are immutable. Any incompatible field,
 ordering, checksum, graph, or compaction change requires a new TypeID pair and
