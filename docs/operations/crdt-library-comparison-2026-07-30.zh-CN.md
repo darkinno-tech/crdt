@@ -22,13 +22,13 @@ Yjs 使用 JavaScript，二者 wire format 不兼容，文本存储模型也刻�
 ## 本机受控结果
 
 主机：Apple M4 Pro（12 logical CPUs、24 GiB），Darwin arm64；Go `1.26.5`、Node
-`v26.5.0`；harness revision `a0d0e82b939efd5e62414774440a06906e4be429`。Yjs 依赖由
+`v26.5.0`；harness revision `8cc25755dc5dbc4163c7c68eb2de80075f5d29bf`。Yjs 依赖由
 [`bench/competitors/package-lock.json`](../../bench/competitors/package-lock.json) 固定。
 
 | Runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
 | ---: | ---: | ---: | ---: | ---: |
-| 4,096 | 6.910 | 0.130 | 36,646 / 36,646 | 4,114 / 4,114 |
-| 16,384 | 28.225 | 0.085 | 147,239 / 147,239 | 16,403 / 16,403 |
+| 4,096 | 6.076 | 0.117 | 36,774 / 36,774 | 4,113 / 4,113 |
+| 16,384 | 25.650 | 0.079 | 147,367 / 147,367 | 16,403 / 16,403 |
 
 字节数只对这个“协议互不兼容但工作负载一致”的场景有效：DarkInno 稳定的每 Unicode
 scalar RGA identity，相比 Yjs 紧凑的单字符串初始 update，约多九倍字节。时间数据可
@@ -54,8 +54,8 @@ DarkInno observer 还必须没有 pending parent。报告的 update bytes 为一
 
 | Base runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
 | ---: | ---: | ---: | ---: | ---: |
-| 4,096 | 16.621 | 0.475 | 36,821 / 36,769 | 4,184 / 4,189 |
-| 16,384 | 68.818 | 0.535 | 147,414 / 147,362 | 16,473 / 16,477 |
+| 4,096 | 14.639 | 0.444 | 36,949 / 36,897 | 4,177 / 4,181 |
+| 16,384 | 62.830 | 0.527 | 147,414 / 147,362 | 16,473 / 16,477 |
 
 该场景验证的是两套实现各自在相同编辑与投递 trace 下的收敛，而不是两种独立 CRDT
 算法必然呈现相同的并发 tie-break 可见顺序；它也不证明浏览器/WAN 性能、retained heap

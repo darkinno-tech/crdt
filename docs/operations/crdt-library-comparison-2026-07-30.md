@@ -27,14 +27,14 @@ not divide the elapsed times across runtimes to make an absolute speed claim.
 ## Controlled local result
 
 Host: Apple M4 Pro (12 logical CPUs, 24 GiB), Darwin arm64; Go `1.26.5`, Node
-`v26.5.0`; harness revision `a0d0e82b939efd5e62414774440a06906e4be429`.
+`v26.5.0`; harness revision `8cc25755dc5dbc4163c7c68eb2de80075f5d29bf`.
 The `yjs` dependency is pinned by
 [`bench/competitors/package-lock.json`](../../bench/competitors/package-lock.json).
 
 | Runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
 | ---: | ---: | ---: | ---: | ---: |
-| 4,096 | 6.910 | 0.130 | 36,646 / 36,646 | 4,114 / 4,114 |
-| 16,384 | 28.225 | 0.085 | 147,239 / 147,239 | 16,403 / 16,403 |
+| 4,096 | 6.076 | 0.117 | 36,774 / 36,774 | 4,113 / 4,113 |
+| 16,384 | 25.650 | 0.079 | 147,367 / 147,367 | 16,403 / 16,403 |
 
 The byte comparison is valid for this exact interoperably **unrelated**
 workload: it reveals that DarkInno's stable per-Unicode-scalar RGA identifiers
@@ -68,8 +68,8 @@ unique writer updates; state bytes are the final left-replica state.
 
 | Base runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
 | ---: | ---: | ---: | ---: | ---: |
-| 4,096 | 16.621 | 0.475 | 36,821 / 36,769 | 4,184 / 4,189 |
-| 16,384 | 68.818 | 0.535 | 147,414 / 147,362 | 16,473 / 16,477 |
+| 4,096 | 14.639 | 0.444 | 36,949 / 36,897 | 4,177 / 4,181 |
+| 16,384 | 62.830 | 0.527 | 147,414 / 147,362 | 16,473 / 16,477 |
 
 This verifies each implementation's own convergence under the same edit and
 delivery trace. It does not prove identical visible tie-break presentation
