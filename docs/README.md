@@ -43,6 +43,7 @@ be committed.
 - [Rich-text v1 wire protocol](protocol/richtext-v1.md)
 - [Observed-remove tree v1 wire protocol](protocol/or-tree-v1.md)
 - [Bounded rich-text inline-format design](design/rich-text.md)
+- [Nested CRDT composition decision](design/nested-crdt-composition.zh-CN.md)
 
 ## Operations and architecture
 
