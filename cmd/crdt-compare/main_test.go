@@ -51,7 +51,7 @@ func TestCompareHelpersAndInvalidArguments(t *testing.T) {
 }
 
 func TestCompareWritesRequestedFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "report.json")
+	path := filepath.Join(t.TempDir(), "reports", "report.json")
 	if err := run([]string{"-sizes", "1", "-samples", "1", "-warmups", "0", "-iterations", "1", "-output", path}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}

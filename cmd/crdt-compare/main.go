@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -47,7 +48,7 @@ func run(args []string, writer io.Writer) (err error) {
 		warmups    = flags.Int("warmups", 2, "unreported warmups per size")
 		iterations = flags.Int("iterations", 20, "operations per reported sample")
 		revision   = flags.String("revision", "unknown", "source revision recorded in output")
-		output     = flags.String("output", "-", "output path, or - for stdout")
+		output     = flags.String("output", "-", "output path (creates parent directories), or - for stdout")
 	)
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -183,6 +184,9 @@ func parseSizes(value string) ([]int, error) {
 func outputWriter(path string) (io.Writer, func() error, error) {
 	if path == "-" {
 		return os.Stdout, func() error { return nil }, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, nil, err
 	}
 	file, err := os.Create(path)
 	if err != nil {
