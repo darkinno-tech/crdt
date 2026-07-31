@@ -45,6 +45,16 @@ this one uninterrupted insertion compactly, while DarkInno keeps independent
 positions so deletes, out-of-order delivery, anchors, and future concurrent
 inserts preserve their documented RGA semantics.
 
+That is a design trade-off, not a defect. A separately negotiated outer frame
+v2 may compress repeated run-v2 payload fields for large pastes and snapshots,
+but it retains the same independently addressable HLC tags and parent links.
+It must not be presented as changing this cross-library byte ratio or as making
+the two wire formats interoperable. For a v2-negotiated Go/Wasm group,
+`InsertRunFrameV2WithLimits`, `MarshalRunFrameV2`, and
+`SnapshotRunFrameV2CurrentStateWithLimits` write that representation directly;
+small edits may still use a raw v2 payload when compression would not reduce
+the complete envelope.
+
 ## Supplied-host DarkInno confirmation
 
 The same source was cross-compiled with `GOOS=linux GOARCH=amd64 CGO_ENABLED=0`.

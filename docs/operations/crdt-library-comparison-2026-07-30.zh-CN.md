@@ -36,6 +36,13 @@ scalar RGA identity，相比 Yjs 紧凑的单字符串初始 update，约多九�
 连续插入；DarkInno 则保留独立 position，以兑现删除、乱序投递、anchor 和未来并发插入
 的 RGA 语义。
 
+这是设计权衡，而不是缺陷。经单独协商的 outer frame v2 可以为大粘贴和快照压缩 run-v2
+payload 中重复的字段，但仍保留每个 scalar 可独立寻址的 HLC tag 与 parent link。不能把它表述成
+改变上述跨库字节比例，或使两种 wire format 互操作。对已协商 v2 的 Go/Wasm 组，
+`InsertRunFrameV2WithLimits`、`MarshalRunFrameV2` 和
+`SnapshotRunFrameV2CurrentStateWithLimits` 可直接写出该表示；如果压缩不能降低完整 envelope，
+小编辑仍可能使用 raw v2 payload。
+
 ## 提供测试机上的 DarkInno 确认
 
 同一源码以 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0` 交叉编译。每台临时远端副本执行
