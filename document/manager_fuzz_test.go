@@ -1,0 +1,198 @@
+package document
+
+import (
+	"bytes"
+	"fmt"
+	"math/rand"
+	"reflect"
+	"sync"
+	"testing"
+
+	"github.com/DarkInno/crdt/list"
+)
+
+// FuzzDocManagerMultiReplicaMoveModel generates independent local list models
+// for three replicas and two documents, then delivers every delta in a unique,
+// shuffled, duplicated order. It checks both the sequential Move contract at
+// its source and final multi-replica convergence. This complements decoder
+// fuzzing by exploring legal but adversarial operation schedules.
+func FuzzDocManagerMultiReplicaMoveModel(f *testing.F) {
+	f.Add([]byte{0x11, 0x62, 0xA4, 0x3F, 0xD1, 0x08})
+	f.Add(bytes.Repeat([]byte{0xFF, 0x00, 0x55}, 12))
+	f.Fuzz(func(t *testing.T, input []byte) {
+		const replicas = 3
+		documentIDs := []string{"backlog", "roadmap"}
+		managers := make([]*DocManager[string], replicas)
+		models := make([][][]string, replicas)
+		for replica := 0; replica < replicas; replica++ {
+			managers[replica] = mustManager(t)
+			models[replica] = make([][]string, len(documentIDs))
+			for _, id := range documentIDs {
+				if _, err := managers[replica].CreateDocument(id, fmt.Sprintf("replica-%d-%s", replica, id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+
+		type routedDelta struct {
+			documentID string
+			delta      list.MoveDelta
+		}
+		messages := make([]routedDelta, 0, len(input)+len(documentIDs))
+		for documentIndex, id := range documentIDs {
+			seed := []string{"seed-a", "seed-b", "seed-c", "seed-d"}
+			delta, err := managers[0].Insert(id, 0, seed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			messages = append(messages, routedDelta{documentID: id, delta: delta})
+			for replica := 0; replica < replicas; replica++ {
+				models[replica][documentIndex] = append([]string(nil), seed...)
+				if replica != 0 {
+					if err := managers[replica].ApplyDelta(id, delta); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+
+		for step, byteValue := range input {
+			replica := int(byteValue) % replicas
+			documentIndex := int(byteValue>>2) % len(documentIDs)
+			documentID := documentIDs[documentIndex]
+			model := models[replica][documentIndex]
+			var (
+				delta list.MoveDelta
+				err   error
+			)
+			switch int(byteValue>>4) % 3 {
+			case 0:
+				offset := int(byteValue>>6) % (len(model) + 1)
+				value := fmt.Sprintf("%d-%02x", step, byteValue)
+				delta, err = managers[replica].Insert(documentID, offset, []string{value})
+				if err == nil {
+					model = insertModel(model, offset, value)
+				}
+			case 1:
+				if len(model) == 0 {
+					continue
+				}
+				offset := int(byteValue>>6) % len(model)
+				delta, err = managers[replica].Delete(documentID, offset, 1)
+				if err == nil {
+					model = deleteModel(model, offset, 1)
+				}
+			default:
+				if len(model) < 2 {
+					continue
+				}
+				from := int(byteValue>>6) % len(model)
+				count := 1 + (step % min(2, len(model)-from))
+				to := (step + int(byteValue)) % (len(model) - count + 1)
+				delta, err = managers[replica].Move(documentID, from, count, to)
+				if err == nil {
+					model = moveModel(model, from, count, to)
+				}
+			}
+			if err != nil {
+				t.Fatalf("step %d local operation: %v", step, err)
+			}
+			models[replica][documentIndex] = model
+			assertDocumentValues(t, managers[replica], documentID, model)
+			messages = append(messages, routedDelta{documentID: documentID, delta: delta})
+		}
+
+		var group sync.WaitGroup
+		errors := make(chan error, replicas)
+		for replica := 0; replica < replicas; replica++ {
+			replica := replica
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				random := rand.New(rand.NewSource(int64(replica+1)*1_000_003 + int64(len(input))))
+				order := random.Perm(len(messages))
+				for _, index := range order {
+					message := messages[index]
+					for delivery := 0; delivery < 1+random.Intn(3); delivery++ {
+						if err := managers[replica].ApplyDelta(message.documentID, message.delta); err != nil {
+							errors <- fmt.Errorf("replica %d apply %s: %w", replica, message.documentID, err)
+							return
+						}
+					}
+				}
+			}()
+		}
+		group.Wait()
+		close(errors)
+		for err := range errors {
+			t.Fatal(err)
+		}
+
+		for _, id := range documentIDs {
+			baseline, ok := managers[0].Document(id)
+			if !ok {
+				t.Fatalf("baseline %s missing", id)
+			}
+			wantValues, err := baseline.Values()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantState, err := baseline.MarshalBinary()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for replica := 1; replica < replicas; replica++ {
+				document, ok := managers[replica].Document(id)
+				if !ok {
+					t.Fatalf("replica %d %s missing", replica, id)
+				}
+				values, err := document.Values()
+				if err != nil || !reflect.DeepEqual(values, wantValues) {
+					t.Fatalf("replica %d %s values = %q, %v; want %q", replica, id, values, err, wantValues)
+				}
+				state, err := document.MarshalBinary()
+				if err != nil || !bytes.Equal(state, wantState) {
+					t.Fatalf("replica %d %s state diverged: %v", replica, id, err)
+				}
+			}
+		}
+	})
+}
+
+func insertModel(values []string, offset int, value string) []string {
+	result := append([]string(nil), values[:offset]...)
+	result = append(result, value)
+	return append(result, values[offset:]...)
+}
+
+func deleteModel(values []string, offset, count int) []string {
+	result := append([]string(nil), values[:offset]...)
+	return append(result, values[offset+count:]...)
+}
+
+func moveModel(values []string, from, count, to int) []string {
+	selected := append([]string(nil), values[from:from+count]...)
+	remaining := deleteModel(values, from, count)
+	result := append([]string(nil), remaining[:to]...)
+	result = append(result, selected...)
+	return append(result, remaining[to:]...)
+}
+
+func assertDocumentValues(t testing.TB, manager *DocManager[string], id string, want []string) {
+	t.Helper()
+	document, ok := manager.Document(id)
+	if !ok {
+		t.Fatalf("document %s missing", id)
+	}
+	got, err := document.Values()
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("document %s values = %q, %v; want %q", id, got, err, want)
+	}
+}
+
+func min(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
+}
