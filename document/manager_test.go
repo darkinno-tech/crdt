@@ -105,6 +105,15 @@ func TestDocManagerBoundsAndIdentifiers(t *testing.T) {
 			t.Fatalf("CreateDocument(%q) = %v, want invalid ID", id, err)
 		}
 	}
+	if _, err := manager.CreateDocument("bad\x00id", "writer"); !errors.Is(err, ErrInvalidDocumentID) {
+		t.Fatalf("control document ID = %v", err)
+	}
+	if _, err := manager.CreateDocument("bad", ""); !errors.Is(err, list.ErrInvalidReplica) {
+		t.Fatalf("invalid replica ID = %v", err)
+	}
+	if document, ok := manager.Document(" bad"); document != nil || ok {
+		t.Fatalf("invalid document lookup = %#v, %t", document, ok)
+	}
 	if _, err := manager.CreateDocument("one", "writer"); err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +126,18 @@ func TestDocManagerBoundsAndIdentifiers(t *testing.T) {
 	if _, err := manager.Insert("missing", 0, []string{"x"}); !errors.Is(err, ErrDocumentNotFound) {
 		t.Fatalf("missing insert = %v", err)
 	}
+	if _, err := manager.Delete("missing", 0, 0); !errors.Is(err, ErrDocumentNotFound) {
+		t.Fatalf("missing delete = %v", err)
+	}
+	if _, err := manager.Move("missing", 0, 0, 0); !errors.Is(err, ErrDocumentNotFound) {
+		t.Fatalf("missing move = %v", err)
+	}
+	if _, err := manager.Delete("one", 0, 0); err != nil {
+		t.Fatalf("empty delete = %v", err)
+	}
+	if _, err := manager.Move("one", 0, 0, 0); err != nil {
+		t.Fatalf("empty move = %v", err)
+	}
 
 	var nilManager *DocManager[string]
 	if _, err := nilManager.CreateDocument("one", "writer"); !errors.Is(err, ErrNilManager) {
@@ -124,6 +145,15 @@ func TestDocManagerBoundsAndIdentifiers(t *testing.T) {
 	}
 	if err := nilManager.ApplyDelta("one", list.MoveDelta{}); !errors.Is(err, ErrNilManager) {
 		t.Fatalf("nil apply = %v", err)
+	}
+	if document, ok := nilManager.Document("one"); document != nil || ok {
+		t.Fatalf("nil document lookup = %#v, %t", document, ok)
+	}
+	if ids := nilManager.DocumentIDs(); ids != nil {
+		t.Fatalf("nil document IDs = %q", ids)
+	}
+	if got := nilManager.Len(); got != 0 {
+		t.Fatalf("nil Len() = %d", got)
 	}
 }
 
