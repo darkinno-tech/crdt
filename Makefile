@@ -75,6 +75,7 @@ fuzz-smoke:
 	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./awareness
+	go test -run=^$$ -fuzz=FuzzDocumentTreeWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./documenttree
 	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
 	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./replica
 
