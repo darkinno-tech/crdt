@@ -133,12 +133,20 @@ func unmarshalMoveRGA(data []byte, expectedType uint64, codecID string, limits f
 		return MoveDelta{}, frame.ErrInvalidFrame
 	}
 	position := 0
+	maxElements, elementsOK := moveLimit(limits.MaxElements)
+	maxTags, tagsOK := moveLimit(limits.MaxTags)
+	if !elementsOK || !tagsOK {
+		return MoveDelta{}, frame.ErrInvalidFrame
+	}
 	nodeCount, next, ok := frame.ReadUvarint(decoded.Payload, position)
-	if !ok || nodeCount > uint64(limits.MaxElements) || nodeCount > uint64(limits.MaxTags) {
+	if !ok || nodeCount > maxElements || nodeCount > maxTags {
 		return MoveDelta{}, frame.ErrInvalidFrame
 	}
 	position = next
-	delta := MoveDelta{codecID: codecID, nodes: make(map[Position]node, int(nodeCount)), tombstones: map[Position]struct{}{}, moves: map[Position]moveRecord{}}
+	// nodeCount is bounded by maxElements and maxTags, each converted from a
+	// validated positive int limit. Preserve the preallocated decoder map.
+	nodeCapacity := int(nodeCount) // #nosec G115 -- bounded by validated DecoderLimits.
+	delta := MoveDelta{codecID: codecID, nodes: make(map[Position]node, nodeCapacity), tombstones: map[Position]struct{}{}, moves: map[Position]moveRecord{}}
 	var previous Position
 	for index := uint64(0); index < nodeCount; index++ {
 		id, next, ok := frame.ReadTag(decoded.Payload, position, limits.MaxStringBytes)
@@ -168,10 +176,13 @@ func unmarshalMoveRGA(data []byte, expectedType uint64, codecID string, limits f
 		delta.nodes[id] = item
 	}
 	tombstoneCount, next, ok := frame.ReadUvarint(decoded.Payload, position)
-	if !ok || tombstoneCount > uint64(limits.MaxTags) {
+	if !ok || tombstoneCount > maxTags {
 		return MoveDelta{}, frame.ErrInvalidFrame
 	}
 	position = next
+	// tombstoneCount is bounded by maxTags above.
+	tombstoneCapacity := int(tombstoneCount) // #nosec G115 -- bounded by validated DecoderLimits.
+	delta.tombstones = make(map[Position]struct{}, tombstoneCapacity)
 	previous = Position{}
 	for index := uint64(0); index < tombstoneCount; index++ {
 		id, next, ok := frame.ReadTag(decoded.Payload, position, limits.MaxStringBytes)
@@ -182,10 +193,15 @@ func unmarshalMoveRGA(data []byte, expectedType uint64, codecID string, limits f
 		delta.tombstones[id] = struct{}{}
 	}
 	moveCount, next, ok := frame.ReadUvarint(decoded.Payload, position)
-	if !ok || moveCount > uint64(limits.MaxTags) {
+	// Nodes and moves both consume tag budget. Checking their sum before the
+	// move-map allocation prevents a crafted frame from doubling that bound.
+	if !ok || moveCount > maxTags-nodeCount {
 		return MoveDelta{}, frame.ErrInvalidFrame
 	}
 	position = next
+	// moveCount is bounded by the remaining tag budget above.
+	moveCapacity := int(moveCount) // #nosec G115 -- bounded by validated DecoderLimits.
+	delta.moves = make(map[Position]moveRecord, moveCapacity)
 	previous = Position{}
 	for index := uint64(0); index < moveCount; index++ {
 		id, next, ok := frame.ReadTag(decoded.Payload, position, limits.MaxStringBytes)
@@ -222,6 +238,15 @@ func unmarshalMoveRGA(data []byte, expectedType uint64, codecID string, limits f
 		return MoveDelta{}, frame.ErrInvalidFrame
 	}
 	return delta, nil
+}
+
+func moveLimit(value int) (uint64, bool) {
+	if value <= 0 {
+		return 0, false
+	}
+	// Conversion through uint is width-preserving for a positive int, then
+	// widening to uint64 is safe on both 32- and 64-bit targets.
+	return uint64(uint(value)), true
 }
 
 func validateMoveCodecValues[T any](delta MoveDelta, codec ElementCodec[T]) error {

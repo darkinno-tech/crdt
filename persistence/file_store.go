@@ -99,7 +99,7 @@ func (store *FileStore) Save(name string, checkpoint Checkpoint) error {
 	if store == nil || store.closed.Load() {
 		return ErrClosed
 	}
-	if !store.config.Config.validName(name) {
+	if !store.config.validName(name) {
 		return ErrInvalidCheckpoint
 	}
 	normalized, err := normalizeCheckpoint(checkpoint, store.config.Config)
@@ -140,7 +140,7 @@ func (store *FileStore) Load(name string) (checkpoint Checkpoint, found bool, er
 	if store == nil || store.closed.Load() {
 		return Checkpoint{}, false, ErrClosed
 	}
-	if !store.config.Config.validName(name) {
+	if !store.config.validName(name) {
 		return Checkpoint{}, false, ErrInvalidCheckpoint
 	}
 	store.mu.RLock()
@@ -172,7 +172,7 @@ func (store *FileStore) Delete(name string) (found bool, err error) {
 	if store == nil || store.closed.Load() {
 		return false, ErrClosed
 	}
-	if !store.config.Config.validName(name) {
+	if !store.config.validName(name) {
 		return false, ErrInvalidCheckpoint
 	}
 	store.mu.Lock()
@@ -256,6 +256,8 @@ func loadFileRecords(path string, config FileConfig) (map[string][]byte, error) 
 	if info.Size() > int64(config.MaxStoreBytes) {
 		return nil, ErrCorruptStore
 	}
+	// #nosec G304 -- OpenFile accepts an application-owned path; Lstat above
+	// rejects symlinks, non-regular files, and group/other-readable files.
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open file persistence store: %w", err)
@@ -286,7 +288,7 @@ func marshalFileRecords(records map[string][]byte, config FileConfig) ([]byte, e
 	sort.Strings(names)
 	encoded = frame.AppendUvarint(encoded, uint64(len(names)))
 	for _, name := range names {
-		if !config.Config.validName(name) {
+		if !config.validName(name) {
 			return nil, ErrInvalidCheckpoint
 		}
 		record := records[name]
@@ -318,7 +320,8 @@ func unmarshalFileRecords(data []byte, config FileConfig) (map[string][]byte, er
 	}
 	position := len(fileMagic) + 1
 	count, next, ok := frame.ReadUvarint(data[:payloadEnd], position)
-	if !ok || count > uint64(payloadEnd-position) {
+	remaining := payloadEnd - position
+	if !ok || remaining < 0 || count > uint64(uint(remaining)) {
 		return nil, ErrCorruptStore
 	}
 	position = next
@@ -330,7 +333,7 @@ func unmarshalFileRecords(data []byte, config FileConfig) (map[string][]byte, er
 			return nil, ErrCorruptStore
 		}
 		name := string(nameBytes)
-		if !config.Config.validName(name) || name <= previousName {
+		if !config.validName(name) || name <= previousName {
 			return nil, ErrCorruptStore
 		}
 		position = next
@@ -380,6 +383,8 @@ func replaceFile(path string, data []byte) (replaced bool, err error) {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return false, err
 	}
+	// #nosec G304 -- directory is derived from the application-owned FileStore
+	// path and was checked as an existing directory by OpenFile.
 	directoryHandle, err := os.Open(directory)
 	if err != nil {
 		return true, err

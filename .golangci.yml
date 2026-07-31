@@ -30,9 +30,11 @@ formatters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-  # Adopt the expanded checks incrementally: existing protocol code stays
-  # visible to dedicated audits, while new and changed lines cannot add debt.
-  new: true
+  # Compare the complete beta candidate with its release base. `issues.new`
+  # only inspects HEAD~ and misses earlier commits when beta CI cancels stale
+  # runs; whole files catch a new issue adjacent to the edited hunk as well.
+  new-from-merge-base: origin/main
+  whole-files: true
 
 run:
   relative-path-mode: gomod

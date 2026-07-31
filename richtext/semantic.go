@@ -3,6 +3,7 @@ package richtext
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -327,7 +328,7 @@ func jsonObject(value string) bool {
 	return decoder.Decode(&object) == nil && object != nil
 }
 
-func blockLevel(level int) string { return string(rune('0' + level)) }
+func blockLevel(level int) string { return strconv.Itoa(level) }
 
 func paragraphBounds(runes []rune, start, end int) (int, int) {
 	collapsed := start == end
