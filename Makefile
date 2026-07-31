@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-bindings-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -10,6 +10,10 @@ FUZZ_PARALLEL ?= 1
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
 NPM ?= npm
+RUST_MANIFEST ?= clients/rust/Cargo.toml
+RUST_LIBRARY_DIR ?= $(CURDIR)/clients/rust/target/debug
+RUST_LIBRARY_EXTENSION ?= $(shell uname -s | sed -e 's/^Darwin$$/dylib/' -e 's/^Linux$$/so/')
+RUST_LIBRARY_NAME ?= libdarkinno_crdt_rga.$(RUST_LIBRARY_EXTENSION)
 
 fmt-check:
 	test -z "$$(gofmt -l .)"
@@ -113,6 +117,26 @@ wasm-benchmark: wasm
 wasm-bindings-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm-bindings
+
+# Native language clients share the Rust run-v2 core and its C ABI. They are
+# intentionally optional: the Go-only verify/docker images do not install the
+# Rust, Python, or Swift toolchains. Release candidates run these explicitly.
+rust-test:
+	cargo fmt --manifest-path "$(RUST_MANIFEST)" -- --check
+	cargo test --manifest-path "$(RUST_MANIFEST)"
+	cargo clippy --manifest-path "$(RUST_MANIFEST)" --all-targets -- -D warnings
+
+rust-benchmark:
+	cargo bench --manifest-path "$(RUST_MANIFEST)" --bench rga
+
+python-test:
+	cargo build --manifest-path "$(RUST_MANIFEST)"
+	CRDT_RGA_LIBRARY="$(RUST_LIBRARY_DIR)/$(RUST_LIBRARY_NAME)" python3 -m unittest clients/python/tests/test_rga.py -v
+
+swift-test:
+	@test "$$(uname -s)" = Darwin || (echo "swift-test requires a Darwin Rust dynamic library" >&2; exit 2)
+	cargo build --manifest-path "$(RUST_MANIFEST)"
+	CRDT_RGA_LIBRARY_DIR="$(RUST_LIBRARY_DIR)" DYLD_LIBRARY_PATH="$(RUST_LIBRARY_DIR)" swift run --package-path clients/swift crdt-rga-swift-conformance
 
 docker-test:
 	docker build --build-arg GO_IMAGE=$${DOCKER_GO_IMAGE:-golang:1.26-bookworm} --file Dockerfile.ci --tag crdt-ci:local .

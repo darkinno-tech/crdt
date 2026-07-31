@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "darkinno-crdt-rga"
+version = "0.1.0"
+description = "Python bindings for the bounded DarkInno rga-run-v2 native runtime"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["crdt_rga"]
