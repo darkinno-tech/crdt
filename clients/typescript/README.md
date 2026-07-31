@@ -98,6 +98,67 @@ is a new semantics contract, not Yjs compatibility, a Go frame TypeID, or a
 transparent upgrade for a `NativeDocument` peer. See the
 [nested-type design](../../docs/design/native-typescript-nested-types.md).
 
+### Native collection bindings
+
+`@darkinno/crdt-client/collections` adds bounded Counter, Set, LWW register,
+and Tree views over a private `native-ts-v1` root namespace. Their negotiated
+semantic identifier is **`native-ts-collections-v1`**. The transport update is
+still canonical `native-ts-v1` JSON, but a peer must declare the same logical
+root names and types before applying it through `NativeCollectionsDocument`.
+Do not pass these updates to a raw `NativeDocument`, a Go frame decoder, or a
+Go Counter/Set/LWW/Tree group: that would bypass the collection semantic
+validator and does not establish wire compatibility.
+
+```ts
+import {
+  encodeNativeUpdate,
+  NativeCollectionsDocument,
+} from "@darkinno/crdt-client/collections";
+
+const board = new NativeCollectionsDocument("tablet-7");
+const inspections = board.getCounter("inspections"); // PN-Counter
+const openTasks = board.getORSet<{ id: string }>("open-tasks");
+const title = board.getLWWRegister<string>("title");
+const outline = board.getORTree<{ kind: string }>("outline");
+
+board.onUpdate(({ update, local }) => {
+  if (local) socket.send(encodeNativeUpdate(update));
+});
+
+board.transact(() => {
+  inspections.increment(1n);
+  openTasks.add({ id: "task-42" });
+  title.set("Morning inspection");
+  const root = outline.add(null, { kind: "report" });
+  outline.add(root, { kind: "finding" });
+});
+
+socket.onmessage = ({ data }) => {
+  board.applyEncodedUpdate(new Uint8Array(data), "authenticated-peer");
+};
+```
+
+- `NativeCounter` is a PN-Counter. Each actor only advances its own retained
+  positive/negative component; reads return `bigint`, and a remote component
+  that decreases under a newer tag is rejected before native-map mutation.
+- `NativeORSet` has immutable add tags and retained observed-remove
+  tombstones. A remove delivered before its add still wins when that add
+  arrives. Equal values may have several tags but appear once in `values()`.
+- `NativeLWWRegister` is a one-value retained-tombstone register; the existing
+  native ID order (counter, then UTF-8 actor bytes) resolves concurrency.
+- `NativeORTree` retains immutable parent links plus tombstones. Missing or
+  deleted parents hide descendants; moves are remove plus a new add, never a
+  parent rewrite. Cycles, excessive depth, pending parents, nodes, and
+  tombstones are rejected under explicit limits.
+
+Snapshots include root declarations, current bounded native-map state, and the
+local counter. Persist that unit atomically with the authenticated outbox and
+delivery frontier before reusing a replica ID. CRC/checksums in a surrounding
+transport still do not authenticate a peer or authorize a mutation.
+
+The [collection and rich-text architecture assessment](../../docs/design/typescript-client-types-and-rich-text.md)
+records the wire boundary and the next rich-editor implementation gate.
+
 ### Native protocol, limits, and persistence
 
 `native-ts-v1` updates are immutable operation sets, not authentication. A
