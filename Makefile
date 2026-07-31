@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -132,6 +132,10 @@ typescript-bindings-benchmark:
 wasm-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm
+
+wasm-browser-benchmark: wasm
+	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
+	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm-browser
 
 wasm-bindings-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline

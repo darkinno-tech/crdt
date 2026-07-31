@@ -6,7 +6,7 @@ import {
   NativeBrowserError,
   openNativeBrowserDocument,
 } from "../dist/browser.js";
-import { decodeNativeUpdate, encodeNativeUpdate } from "../dist/native.js";
+import { decodeNativeUpdate, encodeNativeUpdate, NativeDocument } from "../dist/native.js";
 
 test("browser document atomically restores a local update and retries it from the durable outbox", async () => {
   const persistence = new MemoryNativeBrowserPersistence();
@@ -257,3 +257,88 @@ test("a browser log retains an incomplete receive graph and compacts only after 
   await source.close();
   await target.close();
 });
+
+test("compaction never checkpoints a later in-memory update whose append has not committed", async () => {
+  const source = new NativeDocument("source");
+  const frames = [];
+  source.onUpdate((event) => frames.push(encodeNativeUpdate(event.update, source.limits)));
+  const metadata = source.getMap("metadata");
+  metadata.set("title", "first");
+  metadata.set("title", "second");
+
+  const persistence = new FailSecondAppendPersistence();
+  const target = await openNativeBrowserDocument({
+    documentID: "compaction-prefix",
+    replicaID: "target",
+    persistence,
+    persistenceLimits: {
+      compactAfterUpdates: 1,
+      compactAfterBytes: 1,
+      maxUpdates: 10,
+      maxBytes: 1 << 20,
+    },
+  });
+  assert.equal(target.applyEncodedUpdate(frames[0]), true);
+  assert.equal(target.applyEncodedUpdate(frames[1]), true);
+  await assert.rejects(
+    () => target.flush(),
+    (error) => error instanceof NativeBrowserError && error.code === "persistence_failed",
+  );
+  assert.ok(persistence.compactedSnapshot);
+  const recovered = NativeDocument.restore("target", persistence.compactedSnapshot);
+  assert.equal(recovered.getMap("metadata").get("title"), "first");
+  target.disconnect();
+});
+
+test("a receipt never checkpoints a later local update whose append has not committed", async () => {
+  const persistence = new FailSecondAppendPersistence();
+  const target = await openNativeBrowserDocument({
+    documentID: "receipt-prefix",
+    replicaID: "target",
+    persistence,
+    persistenceLimits: {
+      compactAfterUpdates: 1,
+      compactAfterBytes: 1,
+      maxUpdates: 10,
+      maxBytes: 1 << 20,
+    },
+    transport: {
+      send() {},
+      subscribe() { return () => {}; },
+    },
+  });
+  const metadata = target.getMap("metadata");
+  metadata.set("title", "first");
+  metadata.set("title", "second");
+  await assert.rejects(
+    () => target.flush(),
+    (error) => error instanceof NativeBrowserError && error.code === "persistence_failed",
+  );
+  assert.equal(persistence.compactedSnapshot, undefined);
+  target.disconnect();
+});
+
+class FailSecondAppendPersistence {
+  appendCalls = 0;
+  compactedSnapshot;
+
+  async load() {
+    return undefined;
+  }
+
+  async writeMetadata() {}
+
+  async append() {
+    this.appendCalls += 1;
+    if (this.appendCalls === 2) {
+      throw new NativeBrowserError("persistence_failed");
+    }
+    return { sequence: 1, updateCount: 1, logBytes: 64 };
+  }
+
+  async acknowledge() {}
+
+  async compact(_key, snapshot) {
+    this.compactedSnapshot = snapshot;
+  }
+}

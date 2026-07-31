@@ -28,6 +28,9 @@ export type {
   RichTextProtocol,
   RGAProtocolExpectation,
   RGASnapshot,
+  RGAAnchor,
+  RGAAnchorAssociation,
+  RGAPosition,
   RGATag,
   RGAProtocol,
 } from "./wasm.js";
@@ -66,10 +69,14 @@ export {
   createBrowserReplicaID,
   BroadcastChannelNativeTransport,
   IndexedDBNativePersistence,
+  IndexedDBRGAWasmPersistence,
   MemoryNativeBrowserPersistence,
+  MemoryRGAWasmBrowserPersistence,
   NativeBrowserDocument,
   NativeBrowserError,
   openNativeBrowserDocument,
+  openRGAWasmBrowserDocument,
+  RGAWasmBrowserDocument,
 } from "./browser.js";
 export type {
   BrowserNativeDocumentOptions,
@@ -80,6 +87,10 @@ export type {
   NativeBrowserPersistence,
   NativeBrowserTransport,
   NativeBrowserUpdateEvent,
+  RGAWasmBrowserDocumentOptions,
+  RGAWasmBrowserPersistence,
+  RGAWasmBrowserUpdateEvent,
+  RGAWasmStoredDocument,
 } from "./browser.js";
 export {
   bindCodeMirrorPlainText,
@@ -100,6 +111,7 @@ export type {
   BindQuillRichTextOptions,
   CodeMirrorTextPort,
   CodeMirrorViewUpdate,
+  EditorTextSelection,
   LexicalTextPort,
   MonacoTextPort,
   PlainTextEditorPort,
@@ -113,6 +125,8 @@ export type {
   RichTextEditorOperation,
   RichTextSpan,
   RGAFrameListener,
+  RGASelection,
+  SelectionEditorPort,
   TiptapJSONNode,
   TiptapTextPort,
 } from "./bindings.js";

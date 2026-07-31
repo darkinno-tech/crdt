@@ -384,6 +384,46 @@ server-side policy enforcement.
 all three fields atomically via `runtime.restore(snapshot)`. Saving only the
 state frame risks reusing an HLC mutation tag after a process restart.
 
+### Offline-first Wasm RGA facade
+
+`openRGAWasmBrowserDocument` provides the same atomic recovery boundary for a
+manifest-selected Go/Wasm RGA actor without making every application rebuild
+an IndexedDB log and outbox:
+
+```ts
+import {
+  createBrowserReplicaID,
+  initRGAWasm,
+  openRGAWasmBrowserDocument,
+} from "@darkinno/crdt-client";
+
+const runtime = await initRGAWasm({ wasmURL: "/assets/crdt-rga.wasm" });
+const replicaID = createBrowserReplicaID("tab"); // one concurrently active actor
+const document = await openRGAWasmBrowserDocument({
+  documentID: authenticatedGroupID,
+  replicaID,
+  runtime,
+  transport: authenticatedRGAReceiptTransport,
+});
+document.insert(0, "offline draft");
+await document.flush();
+```
+
+The facade uses separate `rga-documents` / `rga-updates` stores; it never mixes
+Go RGA frames with `native-ts-v1` records. Its key contains both document and
+replica IDs, so a live second tab must create a fresh actor rather than reuse
+the first tab's HLC. The transport resolves only at the application-defined
+durable receipt; a raw WebSocket enqueue is not sufficient.
+
+`anchorAt(runeOffset)` and `resolveAnchor(anchor)` expose local cursor
+boundaries as RGA Position/Tags instead of emulating a Yjs relative position.
+The plain-text binding can capture/restore supported editor selections through
+remote merges. Anchors are ephemeral application/presence metadata: never put
+them in RGA frames, snapshots, or the durable outbox. See the
+[offline RGA architecture](../../docs/design/browser-wasm-rga-offline-client.md),
+[editor binding guide](../../docs/integration/rga-editor-bindings.md), and
+[controlled performance evidence](../../docs/operations/browser-wasm-rga-offline-2026-07-31.md).
+
 The default client budget is intentionally conservative: 1 MiB total frame,
 100,000 nodes/tags, 10,000 unresolved nodes, 512 KiB pending metadata, and
 64 KiB replica-ID strings. A single local insert is further capped at 64 KiB
