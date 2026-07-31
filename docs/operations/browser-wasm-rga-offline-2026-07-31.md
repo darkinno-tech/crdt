@@ -17,9 +17,9 @@ remote receipt measurement, or proof of browser quota/power-loss behaviour.
 
 | Metric | Samples | Median |
 | --- | --- | ---: |
-| append + flush total | 55.197, 39.276, 33.030, 33.105, 30.944 ms | 33.105 ms |
-| append + flush per mutation | 0.2156, 0.1534, 0.1290, 0.1293, 0.1209 ms | 0.1293 ms |
-| restore 256 frames | 7.054, 5.489, 6.495, 5.232, 5.042 ms | 5.489 ms |
+| append + flush total | 51.225, 33.102, 29.364, 29.397, 28.599 ms | 29.397 ms |
+| append + flush per mutation | 0.2001, 0.1293, 0.1147, 0.1148, 0.1117 ms | 0.1148 ms |
+| restore 256 frames | 6.817, 5.210, 5.876, 4.940, 4.913 ms | 5.210 ms |
 | retained canonical bytes | 15,083 bytes in every sample | 15,083 bytes |
 
 Run:
@@ -41,8 +41,8 @@ reopened the same actor record.
 
 | Workload | Result |
 | --- | ---: |
-| Go/Wasm RGA IndexedDB append + flush, 128 frames | 49.7 ms total / 0.3883 ms per frame |
-| close + reopen recovery of 128 frames | 5.1 ms |
+| Go/Wasm RGA IndexedDB append + flush, 128 frames | 60.4 ms total / 0.4719 ms per frame |
+| close + reopen recovery of 128 frames | 5.0 ms |
 | document text after recovery | 128 retained runes |
 | native IndexedDB and BroadcastChannel regression path | PASS |
 | browser console errors / framework overlay | none |
