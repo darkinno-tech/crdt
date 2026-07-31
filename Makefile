@@ -7,6 +7,10 @@ GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/
 # the fuzz context expires; 10s intermittently ended as context deadline.
 FUZZ_TIME ?= 20s
 FUZZ_PARALLEL ?= 1
+# XML starts from a much larger parser corpus and can need extra time for Go's
+# fuzz coordinator to quiesce after the requested window. Keep this targeted
+# grace period separate so ordinary decoder fuzzing remains fast.
+FUZZ_XML_TIME ?= 45s
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
 NPM ?= npm
@@ -56,7 +60,7 @@ vet:
 	go vet ./...
 
 fuzz:
-	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
+	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_XML_TIME="$(FUZZ_XML_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
 
 # List the release fuzz coverage derived from the current package graph. It is
 # intentionally separate from fuzz-smoke, whose small curated list documents
