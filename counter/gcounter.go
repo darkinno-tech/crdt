@@ -285,13 +285,18 @@ func unmarshalCounts(data []byte, expectedTypeID uint64, limits frame.DecoderLim
 	}
 	pos := 0
 	count, next, ok := frame.ReadUvarint(decoded.Payload, pos)
-	if !ok || count > uint64(limits.MaxElements) {
+	// Do not preallocate from an untrusted declaration. The loop validates each
+	// entry before adding it and applies MaxElements as it grows.
+	if !ok {
 		return nil, frame.ErrInvalidFrame
 	}
 	pos = next
-	counts := make(map[string]uint64, int(count))
+	counts := make(map[string]uint64)
 	previous := ""
 	for i := uint64(0); i < count; i++ {
+		if len(counts) >= limits.MaxElements {
+			return nil, frame.ErrInvalidFrame
+		}
 		keyBytes, next, ok := frame.ReadBytes(decoded.Payload, pos, limits.MaxStringBytes)
 		if !ok {
 			return nil, frame.ErrInvalidFrame

@@ -336,13 +336,18 @@ func unmarshalPNCounts(data []byte, expectedTypeID uint64, limits frame.DecoderL
 
 func unmarshalPNCountsSection(payload []byte, position, maxElements int, limits frame.DecoderLimits) (map[string]uint64, int, error) {
 	count, next, ok := frame.ReadUvarint(payload, position)
-	if !ok || count > uint64(maxElements) {
+	// Do not reserve map capacity from an untrusted declaration. The loop
+	// validates each entry before adding it and enforces the configured bound.
+	if !ok || maxElements < 0 {
 		return nil, position, frame.ErrInvalidFrame
 	}
 	position = next
-	counts := make(map[string]uint64, int(count))
+	counts := make(map[string]uint64)
 	previous := ""
 	for index := uint64(0); index < count; index++ {
+		if len(counts) >= maxElements {
+			return nil, position, frame.ErrInvalidFrame
+		}
 		keyBytes, next, ok := frame.ReadBytes(payload, position, limits.MaxStringBytes)
 		if !ok {
 			return nil, position, frame.ErrInvalidFrame
