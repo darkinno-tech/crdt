@@ -57,10 +57,10 @@ or peer write.
 
 | Run | ns/op | B/op | allocs/op |
 | ---: | ---: | ---: | ---: |
-| 1 | 108.3 | 136 | 3 |
-| 2 | 110.3 | 136 | 3 |
-| 3 | 108.5 | 136 | 3 |
-| Median | 108.5 | 136 | 3 |
+| 1 | 106.5 | 136 | 3 |
+| 2 | 103.8 | 136 | 3 |
+| 3 | 103.5 | 136 | 3 |
+| Median | 103.8 | 136 | 3 |
 
 Use it as a regression signal only. Before setting production limits, benchmark
 end-to-end p50/p95/p99 under expected update sizes, concurrent rooms, slow
