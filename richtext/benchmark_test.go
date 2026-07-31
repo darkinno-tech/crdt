@@ -119,6 +119,32 @@ func BenchmarkRichTextBlocksOneThousandParagraphs(b *testing.B) {
 	}
 }
 
+// BenchmarkRichTextApplyEditorDeltaReviewTransaction measures the complete
+// retain/format/insert transaction used by a rich editor, including the
+// isolated preflight clone that prevents a failed delete+insert from becoming
+// a local partial edit. It is a local Go-core regression signal, not browser
+// or network throughput.
+func BenchmarkRichTextApplyEditorDeltaReviewTransaction(b *testing.B) {
+	seed := benchmarkRichTextSeed(b, benchmarkRichTextRunes)
+	operations := []EditorOperation{
+		{Retain: 4096, Changes: []AttributeChange{{Key: AttributeBold, Value: "true"}}},
+		{Retain: 2048},
+		{Insert: " review", Changes: []AttributeChange{{Key: AttributeItalic, Value: "true"}}},
+	}
+	b.ReportAllocs()
+	for iteration := 0; iteration < b.N; iteration++ {
+		b.StopTimer()
+		document := mustDocument(b, "editor-transaction")
+		if err := document.ApplyDelta(seed); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		if _, err := document.ApplyEditorDelta(operations); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func benchmarkRichTextSeed(b testing.TB, runes int) Delta {
 	b.Helper()
 	document := mustDocument(b, "seed")

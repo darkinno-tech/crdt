@@ -487,16 +487,24 @@ func (d *Document) formatPositionsLocked(positions []text.Position, changes []At
 // ApplyDelta joins one canonical rich-text delta. The entire frame is decoded
 // and resource-checked before text or formatting metadata is changed.
 func (d *Document) ApplyDelta(delta Delta) error {
+	return d.ApplyDeltaWithLimits(delta, frame.DefaultLimits())
+}
+
+// ApplyDeltaWithLimits joins one canonical rich-text delta under explicit
+// decoder limits. The entire frame has already been decoded by callers that
+// receive bytes; keeping this method separate lets bounded browser runtimes
+// enforce their negotiated limits through both decode and mutation.
+func (d *Document) ApplyDeltaWithLimits(delta Delta, limits frame.DecoderLimits) error {
 	if d == nil || d.text == nil {
 		return ErrNilDocument
 	}
-	if err := validateDelta(delta, frame.DefaultLimits()); err != nil {
+	if err := validateDelta(delta, limits); err != nil {
 		return err
 	}
 	var textDelta text.Delta
 	var err error
 	if len(delta.textDelta) > 0 {
-		textDelta, err = text.UnmarshalRGARunDelta(delta.textDelta)
+		textDelta, err = text.UnmarshalRGARunDeltaWithLimits(delta.textDelta, limits)
 		if err != nil {
 			return ErrInvalidDelta
 		}
