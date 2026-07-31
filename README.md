@@ -60,7 +60,7 @@ go test ./...
 - G-Counter, PN-Counter, G-Set, add-wins OR-Set, and causal MV-Register.
 - Bounded canonical state/delta frames, deterministic snapshots, recovery plans, and persisted HLC state for reusable replica identities.
 - A local, bounded multi-type undo/redo command stack plus a content-addressed snapshot version DAG for browser history and branches; both remain outside replication frames and are host-persisted metadata.
-- RGA collaborative text with stable run-v2 frames by default; stable bounded rich-text and observed-remove tree protocols; plus list and XML-fragment layers.
+- RGA collaborative text with stable run-v2 frames by default; stable bounded rich-text, observed-remove tree, and nested document-tree protocols; plus list and XML-fragment layers.
 - Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
 - A bounded live WebSocket provider, a separate bbolt-backed durable relay, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
@@ -106,7 +106,7 @@ The `durable` package intentionally persists a relay operation log and replay cu
 | Package | Purpose |
 | --- | --- |
 | `counter`, `set`, `register` | Counter, set, and register CRDTs. |
-| `lww`, `tree`, `text`, `list`, `xml`, `richtext` | HLC-backed and ordered collaborative structures. |
+| `lww`, `tree`, `text`, `list`, `xml`, `richtext`, `documenttree` | HLC-backed and ordered collaborative structures. |
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
 | `persistence` | Local bounded bbolt and file CRDT checkpoint Store references. |
