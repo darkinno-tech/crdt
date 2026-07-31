@@ -159,8 +159,11 @@ function scenarioDescription(scenario) {
 export function parseArguments(argumentsList) {
 	const values = { scenario: "initial", sizes: [4096, 16384], samples: 5, warmups: 2, iterations: 20, revision: "unknown", output: "-" };
   for (let index = 0; index < argumentsList.length; index += 1) {
-    const argument = argumentsList[index];
-    const value = argumentsList[index + 1];
+    const rawArgument = argumentsList[index];
+    const separator = rawArgument.indexOf("=");
+    const argument = separator === -1 ? rawArgument : rawArgument.slice(0, separator);
+    const hasInlineValue = separator !== -1;
+    const value = hasInlineValue ? rawArgument.slice(separator + 1) : argumentsList[index + 1];
     if (argument === "--scenario") {
       values.scenario = parseScenario(value);
     } else if (argument === "--sizes") {
@@ -178,7 +181,9 @@ export function parseArguments(argumentsList) {
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
-    index += 1;
+    if (!hasInlineValue) {
+      index += 1;
+    }
   }
   return values;
 }

@@ -18,6 +18,7 @@ test("offline-concurrent scenario converges and reports emitted bytes", () => {
 
 test("argument parser rejects an unknown comparison scenario", () => {
   assert.equal(parseArguments(["--scenario", "initial"]).scenario, "initial");
+  assert.equal(parseArguments(["--scenario=offline-concurrent", "--revision=test"]).revision, "test");
   assert.throws(() => parseArguments(["--scenario", "unknown"]), /unsupported scenario/);
 });
 
