@@ -503,6 +503,16 @@ func validateOriginPatterns(patterns []string) error {
 }
 
 func (h *Handler) originAllowed(request *http.Request) bool {
+	if h == nil {
+		return false
+	}
+	return originAllowed(request, h.origins)
+}
+
+func originAllowed(request *http.Request, origins []string) bool {
+	if request == nil {
+		return false
+	}
 	origin := request.Header.Get("Origin")
 	if origin == "" {
 		return true
@@ -514,7 +524,7 @@ func (h *Handler) originAllowed(request *http.Request) bool {
 	if strings.EqualFold(parsed.Host, request.Host) {
 		return true
 	}
-	for _, pattern := range h.origins {
+	for _, pattern := range origins {
 		matched, err := path.Match(strings.ToLower(pattern), strings.ToLower(parsed.Host))
 		if err == nil && matched {
 			return true
@@ -691,6 +701,7 @@ type webSocketSubscriber struct {
 }
 
 func newWebSocketSubscriber(conn *websocket.Conn, maxMessages, maxBytes int, writeTimeout time.Duration, batchEnabled bool) *webSocketSubscriber {
+	// #nosec G118 -- cancel is retained by the subscriber and invoked by close.
 	connectionContext, cancel := context.WithCancel(context.Background())
 	return &webSocketSubscriber{
 		context:      connectionContext,

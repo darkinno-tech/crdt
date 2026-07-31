@@ -76,6 +76,7 @@ go test ./...
 | 安全跨越本地重启 | [本地 checkpoint Store](docs/integration/local-checkpoint.zh-CN.md) 与 `go run ./examples/persistent-replica` |
 | 增加重放与重连 | [durable relay 参考](docs/integration/durable-provider.zh-CN.md) |
 | 使用有界 live relay | [WebSocket provider 参考](docs/integration/websocket-provider.zh-CN.md) |
+| 连接稳定版 Yjs/y-websocket client | [Yjs / y-protocols 兼容 relay](docs/integration/yjs-relay.zh-CN.md) |
 | 在不复制媒体字节的前提下附加媒体 | [附件集成](docs/integration/attachment.zh-CN.md) |
 | 在 Go/Wasm 之外实现 run-v2 | [RGA run-v2 协议与向量](docs/protocol/rga-run-v2.zh-CN.md) |
 | 实现稳定格式化或树 | [rich-text v1](docs/protocol/richtext-v1.md) 和 [observed-remove tree v1](docs/protocol/or-tree-v1.md) |

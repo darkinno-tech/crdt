@@ -234,6 +234,26 @@ func TestGCounterBinaryHonorsCallerLimitsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestGCounterDecodeRejectsImpossibleCountBeforeAllocation(t *testing.T) {
+	t.Parallel()
+	payload := frame.AppendUvarint(nil, 1<<20)
+	encoded, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDGCounterState, Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := counterWithValue(t, "target", 9)
+	before := target.Counts()
+	if err := target.UnmarshalBinary(encoded); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("impossible count error = %v", err)
+	}
+	if got := target.Counts(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("impossible count changed receiver: got %#v, want %#v", got, before)
+	}
+	if _, _, err := unmarshalPNCountsSection(payload, 0, 1<<20, frame.DefaultLimits()); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("PN impossible count error = %v", err)
+	}
+}
+
 func TestGCounterIncrementIsConcurrentSafe(t *testing.T) {
 	t.Parallel()
 

@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark wasm-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark wasm-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -40,28 +40,13 @@ vet:
 	go vet ./...
 
 fuzz:
-	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
-	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
-	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./awareness
-	go test -run=^$$ -fuzz=Fuzz -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./encoding
-	go test -run=^$$ -fuzz=FuzzGCounterUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./counter
-	go test -run=^$$ -fuzz=FuzzPNCounterUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./counter
-	go test -run=^$$ -fuzz=FuzzMapUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./lww
-	go test -run=^$$ -fuzz=FuzzGSetUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./set
-	go test -run=^$$ -fuzz=FuzzORSetUnmarshalBinary -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./set
-	go test -run=^$$ -fuzz=FuzzMVRegisterUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./register
-	go test -run=^$$ -fuzz=Fuzz -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./delta
-	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./replica
-	go test -run=^$$ -fuzz=FuzzWireDecoders -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./extensions
-	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
-	go test -run=^$$ -fuzz=FuzzUnmarshalCheckpoint -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./persistence
-	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
-	go test -run=^$$ -fuzz=FuzzRGARunUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./text
-	go test -run=^$$ -fuzz=FuzzRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./list
-	go test -run=^$$ -fuzz=FuzzMoveRGAUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./list
-	go test -run=^$$ -fuzz=FuzzParseDocument -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./xml
-	go test -run=^$$ -fuzz=FuzzUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./richtext
-	go test -run=^$$ -fuzz=FuzzORTreeUnmarshal -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./tree
+	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
+
+# List the release fuzz coverage derived from the current package graph. It is
+# intentionally separate from fuzz-smoke, whose small curated list documents
+# the most important attacker-controlled trust boundaries for pull requests.
+fuzz-list:
+	FUZZ_LIST_ONLY=1 ./scripts/fuzz-all.sh
 
 # Fuzz the independent trust boundaries that most often accept attacker-controlled
 # bytes in a pull request. Release candidates still run the complete fuzz target

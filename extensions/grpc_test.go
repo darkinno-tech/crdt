@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -65,7 +66,7 @@ func TestGRPCRelayReplicatesManifestBoundChange(t *testing.T) {
 		t.Fatalf("observer message = %#v", message)
 	}
 	dot, delta, err := unmarshalChange(message.GetChange(), defaultMaxMessageBytes, defaultMaxActorBytes)
-	if err != nil || dot != change.Dot || string(delta) != string(change.Delta()) {
+	if err != nil || dot != change.Dot || !bytes.Equal(delta, change.Delta()) {
 		t.Fatalf("received gRPC envelope dot=%#v delta=%x err=%v", dot, delta, err)
 	}
 	eventually(t, func() bool { return counterValue(t, relayState) == 7 && group.Frontier().Counter("writer") == 1 })
@@ -781,4 +782,27 @@ func BenchmarkGRPCRelayLoopback(b *testing.B) {
 			b.Fatalf("observe loopback message=%#v err=%v", message, err)
 		}
 	}
+}
+
+// BenchmarkGRPCDeltaEquality isolates the payload check used after a real
+// loopback relay receive. Both slices contain the same 5 KiB delta payload.
+func BenchmarkGRPCDeltaEquality(b *testing.B) {
+	payload := bytes.Repeat([]byte("crdt-delta"), 512)
+	want := append([]byte(nil), payload...)
+	b.Run("bytes_equal", func(b *testing.B) {
+		b.ReportAllocs()
+		for index := 0; index < b.N; index++ {
+			if !bytes.Equal(payload, want) {
+				b.Fatal("payload mismatch")
+			}
+		}
+	})
+	b.Run("string_conversion", func(b *testing.B) {
+		b.ReportAllocs()
+		for index := 0; index < b.N; index++ {
+			if string(payload) != string(want) {
+				b.Fatal("payload mismatch")
+			}
+		}
+	})
 }

@@ -1,6 +1,7 @@
 package list
 
 import (
+	"bytes"
 	"sort"
 
 	"github.com/DarkInno/crdt"
@@ -251,12 +252,12 @@ func moveLimit(value int) (uint64, bool) {
 
 func validateMoveCodecValues[T any](delta MoveDelta, codec ElementCodec[T]) error {
 	for _, item := range delta.nodes {
-		decoded, err := codec.Unmarshal(item.value)
+		decoded, err := unmarshalCodec(codec, item.value)
 		if err != nil {
 			return ErrInvalidCodec
 		}
-		canonical, err := codec.Marshal(decoded)
-		if err != nil || string(canonical) != string(item.value) {
+		canonical, err := marshalCodec(codec, decoded)
+		if err != nil || !bytes.Equal(canonical, item.value) {
 			return ErrInvalidCodec
 		}
 	}

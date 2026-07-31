@@ -87,6 +87,81 @@ func TestMoveRGAConvergesAndPreservesElementIdentity(t *testing.T) {
 	}
 }
 
+func TestMoveFrameTypeIsSeparatelyNegotiated(t *testing.T) {
+	if got, want := MoveFrameType(), (crdt.FrameType{StateID: crdt.TypeIDMoveRGAState, DeltaID: crdt.TypeIDMoveRGADelta, SemanticsVersion: crdt.SemanticsVersionMoveRGA, UsesHLC: true}); got != want {
+		t.Fatalf("MoveFrameType() = %#v, want %#v", got, want)
+	}
+	if MoveFrameType() == StableFrameType() {
+		t.Fatal("MoveRGA reused the insert/delete list frame type")
+	}
+}
+
+func TestMoveRGASplicesASequentialInsertionChain(t *testing.T) {
+	value := mustMoveList(t, "source")
+	if _, err := value.Append([]string{"a", "b", "c", "d"}); err != nil {
+		t.Fatal(err)
+	}
+	before := value.Positions()
+	seed, err := value.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	move, err := value.Move(1, 1, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := value.Values()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "c", "d", "b"}; !sameStrings(got, want) {
+		t.Fatalf("Move(1, 1, 3) = %q, want %q", got, want)
+	}
+	after := value.Positions()
+	if after[3] != before[1] {
+		t.Fatalf("moved position = %#v, want original %#v", after[3], before[1])
+	}
+
+	target := mustMoveList(t, "target")
+	if err := target.UnmarshalBinary(seed); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(move); err != nil {
+		t.Fatal(err)
+	}
+	got, err = target.Values()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a", "c", "d", "b"}; !sameStrings(got, want) {
+		t.Fatalf("replicated Move(1, 1, 3) = %q, want %q", got, want)
+	}
+}
+
+func TestMoveRGAIdenticalOffsetsAreAnInertOperation(t *testing.T) {
+	value := mustMoveList(t, "source")
+	if _, err := value.Append([]string{"a", "b", "c"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := value.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := value.Move(0, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, err := delta.MarshalBinary(); err != nil {
+		t.Fatal(err)
+	} else if decoded, err := UnmarshalMoveDelta(encoded, stringCodec{}); err != nil || decoded.moves == nil || len(decoded.moves) != 0 {
+		t.Fatalf("no-op delta = %#v, %v", decoded, err)
+	}
+	after, err := value.MarshalBinary()
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("inert move changed state: %v", err)
+	}
+}
+
 func TestMoveRGAConcurrentCycleHasDeterministicProjection(t *testing.T) {
 	source := mustMoveList(t, "source")
 	base, err := source.Append([]string{"a", "b"})
