@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"compress/flate"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"io"
+	"strconv"
 )
 
 const (
@@ -15,7 +17,14 @@ const (
 	// Avoid constructing a DEFLATE encoder for small interactive updates where
 	// its setup cost and the v2 length fields are unlikely to repay themselves.
 	minV2DeflatePayloadBytes = 128
+	maxIntValue              = 1<<(strconv.IntSize-1) - 1
 )
+
+// deflateWriterCache retains at most one reusable writer. A sync.Pool would
+// improve more concurrent callers at the cost of retaining compressor state
+// per active P; outer-frame compression must keep that memory trade-off
+// bounded because its input can originate from application text.
+var deflateWriterCache = make(chan *flate.Writer, 1)
 
 // MarshalFrameV2 returns a compression-aware v2 frame. The encoder chooses
 // raw payload bytes for small or incompressible inputs and DEFLATE only when
@@ -98,11 +107,15 @@ func unmarshalFrameV2(body []byte, typeID uint64, codecID string, position int, 
 		return Frame{}, ErrInvalidFrame
 	}
 	rawLength, next, ok := ReadUvarint(body, next)
-	if !ok || rawLength > uint64(limits.MaxPayload) {
+	if !ok || limits.MaxPayload < 0 || rawLength > uint64(limits.MaxPayload) {
 		return Frame{}, ErrFrameLimit
 	}
 	encodedLength, next, ok := ReadUvarint(body, next)
-	if !ok || encodedLength > uint64(len(body)-next) || encodedLength != uint64(len(body)-next) {
+	if !ok {
+		return Frame{}, ErrFrameLimit
+	}
+	remaining := len(body) - next
+	if remaining < 0 || encodedLength > uint64(remaining) || encodedLength != uint64(remaining) {
 		return Frame{}, ErrFrameLimit
 	}
 	encoded := body[next:]
@@ -112,7 +125,11 @@ func unmarshalFrameV2(body []byte, typeID uint64, codecID string, position int, 
 		}
 		return Frame{TypeID: typeID, CodecID: codecID, Payload: encoded, formatVersion: FormatVersionV2}, nil
 	}
-	payload, err := inflatePayload(encoded, int(rawLength))
+	decodedLength, ok := uint64AsInt(rawLength)
+	if !ok {
+		return Frame{}, ErrFrameLimit
+	}
+	payload, err := inflatePayload(encoded, decodedLength)
 	if err != nil {
 		return Frame{}, err
 	}
@@ -121,10 +138,12 @@ func unmarshalFrameV2(body []byte, typeID uint64, codecID string, position int, 
 
 func deflatePayload(payload []byte) ([]byte, error) {
 	var output bytes.Buffer
-	writer, err := flate.NewWriter(&output, flate.BestSpeed)
+	writer, err := acquireDeflateWriter()
 	if err != nil {
 		return nil, err
 	}
+	defer releaseDeflateWriter(writer)
+	writer.Reset(&output)
 	if _, err := writer.Write(payload); err != nil {
 		return nil, err
 	}
@@ -134,7 +153,27 @@ func deflatePayload(payload []byte) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+func acquireDeflateWriter() (*flate.Writer, error) {
+	select {
+	case writer := <-deflateWriterCache:
+		return writer, nil
+	default:
+		return flate.NewWriter(io.Discard, flate.BestSpeed)
+	}
+}
+
+func releaseDeflateWriter(writer *flate.Writer) {
+	writer.Reset(io.Discard)
+	select {
+	case deflateWriterCache <- writer:
+	default:
+	}
+}
+
 func inflatePayload(encoded []byte, rawLength int) (payload []byte, err error) {
+	if rawLength < 0 || rawLength >= maxIntValue {
+		return nil, ErrFrameLimit
+	}
 	reader := flate.NewReader(bytes.NewReader(encoded))
 	defer func() {
 		if closeErr := reader.Close(); err == nil && closeErr != nil {
@@ -146,7 +185,7 @@ func inflatePayload(encoded []byte, rawLength int) (payload []byte, err error) {
 	if count > rawLength {
 		return nil, ErrFrameLimit
 	}
-	if count != rawLength || (err != io.ErrUnexpectedEOF && (rawLength != 0 || err != io.EOF)) {
+	if count != rawLength || (!errors.Is(err, io.ErrUnexpectedEOF) && (rawLength != 0 || !errors.Is(err, io.EOF))) {
 		return nil, ErrInvalidFrame
 	}
 	return payload[:rawLength], nil
@@ -154,7 +193,21 @@ func inflatePayload(encoded []byte, rawLength int) (payload []byte, err error) {
 
 func v2FrameSize(typeID uint64, codecID string, rawLength, encodedLength int) int {
 	return 4 + UvarintSize(FormatVersionV2) + UvarintSize(typeID) +
-		UvarintSize(uint64(len(codecID))) + len(codecID) +
-		UvarintSize(v2PayloadDeflate) + UvarintSize(uint64(rawLength)) +
-		UvarintSize(uint64(encodedLength)) + encodedLength + 4
+		uvarintSizeForLength(len(codecID)) + len(codecID) +
+		UvarintSize(v2PayloadDeflate) + uvarintSizeForLength(rawLength) +
+		uvarintSizeForLength(encodedLength) + encodedLength + 4
+}
+
+func uint64AsInt(value uint64) (int, bool) {
+	if value > uint64(maxIntValue) {
+		return 0, false
+	}
+	return int(value), true
+}
+
+func uvarintSizeForLength(length int) int {
+	if length < 0 {
+		return 0
+	}
+	return UvarintSize(uint64(length))
 }

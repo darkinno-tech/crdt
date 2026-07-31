@@ -12,12 +12,28 @@ v2 适合快照、大粘贴和含重复 actor ID、key 或 value 的批量更新
 长度字段的额外开销可能使其大于 v1；编码器仅在 DEFLATE 让**完整 v2 帧**更小时才压缩。请在
 目标工作负载上测量后启用。
 
-现有 `MarshalBinary` API 仍产出 v1。Provider 或存储边界应显式转换：
+现有 `MarshalBinary` API 仍产出 v1。Provider 或存储边界可以显式转换：
 
 ```go
 v1, err := delta.MarshalRunBinary()
 v2, err := frame.ConvertFrameV1ToV2(v1, receiveLimits)
 ```
+
+已经协商外层 v2 的 run-v2 RGA 组应优先使用直接 API。它们会对最终 v2 帧做预检，而不是先构造
+再校验一个中间 v1 envelope：
+
+```go
+update, err := document.InsertRunFrameV2WithLimits(0, pastedText, receiveLimits)
+if err != nil { /* 在 mutation 前拒绝本地编辑 */ }
+
+checkpoint, err := document.SnapshotRunFrameV2CurrentStateWithLimits(receiveLimits)
+if err != nil { /* handle */ }
+```
+
+`Delta.MarshalRunFrameV2`、`RGA.MarshalRunFrameV2` 及配套的 anti-entropy API
+与其 v1 对应方法产出同一份规范 run-v2 payload。这只是外层表示优化：不会合并 scalar identity、
+改变 RGA 排序，也不会让 outer-v2 组兼容 v1 peer。直接路径可以使用小于等价 v1 envelope 的
+压缩后最终帧预算，但解码出的 payload 仍必须满足 `MaxPayload`。
 
 v2 组必须在 `replica.Protocol` 中绑定
 `WireFormatVersion: frame.FormatVersionV2`。`NewChange`、`Inbox`、快照、恢复计划和
@@ -70,6 +86,9 @@ checksum 覆盖 `"CRDT"` 后至 `encoded-payload` 末尾的全部字节，但不
 5. 只有 Manifest、type、codec、语义版本和外层帧版本均相等才可应用。转换 API
    `ConvertFrameV1ToV2`/`ConvertFrameV2ToV1` 必须显式调用，解码从不自动降级。
 
+run-v2 的规范性检查会重建并比较解码后的 payload，而不是构造临时 v1 envelope。这样规范性校验
+与压缩传输预算相互独立，同时保留每个 scalar 的 HLC tag 与 parent link。
+
 payload 上限限制内存放大，但压缩不保密。live 流量仍需 TLS 和应用层鉴权；不能仅因压缩体能在
 默认进程上限内展开，就接受任意大的公网请求。
 
@@ -77,8 +96,8 @@ Go/Wasm RGA runtime 使用同一 Go decoder，认证 v2 Manifest 后可以接收
 TypeScript `decodeFrame` 只验证 v1；纯 TypeScript consumer 在拥有同等有界 raw-DEFLATE decoder
 前不得通告外层 v2。
 
-已覆盖转换、损坏或过度展开输入、fuzz 外层帧、Manifest/checkpoint/recovery 版本绑定以及含
-重复和乱序 v2 帧的三编辑者 RGA 模拟。受控基准：
+已覆盖转换、损坏或过度展开输入、最终帧与解码 payload 的双重限额、fuzz 外层帧、
+Manifest/checkpoint/recovery 版本绑定以及含重复和乱序 v2 帧的三编辑者 RGA 模拟。受控基准：
 
 ```sh
 go test -run='^$' -bench='BenchmarkFrameUpdateFormats|BenchmarkRGADeltaWireProtocols' -benchmem ./encoding ./text

@@ -55,6 +55,24 @@ func TestRGAMarshalDeltaSinceSnapshotRoundTrip(t *testing.T) {
 	if !bytes.Equal(cachedEncoded, encoded) {
 		t.Fatal("cached snapshot base changed the canonical delta")
 	}
+	outerV2, err := source.MarshalRunDeltaSinceFrameV2(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerFrame, err := frame.UnmarshalFrame(outerV2, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outerFrame.Version() != frame.FormatVersionV2 || outerFrame.TypeID != crdt.TypeIDRGARunDelta || !bytes.Equal(outerFrame.Payload, decoded.Payload) {
+		t.Fatal("outer v2 snapshot delta changed the canonical run-v2 payload")
+	}
+	cachedOuterV2, err := source.MarshalRunDeltaSinceFrameV2Base(cachedBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(cachedOuterV2, outerV2) {
+		t.Fatal("cached snapshot base changed the outer v2 delta")
+	}
 
 	target, err := NewFromSnapshot(base)
 	if err != nil {
@@ -65,6 +83,20 @@ func TestRGAMarshalDeltaSinceSnapshotRoundTrip(t *testing.T) {
 	}
 	if got, want := target.String(), source.String(); got != want {
 		t.Fatalf("delta recovery text = %q, want %q", got, want)
+	}
+	outerTarget, err := NewFromSnapshot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerDelta, err := UnmarshalRGARunDelta(outerV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outerTarget.ApplyDelta(outerDelta); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := outerTarget.String(), source.String(); got != want {
+		t.Fatalf("outer v2 delta recovery text = %q, want %q", got, want)
 	}
 	wantState, err := source.MarshalRunBinary()
 	if err != nil {
@@ -263,6 +295,78 @@ func TestRGAMarshalDeltaSinceHonorsOutputLimits(t *testing.T) {
 	}
 	if got := source.String(); got != "ab" {
 		t.Fatalf("over-limit encode changed source to %q", got)
+	}
+}
+
+func TestRGASnapshotDeltaRejectsCrossProtocolAndIncompleteState(t *testing.T) {
+	source := mustRGA(t, "source")
+	scalarBase, err := source.SnapshotCurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedScalarBase, err := NewSnapshotBase(scalarBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.MarshalRunDeltaSinceFrameV2Base(decodedScalarBase); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("scalar base accepted by run-v2 encoder: %v", err)
+	}
+	if _, err := source.MarshalDeltaSinceBase(SnapshotBase{stateType: crdt.TypeIDGCounterState, valid: true}); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("unknown snapshot type accepted: %v", err)
+	}
+
+	runBase, err := source.SnapshotRunCurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := Position{ReplicaID: "remote", WallTime: 2}
+	parent := Position{ReplicaID: "remote", WallTime: 1}
+	pending := mustRGA(t, "pending")
+	if err := pending.ApplyDelta(Delta{nodes: map[Position]node{child: {parent: parent, rune: 'x'}}, tombstones: map[Position]struct{}{}}); err != nil {
+		t.Fatal(err)
+	}
+	if pending.PendingCount() != 1 {
+		t.Fatalf("pending count = %d, want 1", pending.PendingCount())
+	}
+	if _, err := pending.DeltaSince(runBase); !errors.Is(err, ErrIncompleteState) {
+		t.Fatalf("incomplete delta state error = %v", err)
+	}
+
+	mustInsertRGA(t, source, 0, "ab")
+	tight := frame.DefaultLimits()
+	tight.MaxElements = 1
+	if _, err := source.MarshalRunDeltaSinceFrameV2WithLimits(runBase, tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("over-limit outer-v2 delta error = %v", err)
+	}
+}
+
+func TestRGASnapshotDeltaDefensiveBoundaries(t *testing.T) {
+	source := mustRGA(t, "source")
+	if _, err := source.MarshalRunDeltaSinceFrameV2WithLimits(snapshot.Snapshot{}, frame.DefaultLimits()); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("invalid outer-v2 base error = %v", err)
+	}
+	var nilSource *RGA
+	if _, err := nilSource.DeltaSinceBase(SnapshotBase{valid: true}); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil source error = %v", err)
+	}
+
+	missing := Position{ReplicaID: "base", WallTime: 1}
+	base := SnapshotBase{
+		nodes:     map[Position]node{missing: {rune: 'a'}},
+		stateType: crdt.TypeIDRGARunState,
+		valid:     true,
+	}
+	if _, err := source.MarshalRunDeltaSinceFrameV2Base(base); !errors.Is(err, ErrIncompatibleSnapshot) {
+		t.Fatalf("missing base node error = %v", err)
+	}
+
+	child := Position{ReplicaID: "remote", WallTime: 2}
+	parent := Position{ReplicaID: "remote", WallTime: 1}
+	if _, err := deltaBetweenRGAStates(map[Position]node{child: {parent: parent, rune: 'x'}}, nil, nil, nil); !errors.Is(err, ErrInvalidDelta) {
+		t.Fatalf("missing structural parent error = %v", err)
+	}
+	if _, err := deltaBetweenRGAStates(map[Position]node{parent: {parent: parent, rune: 'x'}}, nil, nil, nil); !errors.Is(err, ErrInvalidDelta) {
+		t.Fatalf("cyclic structural parent error = %v", err)
 	}
 }
 

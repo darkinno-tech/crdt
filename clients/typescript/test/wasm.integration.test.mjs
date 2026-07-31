@@ -6,7 +6,7 @@ import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
 import { decodeFrame } from "../dist/frame.js";
-import { bindRGAPlainText } from "../dist/bindings.js";
+import { bindCodeMirrorPlainText, bindRGAPlainText } from "../dist/bindings.js";
 import {
   CRDTRuntimeError,
   RGA_PROTOCOL_RUN_V2,
@@ -79,6 +79,46 @@ test("plain-text binding exchanges actual Go Wasm RGA frames without echoing rem
   }
   assert.equal(aliceEditor.readText(), "Hello collaborative world");
   assert.equal(aliceFrames.length, 1);
+  assert.equal(alice.destroy(), true);
+  assert.equal(bob.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
+});
+
+test("CodeMirror-shaped binding exchanges actual Go Wasm RGA frames without echoing remote updates", () => {
+  const aliceDocument = loaderRuntime.create("codemirror-binding-alice");
+  const bobDocument = loaderRuntime.create("codemirror-binding-bob");
+  const aliceEditor = new TestCodeMirrorPort("const draft = true;");
+  const bobEditor = new TestTextPort("");
+  const aliceFrames = [];
+  const bobFrames = [];
+  const alice = bindCodeMirrorPlainText(aliceDocument, aliceEditor, {
+    initialContent: "editor",
+    onLocalFrame: (frame) => aliceFrames.push(frame),
+  });
+  const bob = bindRGAPlainText(bobDocument, bobEditor, {
+    onLocalFrame: (frame) => bobFrames.push(frame),
+  });
+  for (const frame of aliceFrames) {
+    bob.applyRemote(frame);
+  }
+  assert.equal(bobEditor.readText(), "const draft = true;");
+  assert.equal(bobFrames.length, 0);
+
+  aliceEditor.userWrite("const draft = false;");
+  alice.applyViewUpdate({ docChanged: true });
+  const aliceEdit = aliceFrames.at(-1);
+  assert.ok(aliceEdit instanceof Uint8Array);
+  bob.applyRemote(aliceEdit);
+  assert.equal(bobEditor.readText(), "const draft = false;");
+  assert.equal(bobFrames.length, 0);
+
+  bobEditor.userWrite("const reviewed = false;");
+  const bobEdit = bobFrames.at(-1);
+  assert.ok(bobEdit instanceof Uint8Array);
+  alice.applyRemote(bobEdit);
+  assert.equal(aliceEditor.state.doc.toString(), "const reviewed = false;");
+  assert.equal(aliceFrames.length, 2);
   assert.equal(alice.destroy(), true);
   assert.equal(bob.destroy(), true);
   assert.equal(aliceDocument.close(), true);
@@ -294,5 +334,28 @@ class TestTextPort {
 
   userWrite(value) {
     this.writeText(value);
+  }
+}
+
+class TestCodeMirrorPort {
+  constructor(value) {
+    this.value = value;
+  }
+
+  get state() {
+    return {
+      doc: {
+        length: this.value.length,
+        toString: () => this.value,
+      },
+    };
+  }
+
+  dispatch({ changes }) {
+    this.value = `${this.value.slice(0, changes.from)}${changes.insert}${this.value.slice(changes.to)}`;
+  }
+
+  userWrite(value) {
+    this.value = value;
   }
 }

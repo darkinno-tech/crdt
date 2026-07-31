@@ -3,8 +3,6 @@ package text
 import (
 	"math/rand"
 	"testing"
-
-	frame "github.com/DarkInno/crdt/encoding"
 )
 
 // TestRGARunOuterFrameV2ThreeReplicaEditingOverUnreliableNetwork keeps the
@@ -42,16 +40,12 @@ func TestRGARunOuterFrameV2ThreeReplicaEditingOverUnreliableNetwork(t *testing.T
 		}
 	}
 
-	state, err := alice.MarshalRunBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	compressedState, err := frame.ConvertFrameV1ToV2(state, frame.DefaultLimits())
+	state, err := alice.MarshalRunFrameV2()
 	if err != nil {
 		t.Fatal(err)
 	}
 	recovered := mustRGA(t, "frame-v2-recovered")
-	if err := recovered.UnmarshalRunBinary(compressedState); err != nil {
+	if err := recovered.UnmarshalRunBinary(state); err != nil {
 		t.Fatal(err)
 	}
 	if got := recovered.String(); got != want {
@@ -61,11 +55,7 @@ func TestRGARunOuterFrameV2ThreeReplicaEditingOverUnreliableNetwork(t *testing.T
 
 func mustApplyRGARunFrameV2Delta(t testing.TB, target *RGA, delta Delta) {
 	t.Helper()
-	encoded, err := delta.MarshalRunBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	compressed, err := frame.ConvertFrameV1ToV2(encoded, frame.DefaultLimits())
+	compressed, err := delta.MarshalRunFrameV2()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +72,7 @@ func deliverRGARunFrameV2Changes(t testing.TB, target *RGA, changes []Delta, see
 	t.Helper()
 	frames := make([][]byte, 0, len(changes)*2)
 	for _, change := range changes {
-		encoded, err := change.MarshalRunBinary()
-		if err != nil {
-			t.Fatal(err)
-		}
-		compressed, err := frame.ConvertFrameV1ToV2(encoded, frame.DefaultLimits())
+		compressed, err := change.MarshalRunFrameV2()
 		if err != nil {
 			t.Fatal(err)
 		}

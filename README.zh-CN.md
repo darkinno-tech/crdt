@@ -79,6 +79,7 @@ go test ./...
 | 连接稳定版 Yjs/y-websocket client | [Yjs / y-protocols 兼容 relay](docs/integration/yjs-relay.zh-CN.md) |
 | 在不复制媒体字节的前提下附加媒体 | [附件集成](docs/integration/attachment.zh-CN.md) |
 | 在 Go/Wasm 之外实现 run-v2 | [RGA run-v2 协议与向量](docs/protocol/rga-run-v2.zh-CN.md) |
+| 使用 Rust、Python、Swift 或 C++ 原生 RGA runtime | [多语言 RGA 交付决策](docs/design/native-multilanguage-rga.zh-CN.md) |
 | 实现稳定格式化或树 | [rich-text v1](docs/protocol/richtext-v1.md) 和 [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
 
 [文档索引](docs/README.md) 将入门、集成、协议/设计、运维资料分层。详细性能证据和部署手册放在对应文档中，而不是让入口 README 变成操作手册。

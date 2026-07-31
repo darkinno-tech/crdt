@@ -110,6 +110,42 @@ func (r *RGA) MarshalDeltaSinceBaseWithLimits(base SnapshotBase, limits frame.De
 	}
 }
 
+// MarshalRunDeltaSinceFrameV2 encodes the run-v2 delta from base to r in a
+// separately negotiated compression-aware outer frame v2. The base must be a
+// complete run-v2 RGA snapshot; scalar-v1 bases remain a distinct protocol.
+func (r *RGA) MarshalRunDeltaSinceFrameV2(base snapshot.Snapshot) ([]byte, error) {
+	return r.MarshalRunDeltaSinceFrameV2WithLimits(base, frame.DefaultLimits())
+}
+
+// MarshalRunDeltaSinceFrameV2WithLimits is MarshalRunDeltaSinceFrameV2 with
+// explicit bounds for both base validation and final v2 output.
+func (r *RGA) MarshalRunDeltaSinceFrameV2WithLimits(base snapshot.Snapshot, limits frame.DecoderLimits) ([]byte, error) {
+	decoded, err := NewSnapshotBaseWithLimits(base, limits)
+	if err != nil {
+		return nil, err
+	}
+	return r.MarshalRunDeltaSinceFrameV2BaseWithLimits(decoded, limits)
+}
+
+// MarshalRunDeltaSinceFrameV2Base is MarshalRunDeltaSinceFrameV2 for a
+// validated snapshot base that can be reused across anti-entropy rounds.
+func (r *RGA) MarshalRunDeltaSinceFrameV2Base(base SnapshotBase) ([]byte, error) {
+	return r.MarshalRunDeltaSinceFrameV2BaseWithLimits(base, frame.DefaultLimits())
+}
+
+// MarshalRunDeltaSinceFrameV2BaseWithLimits encodes a delta against a cached
+// run-v2 snapshot base without building an intermediate v1 envelope.
+func (r *RGA) MarshalRunDeltaSinceFrameV2BaseWithLimits(base SnapshotBase, limits frame.DecoderLimits) ([]byte, error) {
+	if !base.valid || base.stateType != crdt.TypeIDRGARunState {
+		return nil, ErrInvalidSnapshot
+	}
+	delta, err := r.deltaSinceBase(base)
+	if err != nil {
+		return nil, err
+	}
+	return marshalRGARunFrameV2(crdt.TypeIDRGARunDelta, delta.nodes, delta.tombstones, limits)
+}
+
 func (r *RGA) deltaSinceBase(base SnapshotBase) (Delta, error) {
 	if r == nil || r.clock == nil {
 		return Delta{}, ErrNilText

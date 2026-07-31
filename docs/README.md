@@ -45,7 +45,10 @@ be committed.
 - [Rich-text v1 wire protocol](protocol/richtext-v1.md)
 - [Observed-remove tree v1 wire protocol](protocol/or-tree-v1.md)
 - [Bounded rich-text inline-format design](design/rich-text.md)
+- [Local multi-type undo/redo and version DAG](design/local-history-and-versioning.md)
 - [Nested CRDT composition decision](design/nested-crdt-composition.zh-CN.md)
+- [Native multilingual RGA delivery decision](design/native-multilanguage-rga.md)
+- [原生多语言 RGA 交付决策](design/native-multilanguage-rga.zh-CN.md)
 
 ## Operations and architecture
 
@@ -65,6 +68,9 @@ be committed.
 - [Controlled performance-regression CI](operations/performance-regression-ci.md)
 - [受控性能回归 CI](operations/performance-regression-ci.zh-CN.md)
 - [Yjs relay controlled validation — 2026-07-31](operations/yjs-relay-benchmark-2026-07-31.md)
+- [Native multilingual RGA controlled benchmark — 2026-07-31](operations/native-multilanguage-rga-benchmark-2026-07-31.md)
+- [DarkInno / Yjs text comparison](operations/crdt-library-comparison-2026-07-30.md)
+- [DarkInno / Yjs 文本对比](operations/crdt-library-comparison-2026-07-30.zh-CN.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 
