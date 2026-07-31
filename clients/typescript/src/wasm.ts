@@ -78,6 +78,23 @@ export interface RGATag {
   readonly logical: bigint;
 }
 
+/** One stable RGA Position identity. It has the same fields as the mutation tag it references. */
+export type RGAPosition = RGATag;
+
+/** The side of one stable Position represented by a local cursor boundary. */
+export type RGAAnchorAssociation = "before" | "after";
+
+/**
+ * Stable local cursor metadata expressed directly with an RGA Position/Tag.
+ * A missing position denotes the synthetic root: `before` is document start
+ * and `after` is document end. This is deliberately not a Yjs-compatible
+ * relative-position wire format and must not be embedded in RGA frames.
+ */
+export interface RGAAnchor {
+  readonly position?: RGAPosition;
+  readonly association: RGAAnchorAssociation;
+}
+
 /**
  * Persist every field in one atomic write. `state` without `clock`/`frontier`
  * is unsafe when the same replica ID may be restored after a restart.
@@ -149,6 +166,18 @@ export class RGAWasmDocument {
       throw new CRDTRuntimeError("invalid_runtime_response");
     }
     return value;
+  }
+
+  /** Returns a Position/Tag-backed local boundary for one visible rune offset. */
+  anchorAt(offset: number): RGAAnchor {
+    this.assertOpen();
+    return anchorFromRaw(unwrap(this.api.anchorAt(this.handle, offset)), this.limits);
+  }
+
+  /** Resolves a retained local Position/Tag boundary to a visible rune offset. */
+  resolveAnchor(anchor: RGAAnchor): number {
+    this.assertOpen();
+    return nonNegativeSafeInteger(unwrap(this.api.resolveAnchor(this.handle, anchorToRaw(anchor, this.limits))));
   }
 
   /** Reports accepted nodes still waiting for an out-of-order parent. */
@@ -385,6 +414,8 @@ interface RawRGAAPI {
   replace(handle: number, offset: number, count: number, value: string): RawResult;
   applyDelta(handle: number, encoded: Uint8Array): RawResult;
   text(handle: number): RawResult;
+  anchorAt(handle: number, offset: number): RawResult;
+  resolveAnchor(handle: number, anchor: RawAnchor): RawResult;
   pendingCount(handle: number): RawResult;
   snapshot(handle: number): RawResult;
   restore(snapshot: RawSnapshot): RawResult;
@@ -408,6 +439,11 @@ interface RawTag {
   readonly replicaID: string;
   readonly wallTime: string;
   readonly logical: string;
+}
+
+interface RawAnchor {
+  readonly position: RawTag | null;
+  readonly association: RGAAnchorAssociation;
 }
 
 type SnapshotLimits = Pick<RGAProtocol, "maxFrameBytes" | "maxTags" | "maxStringBytes">;
@@ -446,6 +482,8 @@ function rawAPIFromGlobal(): RawRGAAPI | undefined {
     "replace",
     "applyDelta",
     "text",
+    "anchorAt",
+    "resolveAnchor",
     "pendingCount",
     "snapshot",
     "restore",
@@ -715,6 +753,42 @@ function tagToRaw(tag: RGATag, limits: SnapshotLimits): RawTag {
     replicaID: tag.replicaID,
     wallTime: tag.wallTime.toString(),
     logical: tag.logical.toString(),
+  };
+}
+
+function anchorFromRaw(raw: unknown, limits: SnapshotLimits): RGAAnchor {
+  if (
+    !isRecord(raw) ||
+    (raw.association !== "before" && raw.association !== "after") ||
+    !(raw.position === null || isRecord(raw.position))
+  ) {
+    throw new CRDTRuntimeError("invalid_runtime_response");
+  }
+  return {
+    association: raw.association,
+    ...(raw.position === null ? {} : { position: tagFromRaw(raw.position, limits) }),
+  };
+}
+
+function anchorToRaw(anchor: RGAAnchor, limits: SnapshotLimits): RawAnchor {
+  if (
+    !isRecord(anchor) ||
+    (anchor.association !== "before" && anchor.association !== "after") ||
+    !(anchor.position === undefined || isRecord(anchor.position))
+  ) {
+    throw new CRDTRuntimeError("invalid_anchor");
+  }
+  let position: RawTag | null = null;
+  if (anchor.position !== undefined) {
+    try {
+      position = tagToRaw(anchor.position, limits);
+    } catch {
+      throw new CRDTRuntimeError("invalid_anchor");
+    }
+  }
+  return {
+    association: anchor.association,
+    position,
   };
 }
 

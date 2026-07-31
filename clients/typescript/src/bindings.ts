@@ -8,7 +8,7 @@
  * schema before binding a rich document tree.
  */
 
-import { CRDTRuntimeError, RGAWasmDocument } from "./wasm.js";
+import { CRDTRuntimeError, RGAAnchor, RGAWasmDocument } from "./wasm.js";
 
 export type RGAFrameListener = (frame: Uint8Array) => void;
 
@@ -19,11 +19,31 @@ export interface PlainTextEditorPort {
   observeText(listener: () => void): () => void;
 }
 
+/** A UTF-16 selection as used by DOM, Quill, and CodeMirror editor APIs. */
+export interface EditorTextSelection {
+  readonly anchor: number;
+  readonly head: number;
+}
+
+/** Optional editor capability for preserving a selection through remote RGA merges. */
+export interface SelectionEditorPort extends PlainTextEditorPort {
+  readSelection(): EditorTextSelection | undefined;
+  writeSelection(selection: EditorTextSelection): void;
+}
+
+/** A stable RGA Position/Tag selection suitable for local editor state or authenticated presence. */
+export interface RGASelection {
+  readonly anchor: RGAAnchor;
+  readonly head: RGAAnchor;
+}
+
 export interface BindRGAPlainTextOptions {
   /** Receives exact RGA frames for an authenticated, durable outbox. */
   readonly onLocalFrame: RGAFrameListener;
   /** Import an existing editor value as local CRDT edits instead of overwriting it. */
   readonly initialContent?: "document" | "editor";
+  /** Reports a malformed or compacted local selection without blocking a remote document merge. */
+  readonly onSelectionError?: (error: unknown) => void;
 }
 
 /**
@@ -58,9 +78,47 @@ export class RGAPlainTextBinding {
   /** Applies one authenticated, manifest-checked remote frame. */
   applyRemote(frame: Uint8Array): void {
     this.#assertOpen();
+    const selection = this.#captureSelectionSafely();
     this.document.applyDelta(frame);
     this.#text = this.document.text();
     this.#writeEditor(this.#text);
+    if (selection !== undefined) {
+      this.#restoreSelectionSafely(selection);
+    }
+  }
+
+  /** Captures the editor's current UTF-16 selection as stable RGA Position/Tag anchors. */
+  captureSelection(): RGASelection | undefined {
+    this.#assertOpen();
+    const port = selectionPort(this.editor);
+    if (port === undefined) {
+      return undefined;
+    }
+    const selection = port.readSelection();
+    if (selection === undefined) {
+      return undefined;
+    }
+    return {
+      anchor: this.document.anchorAt(runeOffsetAtUTF16(this.#text, selection.anchor)),
+      head: this.document.anchorAt(runeOffsetAtUTF16(this.#text, selection.head)),
+    };
+  }
+
+  /** Restores a retained RGA Position/Tag selection to the editor's UTF-16 offsets. */
+  restoreSelection(selection: RGASelection): boolean {
+    this.#assertOpen();
+    const port = selectionPort(this.editor);
+    if (port === undefined) {
+      return false;
+    }
+    if (!isRGASelection(selection)) {
+      throw new CRDTRuntimeError("invalid_anchor");
+    }
+    port.writeSelection({
+      anchor: utf16OffsetAtRune(this.#text, this.document.resolveAnchor(selection.anchor)),
+      head: utf16OffsetAtRune(this.#text, this.document.resolveAnchor(selection.head)),
+    });
+    return true;
   }
 
   /** Stops observation; it never closes the caller-owned RGA document. */
@@ -136,6 +194,25 @@ export class RGAPlainTextBinding {
     }
   }
 
+  #captureSelectionSafely(): RGASelection | undefined {
+    try {
+      return this.captureSelection();
+    } catch (error) {
+      this.options.onSelectionError?.(error);
+      return undefined;
+    }
+  }
+
+  #restoreSelectionSafely(selection: RGASelection): void {
+    try {
+      this.restoreSelection(selection);
+    } catch (error) {
+      // A compacted marker must clear or refresh the cursor instead of
+      // guessing a nearby editor offset. The document merge remains valid.
+      this.options.onSelectionError?.(error);
+    }
+  }
+
   #assertOpen(): void {
     if (this.#closed) {
       throw new CRDTRuntimeError("document_closed");
@@ -155,6 +232,8 @@ export function bindRGAPlainText(
 export interface QuillTextPort {
   getText(): string;
   setText(value: string, source?: "api" | "silent" | "user"): unknown;
+  getSelection?(focus?: boolean): { readonly index: number; readonly length: number } | null;
+  setSelection?(index: number, length: number, source?: "api" | "silent" | "user"): unknown;
   on(event: "text-change", listener: (delta: unknown, oldContents: unknown, source: string) => void): unknown;
   off?(event: "text-change", listener: (delta: unknown, oldContents: unknown, source: string) => void): unknown;
 }
@@ -168,7 +247,7 @@ export function bindQuillPlainText(
   quill: QuillTextPort,
   options: BindRGAPlainTextOptions,
 ): RGAPlainTextBinding {
-  return bindRGAPlainText(document, {
+  const port: SelectionEditorPort = {
     readText: () => quill.getText(),
     writeText: (value) => {
       quill.setText(value, "api");
@@ -182,7 +261,19 @@ export function bindQuillPlainText(
       quill.on("text-change", handler);
       return () => quill.off?.("text-change", handler);
     },
-  }, options);
+    readSelection: () => {
+      const selection = quill.getSelection?.();
+      return selection === null || selection === undefined
+        ? undefined
+        : { anchor: selection.index, head: selection.index + selection.length };
+    },
+    writeSelection: (selection: EditorTextSelection) => {
+      if (quill.setSelection !== undefined) {
+        quill.setSelection(selection.anchor, selection.head - selection.anchor, "api");
+      }
+    },
+  };
+  return bindRGAPlainText(document, port, options);
 }
 
 /** Structural type for a Monaco ITextModel without a Monaco dependency. */
@@ -215,13 +306,17 @@ export interface CodeMirrorTextPort {
       readonly length: number;
       toString(): string;
     };
+    readonly selection?: {
+      readonly main: EditorTextSelection;
+    };
   };
   dispatch(spec: {
-    readonly changes: {
+    readonly changes?: {
       readonly from: number;
       readonly to: number;
       readonly insert: string;
     };
+    readonly selection?: EditorTextSelection;
   }): void;
 }
 
@@ -246,7 +341,7 @@ export class CodeMirrorPlainTextBinding {
     private readonly view: CodeMirrorTextPort,
     options: BindRGAPlainTextOptions,
   ) {
-    this.#binding = bindRGAPlainText(document, {
+    const port: SelectionEditorPort = {
       readText: () => view.state.doc.toString(),
       writeText: (value) => {
         view.dispatch({
@@ -265,7 +360,10 @@ export class CodeMirrorPlainTextBinding {
           }
         };
       },
-    }, options);
+      readSelection: () => view.state.selection?.main,
+      writeSelection: (selection: EditorTextSelection) => view.dispatch({ selection }),
+    };
+    this.#binding = bindRGAPlainText(document, port, options);
   }
 
   /** Pass every `EditorView.updateListener` event through this method. */
@@ -277,6 +375,16 @@ export class CodeMirrorPlainTextBinding {
 
   applyRemote(frame: Uint8Array): void {
     this.#binding.applyRemote(frame);
+  }
+
+  /** Captures CodeMirror's selection as stable RGA Position/Tag anchors. */
+  captureSelection(): RGASelection | undefined {
+    return this.#binding.captureSelection();
+  }
+
+  /** Restores retained RGA Position/Tag anchors to CodeMirror's UTF-16 selection. */
+  restoreSelection(selection: RGASelection): boolean {
+    return this.#binding.restoreSelection(selection);
   }
 
   destroy(): boolean {
@@ -709,6 +817,61 @@ function tiptapJSONFromText(value: string): TiptapJSONNode {
 function hasOnlyKeys(value: unknown, allowed: readonly string[]): value is TiptapJSONNode {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     && Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function selectionPort(value: PlainTextEditorPort): SelectionEditorPort | undefined {
+  if (
+    typeof (value as Partial<SelectionEditorPort>).readSelection !== "function" ||
+    typeof (value as Partial<SelectionEditorPort>).writeSelection !== "function"
+  ) {
+    return undefined;
+  }
+  return value as SelectionEditorPort;
+}
+
+function isRGASelection(value: unknown): value is RGASelection {
+  return typeof value === "object" && value !== null && "anchor" in value && "head" in value;
+}
+
+function runeOffsetAtUTF16(value: string, offset: number): number {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > value.length) {
+    throw new CRDTRuntimeError("range_error");
+  }
+  let runes = 0;
+  let utf16 = 0;
+  for (const rune of value) {
+    if (utf16 === offset) {
+      return runes;
+    }
+    utf16 += rune.length;
+    runes += 1;
+    if (utf16 > offset) {
+      throw new CRDTRuntimeError("invalid_selection");
+    }
+  }
+  if (utf16 === offset) {
+    return runes;
+  }
+  throw new CRDTRuntimeError("range_error");
+}
+
+function utf16OffsetAtRune(value: string, offset: number): number {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new CRDTRuntimeError("range_error");
+  }
+  let runes = 0;
+  let utf16 = 0;
+  for (const rune of value) {
+    if (runes === offset) {
+      return utf16;
+    }
+    utf16 += rune.length;
+    runes += 1;
+  }
+  if (runes === offset) {
+    return utf16;
+  }
+  throw new CRDTRuntimeError("range_error");
 }
 
 /**

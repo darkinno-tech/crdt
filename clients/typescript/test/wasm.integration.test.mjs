@@ -55,6 +55,53 @@ test("TypeScript wrapper atomically replaces text", () => {
 	assert.equal(document.close(), true);
 });
 
+test("Position/Tag anchors survive a concurrent insert and snapshot recovery", () => {
+  const alice = loaderRuntime.create("anchor-alice");
+  const bob = loaderRuntime.create("anchor-bob");
+  const base = alice.insert(0, "ab🙂cd");
+  bob.applyDelta(base);
+  const anchor = alice.anchorAt(3);
+  assert.equal(anchor.association, "before");
+  assert.ok(anchor.position);
+  assert.equal(typeof anchor.position.wallTime, "bigint");
+
+  const concurrent = bob.insert(3, "X");
+  alice.applyDelta(concurrent);
+  assert.equal(alice.resolveAnchor(anchor), 4);
+  const restored = loaderRuntime.restore(alice.snapshot());
+  assert.equal(restored.resolveAnchor(anchor), 4);
+  assert.deepEqual(alice.anchorAt(Array.from(alice.text()).length), { association: "after" });
+  assertRuntimeError(
+    () => alice.resolveAnchor({ association: "before", position: { replicaID: "", wallTime: 1n, logical: 0n } }),
+    "invalid_anchor",
+  );
+  assert.equal(alice.close(), true);
+  assert.equal(bob.close(), true);
+  assert.equal(restored.close(), true);
+});
+
+test("plain-text binding preserves a UTF-16 selection through a real remote RGA merge", () => {
+  const aliceDocument = loaderRuntime.create("selection-alice");
+  const bobDocument = loaderRuntime.create("selection-bob");
+  const port = new SelectionTextPort("a🙂bc", { anchor: 3, head: 3 });
+  const frames = [];
+  const alice = bindRGAPlainText(aliceDocument, port, {
+    initialContent: "editor",
+    onLocalFrame: (frame) => frames.push(frame),
+  });
+  bobDocument.applyDelta(frames[0]);
+  const before = alice.captureSelection();
+  assert.ok(before);
+  const remote = bobDocument.insert(0, "X");
+  alice.applyRemote(remote);
+  const expectedRune = aliceDocument.resolveAnchor(before.anchor);
+  assert.equal(port.selection.anchor, utf16OffsetAtRune(aliceDocument.text(), expectedRune));
+  assert.equal(port.selection.head, port.selection.anchor);
+  assert.equal(alice.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
+});
+
 test("plain-text binding exchanges actual Go Wasm RGA frames without echoing remote updates", () => {
   const aliceDocument = loaderRuntime.create("binding-alice");
   const bobDocument = loaderRuntime.create("binding-bob");
@@ -482,4 +529,23 @@ class TestRichQuillPort {
   userDelta(delta) {
     for (const listener of [...this.#listeners]) listener(delta, this.contents, "user");
   }
+}
+
+class SelectionTextPort extends TestTextPort {
+  constructor(value, selection) {
+    super(value);
+    this.selection = selection;
+  }
+
+  readSelection() {
+    return this.selection;
+  }
+
+  writeSelection(selection) {
+    this.selection = selection;
+  }
+}
+
+function utf16OffsetAtRune(value, offset) {
+  return Array.from(value).slice(0, offset).join("").length;
 }

@@ -181,6 +181,38 @@ func main() {
 		}
 		return runtime.Text(handle)
 	})
+	register(api, "anchorAt", func(args []js.Value) (any, error) {
+		if len(args) != 2 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		offset, err := requiredIndex(args[1])
+		if err != nil {
+			return nil, err
+		}
+		anchor, err := runtime.AnchorAt(handle, offset)
+		if err != nil {
+			return nil, err
+		}
+		return anchorToJS(anchor), nil
+	})
+	register(api, "resolveAnchor", func(args []js.Value) (any, error) {
+		if len(args) != 2 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		anchor, err := anchorFromJS(args[1], runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		return runtime.ResolveAnchor(handle, anchor)
+	})
 	register(api, "pendingCount", func(args []js.Value) (any, error) {
 		if len(args) != 1 {
 			return nil, errInvalidArgument
@@ -513,6 +545,10 @@ func errorCode(err error) string {
 		return "invalid_frame"
 	case errors.Is(err, text.ErrRange):
 		return "range_error"
+	case errors.Is(err, text.ErrInvalidAnchor):
+		return "invalid_anchor"
+	case errors.Is(err, text.ErrAnchorGone):
+		return "anchor_gone"
 	case errors.Is(err, text.ErrIncompleteState):
 		return "incomplete_state"
 	default:
@@ -580,6 +616,65 @@ func bytesToJS(data []byte) js.Value {
 	result := js.Global().Get("Uint8Array").New(len(data))
 	js.CopyBytesToJS(result, data)
 	return result
+}
+
+func anchorToJS(anchor text.Anchor) js.Value {
+	result := newObject()
+	switch anchor.Association {
+	case text.AnchorBefore:
+		result.Set("association", "before")
+	case text.AnchorAfter:
+		result.Set("association", "after")
+	}
+	if !anchor.Position.Valid() {
+		result.Set("position", js.Null())
+		return result
+	}
+	position := newObject()
+	position.Set("replicaID", anchor.Position.ReplicaID)
+	position.Set("wallTime", strconv.FormatUint(anchor.Position.WallTime, 10))
+	position.Set("logical", strconv.FormatUint(anchor.Position.Logical, 10))
+	result.Set("position", position)
+	return result
+}
+
+func anchorFromJS(value js.Value, maxStringBytes int) (text.Anchor, error) {
+	if value.Type() != js.TypeObject || value.IsNull() || value.IsUndefined() {
+		return text.Anchor{}, errInvalidArgument
+	}
+	var association text.AnchorAssociation
+	switch value.Get("association").String() {
+	case "before":
+		association = text.AnchorBefore
+	case "after":
+		association = text.AnchorAfter
+	default:
+		return text.Anchor{}, errInvalidArgument
+	}
+	positionValue := value.Get("position")
+	if positionValue.IsNull() || positionValue.IsUndefined() {
+		return text.Anchor{Association: association}, nil
+	}
+	if positionValue.Type() != js.TypeObject {
+		return text.Anchor{}, errInvalidArgument
+	}
+	replicaID, err := requiredBoundedString(positionValue.Get("replicaID"), maxStringBytes)
+	if err != nil {
+		return text.Anchor{}, err
+	}
+	wallTime, err := requiredUint64(positionValue.Get("wallTime"))
+	if err != nil {
+		return text.Anchor{}, err
+	}
+	logical, err := requiredUint64(positionValue.Get("logical"))
+	if err != nil {
+		return text.Anchor{}, err
+	}
+	position := text.Position{ReplicaID: replicaID, WallTime: wallTime, Logical: logical}
+	if !position.Valid() {
+		return text.Anchor{}, errInvalidArgument
+	}
+	return text.Anchor{Position: position, Association: association}, nil
 }
 
 func snapshotToJS(saved clientwasm.RGASnapshot) js.Value {
