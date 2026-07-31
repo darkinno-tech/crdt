@@ -304,7 +304,8 @@ export interface TiptapJSONNode {
 export interface TiptapTextPort {
   getJSON(): TiptapJSONNode;
   readonly commands: {
-    setContent(content: TiptapJSONNode, options: {
+    /** Tiptap's concrete content union stays application-owned. */
+    setContent(content: never, options: {
       readonly emitUpdate: boolean;
       readonly errorOnInvalidContent: boolean;
     }): boolean;
@@ -327,7 +328,7 @@ export function bindTiptapPlainText(
   return bindRGAPlainText(document, {
     readText: () => textFromTiptapJSON(editor.getJSON()),
     writeText: (value) => {
-      const accepted = editor.commands.setContent(tiptapJSONFromText(value), {
+      const accepted = editor.commands.setContent(tiptapJSONFromText(value) as never, {
         emitUpdate: false,
         errorOnInvalidContent: true,
       });
