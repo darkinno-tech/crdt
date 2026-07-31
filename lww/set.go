@@ -219,8 +219,7 @@ func (s *Set[T]) applyOwnedSetEntries(entries map[T]setEntry[T]) error {
 	}
 	for value, incoming := range entries {
 		current, exists := s.entries[value]
-		switch {
-		case !exists || current.tag.Compare(incoming.tag) < 0:
+		if !exists || current.tag.Compare(incoming.tag) < 0 {
 			if exists {
 				delete(s.tags, current.tag)
 			}
