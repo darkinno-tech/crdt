@@ -25,8 +25,10 @@
         createBrowserReplicaID,
         decodeFrame,
         FrameType,
+        IndexedDBRGAWasmPersistence,
         initRGAWasm,
         openNativeBrowserDocument,
+        openRGAWasmBrowserDocument,
       } from "../dist/index.js";
 
       const status = document.querySelector("#status");
@@ -67,6 +69,37 @@
         }
         await recovered.close();
 
+        const rgaDocumentID = `browser-wasm-rga-${crypto.randomUUID()}`;
+        const rgaReplicaID = createBrowserReplicaID("rga");
+        const rgaPersistence = await IndexedDBRGAWasmPersistence.open(`browser-wasm-rga-db-${crypto.randomUUID()}`);
+        const rgaPersisted = await openRGAWasmBrowserDocument({
+          documentID: rgaDocumentID,
+          replicaID: rgaReplicaID,
+          runtime,
+          persistence: rgaPersistence,
+        });
+        const rgaMutations = 128;
+        const rgaAppendStarted = performance.now();
+        for (let index = 0; index < rgaMutations; index += 1) {
+          rgaPersisted.insert(index, "x");
+          await rgaPersisted.flush();
+        }
+        const rgaAppendMs = performance.now() - rgaAppendStarted;
+        await rgaPersisted.close();
+        const rgaRecoveryStarted = performance.now();
+        const rgaRecovered = await openRGAWasmBrowserDocument({
+          documentID: rgaDocumentID,
+          replicaID: rgaReplicaID,
+          runtime,
+          persistence: rgaPersistence,
+        });
+        const rgaRecoveryMs = performance.now() - rgaRecoveryStarted;
+        if (Array.from(rgaRecovered.text()).length !== rgaMutations) {
+          throw new Error("IndexedDB recovery lost Wasm RGA state");
+        }
+        await rgaRecovered.close();
+        rgaPersistence.close();
+
         const channelName = `browser-native-channel-${crypto.randomUUID()}`;
         const leftTransport = new BroadcastChannelNativeTransport(channelName);
         const rightTransport = new BroadcastChannelNativeTransport(channelName);
@@ -89,8 +122,13 @@
         leftTransport.close();
         rightTransport.close();
 
-        window.__crdtWasmResult = { ok: true, text, native: "IndexedDB + BroadcastChannel" };
-        status.textContent = `PASS: ${text}; native IndexedDB + BroadcastChannel`;
+        window.__crdtWasmResult = {
+          ok: true,
+          text,
+          native: "IndexedDB + BroadcastChannel",
+          rga: { mutations: rgaMutations, appendMs: rgaAppendMs, recoveryMs: rgaRecoveryMs },
+        };
+        status.textContent = `PASS: ${text}; native + Wasm RGA IndexedDB recovery; BroadcastChannel`;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         window.__crdtWasmResult = { ok: false, error: message };

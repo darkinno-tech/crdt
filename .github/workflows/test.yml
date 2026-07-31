@@ -19,7 +19,7 @@ jobs:
     # The complete fuzz suite is intentionally bounded but can still take
     # several minutes. Leave headroom for corpus minimization without allowing
     # a stalled runner to consume the default six-hour allowance.
-    timeout-minutes: 15
+    timeout-minutes: 20
     concurrency:
       group: test-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true

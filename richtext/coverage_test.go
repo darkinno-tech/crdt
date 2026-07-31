@@ -500,13 +500,32 @@ func TestMetadataPreflightCapacityAndOlderWrites(t *testing.T) {
 	}); !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("metadata capacity = %v", err)
 	}
-	if err := document.applyMarksLocked(map[text.Position]markSet{
+	document.applyMarksLocked(map[text.Position]markSet{
 		first: {key: "bold", value: markValue{tag: crdt.Tag{ReplicaID: "writer", WallTime: 1}, value: "old"}},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	if got := document.marks[first].value.value; got != "new" {
 		t.Fatalf("older mark overwrote newer value: %q", got)
+	}
+}
+
+func TestResolveAnchorReturnsCurrentBoundaryAndRejectsNilDocument(t *testing.T) {
+	document, err := New("anchor-author")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Insert(0, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	anchor, err := document.AnchorAt(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offset, err := document.ResolveAnchor(anchor); err != nil || offset != 1 {
+		t.Fatalf("ResolveAnchor() = %d, %v", offset, err)
+	}
+	var nilDocument *Document
+	if _, err := nilDocument.ResolveAnchor(text.Anchor{}); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("nil ResolveAnchor() = %v", err)
 	}
 }
 

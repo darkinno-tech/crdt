@@ -16,11 +16,17 @@ import type {
   NativeUpdateListener,
   NativeValue,
 } from "./native.js";
+import { CRDTRuntimeError } from "./wasm.js";
+import type { RGAAnchor, RGAWasmDocument, RGAWasmRuntime, RGASnapshot } from "./wasm.js";
 
+const DATABASE_FORMAT = 2;
 const BROWSER_PERSISTENCE_FORMAT = 1;
+const RGA_BROWSER_PERSISTENCE_FORMAT = 1;
 const DEFAULT_DATABASE_NAME = "darkinno-crdt-native";
 const UPDATE_STORE = "updates";
 const DOCUMENT_STORE = "documents";
+const RGA_UPDATE_STORE = "rga-updates";
+const RGA_DOCUMENT_STORE = "rga-documents";
 const MAX_STORAGE_KEY_BYTES = 1 << 10;
 
 /** Limits for the append-only browser recovery log. */
@@ -169,6 +175,7 @@ export class NativeBrowserDocument {
   #persistenceQueue: Promise<void> = Promise.resolve();
   #drainPromise: Promise<void> | undefined;
   #reportedPersistenceError: unknown;
+  #mutationVersion = 0;
   #closed = false;
 
   private constructor(
@@ -305,7 +312,12 @@ export class NativeBrowserDocument {
   }
 
   private recordUpdate(event: NativeUpdateEvent): void {
+    this.#mutationVersion += 1;
     const encoded = encodeNativeUpdate(event.update, this.document.limits);
+    // Capture exactly the state visible to this update before a later
+    // synchronous mutation can enter memory. Compaction must not make a frame
+    // durable before that frame's own append transaction has succeeded.
+    const snapshot = nativeSnapshotIfComplete(this.document);
     const emitted: NativeBrowserUpdateEvent = { ...event, encoded: encoded.slice() };
     for (const listener of [...this.#updateListeners]) {
       listener(emitted);
@@ -326,7 +338,7 @@ export class NativeBrowserDocument {
           pending: true,
         });
       }
-      await this.maybeCompact(result.updateCount, result.logBytes);
+      await this.maybeCompact(result.updateCount, result.logBytes, snapshot);
     }).then(
       () => {
         if (event.local === true) {
@@ -351,22 +363,15 @@ export class NativeBrowserDocument {
     return next;
   }
 
-  private async maybeCompact(updateCount: number, logBytes: number): Promise<void> {
+  private async maybeCompact(updateCount: number, logBytes: number, snapshot: NativeSnapshot | undefined): Promise<void> {
     if (
+      snapshot === undefined ||
       this.#outbox.size !== 0 ||
       (updateCount < this.persistenceLimits.compactAfterUpdates && logBytes < this.persistenceLimits.compactAfterBytes)
     ) {
       return;
     }
-    try {
-      await this.persistence.compact(this.documentID, this.document.snapshot());
-    } catch (error) {
-      // An unresolved array cannot safely encode complete state. Its append
-      // log remains recoverable, and a later resolved update can compact it.
-      if (!(error instanceof NativeCRDTError) || error.code !== "incomplete_state") {
-        throw error;
-      }
-    }
+    await this.persistence.compact(this.documentID, snapshot);
   }
 
   private async drainOutbox(): Promise<void> {
@@ -399,10 +404,31 @@ export class NativeBrowserDocument {
         this.#outbox.delete(update.sequence);
       });
     }
-    const stored = await this.persistence.load(this.documentID);
-    if (stored !== undefined) {
-      await this.enqueue(() => this.maybeCompact(stored.updates.length, stored.logBytes));
+    await this.compactAfterReceipt();
+  }
+
+  /**
+   * A receipt can arrive while another synchronous editor update is waiting
+   * for its append transaction. Wait for that queue to settle without error,
+   * then put read-and-compact ahead of later mutations so its snapshot matches
+   * the durable log prefix.
+   */
+  private async compactAfterReceipt(): Promise<void> {
+    const version = this.#mutationVersion;
+    await this.#persistenceQueue;
+    if (this.#reportedPersistenceError !== undefined || version !== this.#mutationVersion) {
+      return;
     }
+    const snapshot = nativeSnapshotIfComplete(this.document);
+    if (snapshot === undefined) {
+      return;
+    }
+    await this.enqueue(async () => {
+      const stored = await this.persistence.load(this.documentID);
+      if (stored !== undefined) {
+        await this.maybeCompact(stored.updates.length, stored.logBytes, snapshot);
+      }
+    });
   }
 
   private report(error: unknown): void {
@@ -505,7 +531,7 @@ export class IndexedDBNativePersistence implements NativeBrowserPersistence {
       throw new NativeBrowserError("invalid_argument");
     }
     try {
-      const request = indexedDB.open(databaseName, BROWSER_PERSISTENCE_FORMAT);
+      const request = indexedDB.open(databaseName, DATABASE_FORMAT);
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains(DOCUMENT_STORE)) {
@@ -513,6 +539,12 @@ export class IndexedDBNativePersistence implements NativeBrowserPersistence {
         }
         if (!database.objectStoreNames.contains(UPDATE_STORE)) {
           database.createObjectStore(UPDATE_STORE, { keyPath: ["key", "sequence"] });
+        }
+        if (!database.objectStoreNames.contains(RGA_DOCUMENT_STORE)) {
+          database.createObjectStore(RGA_DOCUMENT_STORE, { keyPath: "key" });
+        }
+        if (!database.objectStoreNames.contains(RGA_UPDATE_STORE)) {
+          database.createObjectStore(RGA_UPDATE_STORE, { keyPath: ["key", "sequence"] });
         }
       };
       return new IndexedDBNativePersistence(await requestValue(request));
@@ -630,6 +662,575 @@ export class IndexedDBNativePersistence implements NativeBrowserPersistence {
   }
 }
 
+/** One durable recovery record for a Go/Wasm RGA browser actor. */
+export interface RGAWasmStoredDocument {
+  /** Complete state + HLC + frontier captured before the retained append log. */
+  readonly snapshot: RGASnapshot | undefined;
+  readonly updates: readonly BrowserPersistedUpdate[];
+  readonly nextSequence: number;
+  readonly logBytes: number;
+}
+
+/**
+ * Persistence boundary for Go/Wasm RGA documents. It is intentionally a
+ * separate type and IndexedDB store from `native-ts-v1`: their state and
+ * delta formats are not interoperable.
+ */
+export interface RGAWasmBrowserPersistence {
+  load(key: string): Promise<RGAWasmStoredDocument | undefined>;
+  append(
+    key: string,
+    encoded: Uint8Array,
+    local: boolean,
+    limits: Readonly<BrowserPersistenceLimits>,
+  ): Promise<{ readonly sequence: number; readonly updateCount: number; readonly logBytes: number }>;
+  acknowledge(key: string, sequence: number): Promise<void>;
+  compact(key: string, snapshot: RGASnapshot): Promise<void>;
+  close?(): void | Promise<void>;
+}
+
+export interface RGAWasmBrowserDocumentOptions {
+  /** Authenticated document routing identifier; it is not authorization by itself. */
+  readonly documentID: string;
+  /** One persistent actor per concurrently active browser context. */
+  readonly replicaID: string;
+  /** Initialized Go/Wasm RGA runtime selected by the authenticated manifest. */
+  readonly runtime: RGAWasmRuntime;
+  readonly persistence?: RGAWasmBrowserPersistence;
+  /** Used only when `persistence` is omitted. */
+  readonly databaseName?: string;
+  readonly persistenceLimits?: Partial<BrowserPersistenceLimits>;
+  /** Optional authenticated transport; resolution must mean the chosen durable receipt. */
+  readonly transport?: NativeBrowserTransport;
+}
+
+export interface RGAWasmBrowserUpdateEvent {
+  readonly encoded: Uint8Array;
+  readonly local: boolean;
+}
+
+/**
+ * Opens a local-first Go/Wasm RGA actor: restore complete snapshot → replay
+ * bounded append log → persist every local/remote frame → retry the local
+ * outbox. A stored actor is keyed by both document and replica ID so a second
+ * tab cannot accidentally reuse its HLC sequence.
+ */
+export async function openRGAWasmBrowserDocument(
+  options: RGAWasmBrowserDocumentOptions,
+): Promise<RGAWasmBrowserDocument> {
+  assertStorageKey(options.documentID);
+  assertStorageKey(options.replicaID);
+  if (!isRGAWasmRuntime(options.runtime)) {
+    throw new NativeBrowserError("invalid_argument");
+  }
+  const limits = resolvePersistenceLimits(options.persistenceLimits);
+  const ownsPersistence = options.persistence === undefined;
+  const persistence = options.persistence ?? (await IndexedDBRGAWasmPersistence.open(options.databaseName));
+  const key = rgaPersistenceKey(options.documentID, options.replicaID);
+  const stored = await persistence.load(key);
+  const document = restoreRGADocument(options.runtime, options.replicaID, stored);
+  const client = RGAWasmBrowserDocument.fromRestored(
+    options.documentID,
+    options.replicaID,
+    key,
+    document,
+    persistence,
+    limits,
+    ownsPersistence,
+    stored,
+  );
+  if (options.transport !== undefined) {
+    await client.connect(options.transport);
+  }
+  return client;
+}
+
+/**
+ * Browser-facing facade for the canonical Go/Wasm RGA. The underlying handle
+ * is deliberately private so accepted local and remote frames cannot bypass
+ * the append-log/outbox boundary.
+ */
+export class RGAWasmBrowserDocument {
+  readonly #updateListeners = new Set<(event: RGAWasmBrowserUpdateEvent) => void>();
+  readonly #errorListeners = new Set<(error: unknown) => void>();
+  readonly #outbox = new Map<number, BrowserPersistedUpdate>();
+  #unsubscribeTransport: (() => void) | undefined;
+  #transport: NativeBrowserTransport | undefined;
+  #persistenceQueue: Promise<void> = Promise.resolve();
+  #drainPromise: Promise<void> | undefined;
+  #reportedPersistenceError: unknown;
+  #mutationVersion = 0;
+  #closed = false;
+
+  private constructor(
+    readonly documentID: string,
+    readonly replicaID: string,
+    private readonly persistenceKey: string,
+    private readonly document: RGAWasmDocument,
+    private readonly persistence: RGAWasmBrowserPersistence,
+    private readonly persistenceLimits: Readonly<BrowserPersistenceLimits>,
+    private readonly ownsPersistence: boolean,
+  ) {}
+
+  static fromRestored(
+    documentID: string,
+    replicaID: string,
+    persistenceKey: string,
+    document: RGAWasmDocument,
+    persistence: RGAWasmBrowserPersistence,
+    limits: Readonly<BrowserPersistenceLimits>,
+    ownsPersistence: boolean,
+    stored: RGAWasmStoredDocument | undefined,
+  ): RGAWasmBrowserDocument {
+    const client = new RGAWasmBrowserDocument(
+      documentID,
+      replicaID,
+      persistenceKey,
+      document,
+      persistence,
+      limits,
+      ownsPersistence,
+    );
+    if (stored !== undefined) {
+      for (const update of stored.updates) {
+        if (update.local && update.pending) {
+          client.#outbox.set(update.sequence, copyPersistedUpdate(update));
+        }
+      }
+    }
+    return client;
+  }
+
+  /** Count of durable local updates waiting for an application-defined receipt. */
+  get pendingOutbox(): number {
+    return this.#outbox.size;
+  }
+
+  text(): string {
+    this.assertUsable();
+    return this.document.text();
+  }
+
+  pendingCount(): number {
+    this.assertUsable();
+    return this.document.pendingCount();
+  }
+
+  anchorAt(offset: number): RGAAnchor {
+    this.assertUsable();
+    return this.document.anchorAt(offset);
+  }
+
+  resolveAnchor(anchor: RGAAnchor): number {
+    this.assertUsable();
+    return this.document.resolveAnchor(anchor);
+  }
+
+  insert(offset: number, value: string): Uint8Array {
+    this.assertUsable();
+    const encoded = this.document.insert(offset, value);
+    this.recordUpdate(encoded, true);
+    return encoded.slice();
+  }
+
+  delete(offset: number, count: number): Uint8Array {
+    this.assertUsable();
+    const encoded = this.document.delete(offset, count);
+    this.recordUpdate(encoded, true);
+    return encoded.slice();
+  }
+
+  replace(offset: number, count: number, value: string): Uint8Array {
+    this.assertUsable();
+    const encoded = this.document.replace(offset, count, value);
+    this.recordUpdate(encoded, true);
+    return encoded.slice();
+  }
+
+  /** Applies one authenticated, manifest-checked remote RGA frame before retaining it locally. */
+  applyDelta(encoded: Uint8Array): void {
+    this.assertUsable();
+    this.document.applyDelta(encoded);
+    this.recordUpdate(encoded, false);
+  }
+
+  onUpdate(listener: (event: RGAWasmBrowserUpdateEvent) => void): () => void {
+    this.assertUsable();
+    this.#updateListeners.add(listener);
+    return () => this.#updateListeners.delete(listener);
+  }
+
+  onError(listener: (error: unknown) => void): () => void {
+    this.assertUsable();
+    this.#errorListeners.add(listener);
+    return () => this.#errorListeners.delete(listener);
+  }
+
+  async connect(transport: NativeBrowserTransport): Promise<void> {
+    this.assertUsable();
+    assertTransport(transport);
+    this.disconnect();
+    this.#transport = transport;
+    this.#unsubscribeTransport = transport.subscribe((encoded) => {
+      try {
+        this.applyDelta(encoded);
+      } catch (error) {
+        this.report(error);
+      }
+    });
+    await this.flush();
+  }
+
+  disconnect(): void {
+    this.#unsubscribeTransport?.();
+    this.#unsubscribeTransport = undefined;
+    this.#transport = undefined;
+  }
+
+  /** Waits for IndexedDB commits and then drains the durable local outbox. */
+  async flush(): Promise<void> {
+    this.assertOpen();
+    await this.#persistenceQueue;
+    if (this.#reportedPersistenceError !== undefined) {
+      throw this.#reportedPersistenceError;
+    }
+    await this.drainOutbox();
+  }
+
+  async close(): Promise<boolean> {
+    if (this.#closed) {
+      return false;
+    }
+    await this.flush();
+    this.#closed = true;
+    this.disconnect();
+    this.document.close();
+    this.#updateListeners.clear();
+    this.#errorListeners.clear();
+    if (this.ownsPersistence) {
+      await this.persistence.close?.();
+    }
+    return true;
+  }
+
+  private recordUpdate(encoded: Uint8Array, local: boolean): void {
+    this.#mutationVersion += 1;
+    const frame = encoded.slice();
+    // Capture at mutation time, before later synchronous editor events can
+    // enter the document. Compaction must never checkpoint a frame whose own
+    // append transaction has not completed.
+    const snapshot = snapshotIfComplete(this.document);
+    void this.enqueue(async () => {
+      const result = await this.persistence.append(this.persistenceKey, frame, local, this.persistenceLimits);
+      if (local) {
+        this.#outbox.set(result.sequence, {
+          sequence: result.sequence,
+          encoded: frame.slice(),
+          local: true,
+          pending: true,
+        });
+      }
+      this.emit({ encoded: frame, local });
+      if (snapshot !== undefined) {
+        await this.maybeCompact(result.updateCount, result.logBytes, snapshot);
+      }
+    }).then(
+      () => {
+        if (local) {
+          void this.drainOutbox().catch((error) => this.report(error));
+        }
+      },
+      (error) => this.report(error),
+    );
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const next = this.#persistenceQueue.then(operation);
+    this.#persistenceQueue = next.catch((error) => {
+      this.#reportedPersistenceError ??= error;
+    });
+    return next;
+  }
+
+  private async maybeCompact(updateCount: number, logBytes: number, snapshot: RGASnapshot): Promise<void> {
+    if (
+      this.#outbox.size !== 0 ||
+      (updateCount < this.persistenceLimits.compactAfterUpdates && logBytes < this.persistenceLimits.compactAfterBytes)
+    ) {
+      return;
+    }
+    await this.persistence.compact(this.persistenceKey, snapshot);
+  }
+
+  private async drainOutbox(): Promise<void> {
+    if (this.#transport === undefined || this.#outbox.size === 0) {
+      return;
+    }
+    if (this.#drainPromise !== undefined) {
+      return this.#drainPromise;
+    }
+    const draining = this.runDrain();
+    this.#drainPromise = draining.finally(() => {
+      this.#drainPromise = undefined;
+    });
+    return this.#drainPromise;
+  }
+
+  private async runDrain(): Promise<void> {
+    const transport = this.#transport;
+    if (transport === undefined) {
+      return;
+    }
+    for (const update of [...this.#outbox.values()].sort((left, right) => left.sequence - right.sequence)) {
+      try {
+        await transport.send(update.encoded.slice());
+      } catch (error) {
+        throw new NativeBrowserError("transport_failed", error);
+      }
+      await this.enqueue(async () => {
+        await this.persistence.acknowledge(this.persistenceKey, update.sequence);
+        this.#outbox.delete(update.sequence);
+      });
+    }
+    await this.compactAfterReceipt();
+  }
+
+  /** See NativeBrowserDocument.compactAfterReceipt for the durable-prefix invariant. */
+  private async compactAfterReceipt(): Promise<void> {
+    const version = this.#mutationVersion;
+    await this.#persistenceQueue;
+    if (this.#reportedPersistenceError !== undefined || version !== this.#mutationVersion) {
+      return;
+    }
+    const snapshot = snapshotIfComplete(this.document);
+    if (snapshot === undefined) {
+      return;
+    }
+    await this.enqueue(async () => {
+      const stored = await this.persistence.load(this.persistenceKey);
+      if (stored !== undefined) {
+        await this.maybeCompact(stored.updates.length, stored.logBytes, snapshot);
+      }
+    });
+  }
+
+  private emit(event: RGAWasmBrowserUpdateEvent): void {
+    for (const listener of [...this.#updateListeners]) {
+      listener({ encoded: event.encoded.slice(), local: event.local });
+    }
+  }
+
+  private report(error: unknown): void {
+    for (const listener of [...this.#errorListeners]) {
+      try {
+        listener(error);
+      } catch {
+        // Error observers cannot bypass the recovery boundary.
+      }
+    }
+  }
+
+  private assertUsable(): void {
+    this.assertOpen();
+    if (this.#reportedPersistenceError !== undefined) {
+      throw this.#reportedPersistenceError;
+    }
+  }
+
+  private assertOpen(): void {
+    if (this.#closed) {
+      throw new NativeBrowserError("document_closed");
+    }
+  }
+}
+
+/** Deterministic RGA persistence for tests and SSR-capable application adapters. */
+export class MemoryRGAWasmBrowserPersistence implements RGAWasmBrowserPersistence {
+  readonly #documents = new Map<string, RGAWasmStoredDocument>();
+
+  async load(key: string): Promise<RGAWasmStoredDocument | undefined> {
+    const record = this.#documents.get(key);
+    return record === undefined ? undefined : copyRGAStoredDocument(record);
+  }
+
+  async append(
+    key: string,
+    encoded: Uint8Array,
+    local: boolean,
+    limits: Readonly<BrowserPersistenceLimits>,
+  ): Promise<{ readonly sequence: number; readonly updateCount: number; readonly logBytes: number }> {
+    const record = this.#documents.get(key) ?? emptyRGAStoredDocument();
+    const nextBytes = record.logBytes + encoded.byteLength;
+    if (record.updates.length >= limits.maxUpdates || nextBytes > limits.maxBytes || record.nextSequence >= Number.MAX_SAFE_INTEGER) {
+      throw new NativeBrowserError("persistence_limit");
+    }
+    const sequence = record.nextSequence + 1;
+    const update: BrowserPersistedUpdate = { sequence, encoded: encoded.slice(), local, pending: local };
+    const next: RGAWasmStoredDocument = {
+      snapshot: record.snapshot === undefined ? undefined : copyRGASnapshot(record.snapshot),
+      updates: [...record.updates.map(copyPersistedUpdate), update],
+      nextSequence: sequence,
+      logBytes: nextBytes,
+    };
+    this.#documents.set(key, next);
+    return { sequence, updateCount: next.updates.length, logBytes: next.logBytes };
+  }
+
+  async acknowledge(key: string, sequence: number): Promise<void> {
+    const record = this.#documents.get(key);
+    if (record === undefined) {
+      return;
+    }
+    this.#documents.set(key, {
+      ...record,
+      updates: record.updates.map((update) =>
+        update.sequence === sequence ? { ...copyPersistedUpdate(update), pending: false } : copyPersistedUpdate(update),
+      ),
+    });
+  }
+
+  async compact(key: string, snapshot: RGASnapshot): Promise<void> {
+    const record = this.#documents.get(key);
+    if (record?.updates.some((update) => update.local && update.pending)) {
+      throw new NativeBrowserError("persistence_failed");
+    }
+    this.#documents.set(key, {
+      snapshot: copyRGASnapshot(snapshot),
+      updates: [],
+      nextSequence: 0,
+      logBytes: 0,
+    });
+  }
+}
+
+/** IndexedDB-backed persistence for canonical Go/Wasm RGA frames. */
+export class IndexedDBRGAWasmPersistence implements RGAWasmBrowserPersistence {
+  readonly #database: IDBDatabase;
+
+  private constructor(database: IDBDatabase) {
+    this.#database = database;
+  }
+
+  static async open(databaseName = DEFAULT_DATABASE_NAME): Promise<IndexedDBRGAWasmPersistence> {
+    if (typeof indexedDB === "undefined") {
+      throw new NativeBrowserError("persistence_unavailable");
+    }
+    if (typeof databaseName !== "string" || databaseName.length === 0) {
+      throw new NativeBrowserError("invalid_argument");
+    }
+    try {
+      const request = indexedDB.open(databaseName, DATABASE_FORMAT);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(DOCUMENT_STORE)) {
+          database.createObjectStore(DOCUMENT_STORE, { keyPath: "key" });
+        }
+        if (!database.objectStoreNames.contains(UPDATE_STORE)) {
+          database.createObjectStore(UPDATE_STORE, { keyPath: ["key", "sequence"] });
+        }
+        if (!database.objectStoreNames.contains(RGA_DOCUMENT_STORE)) {
+          database.createObjectStore(RGA_DOCUMENT_STORE, { keyPath: "key" });
+        }
+        if (!database.objectStoreNames.contains(RGA_UPDATE_STORE)) {
+          database.createObjectStore(RGA_UPDATE_STORE, { keyPath: ["key", "sequence"] });
+        }
+      };
+      return new IndexedDBRGAWasmPersistence(await requestValue(request));
+    } catch (error) {
+      throw new NativeBrowserError("persistence_failed", error);
+    }
+  }
+
+  async load(key: string): Promise<RGAWasmStoredDocument | undefined> {
+    try {
+      const transaction = this.#database.transaction([RGA_DOCUMENT_STORE, RGA_UPDATE_STORE], "readonly");
+      const documentRequest = transaction.objectStore(RGA_DOCUMENT_STORE).get(key);
+      const updatesRequest = readUpdates(transaction.objectStore(RGA_UPDATE_STORE), key);
+      const [record, updates] = await Promise.all([requestValue(documentRequest), updatesRequest]);
+      await transactionComplete(transaction);
+      return record === undefined ? undefined : rgaStoredFromIndexedRecord(record, updates);
+    } catch (error) {
+      throw asPersistenceError(error);
+    }
+  }
+
+  async append(
+    key: string,
+    encoded: Uint8Array,
+    local: boolean,
+    limits: Readonly<BrowserPersistenceLimits>,
+  ): Promise<{ readonly sequence: number; readonly updateCount: number; readonly logBytes: number }> {
+    try {
+      const transaction = this.#database.transaction([RGA_DOCUMENT_STORE, RGA_UPDATE_STORE], "readwrite");
+      const documentStore = transaction.objectStore(RGA_DOCUMENT_STORE);
+      const existing = await requestValue(documentStore.get(key));
+      const record = existing === undefined ? indexedEmptyRGARecord(key) : requireIndexedRGARecord(existing);
+      const nextBytes = record.logBytes + encoded.byteLength;
+      if (record.updateCount >= limits.maxUpdates || nextBytes > limits.maxBytes || record.nextSequence >= Number.MAX_SAFE_INTEGER) {
+        transaction.abort();
+        throw new NativeBrowserError("persistence_limit");
+      }
+      const sequence = record.nextSequence + 1;
+      transaction.objectStore(RGA_UPDATE_STORE).add({ key, sequence, encoded: encoded.slice(), local, pending: local });
+      documentStore.put({
+        ...record,
+        nextSequence: sequence,
+        updateCount: record.updateCount + 1,
+        logBytes: nextBytes,
+      });
+      await transactionComplete(transaction);
+      return { sequence, updateCount: record.updateCount + 1, logBytes: nextBytes };
+    } catch (error) {
+      throw asPersistenceError(error);
+    }
+  }
+
+  async acknowledge(key: string, sequence: number): Promise<void> {
+    try {
+      const transaction = this.#database.transaction(RGA_UPDATE_STORE, "readwrite");
+      const store = transaction.objectStore(RGA_UPDATE_STORE);
+      const record = await requestValue(store.get([key, sequence]));
+      if (record !== undefined) {
+        const update = requireIndexedUpdate(record);
+        store.put({ ...update, pending: false });
+      }
+      await transactionComplete(transaction);
+    } catch (error) {
+      throw asPersistenceError(error);
+    }
+  }
+
+  async compact(key: string, snapshot: RGASnapshot): Promise<void> {
+    try {
+      const transaction = this.#database.transaction([RGA_DOCUMENT_STORE, RGA_UPDATE_STORE], "readwrite");
+      const updateStore = transaction.objectStore(RGA_UPDATE_STORE);
+      const updates = await readUpdates(updateStore, key);
+      if (updates.some((update) => update.local && update.pending)) {
+        transaction.abort();
+        throw new NativeBrowserError("persistence_failed");
+      }
+      for (const update of updates) {
+        updateStore.delete([key, update.sequence]);
+      }
+      transaction.objectStore(RGA_DOCUMENT_STORE).put({
+        key,
+        format: RGA_BROWSER_PERSISTENCE_FORMAT,
+        snapshot: copyRGASnapshot(snapshot),
+        nextSequence: 0,
+        updateCount: 0,
+        logBytes: 0,
+      } satisfies IndexedRGAWasmDocumentRecord);
+      await transactionComplete(transaction);
+    } catch (error) {
+      throw asPersistenceError(error);
+    }
+  }
+
+  close(): void {
+    this.#database.close();
+  }
+}
+
 /** A same-origin, volatile multi-tab transport; it is not authentication or durable delivery. */
 export class BroadcastChannelNativeTransport implements NativeBrowserTransport {
   readonly #channel: BroadcastChannel;
@@ -698,6 +1299,148 @@ interface IndexedUpdateRecord {
   readonly pending: boolean;
 }
 
+interface IndexedRGAWasmDocumentRecord {
+  readonly key: string;
+  readonly format: number;
+  readonly snapshot?: RGASnapshot;
+  readonly nextSequence: number;
+  readonly updateCount: number;
+  readonly logBytes: number;
+}
+
+function isRGAWasmRuntime(value: unknown): value is RGAWasmRuntime {
+  return isRecord(value) && typeof value.create === "function" && typeof value.restore === "function";
+}
+
+function rgaPersistenceKey(documentID: string, replicaID: string): string {
+  // JSON preserves the two-component boundary even when caller IDs include a
+  // control character, preventing document/actor key aliasing in IndexedDB.
+  return JSON.stringify([documentID, replicaID]);
+}
+
+function restoreRGADocument(
+  runtime: RGAWasmRuntime,
+  replicaID: string,
+  stored: RGAWasmStoredDocument | undefined,
+): RGAWasmDocument {
+  try {
+    let document: RGAWasmDocument;
+    if (stored?.snapshot === undefined) {
+      document = runtime.create(replicaID);
+    } else {
+      if (stored.snapshot.clock.replicaID !== replicaID) {
+        throw new NativeBrowserError("persistence_failed");
+      }
+      document = runtime.restore(stored.snapshot);
+    }
+    for (const update of stored?.updates ?? []) {
+      document.applyDelta(update.encoded);
+    }
+    return document;
+  } catch (error) {
+    throw asPersistenceError(error);
+  }
+}
+
+function snapshotIfComplete(document: RGAWasmDocument): RGASnapshot | undefined {
+  try {
+    return document.snapshot();
+  } catch (error) {
+    if (error instanceof CRDTRuntimeError && error.code === "incomplete_state") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function emptyRGAStoredDocument(): RGAWasmStoredDocument {
+  return { snapshot: undefined, updates: [], nextSequence: 0, logBytes: 0 };
+}
+
+function indexedEmptyRGARecord(key: string): IndexedRGAWasmDocumentRecord {
+  return {
+    key,
+    format: RGA_BROWSER_PERSISTENCE_FORMAT,
+    nextSequence: 0,
+    updateCount: 0,
+    logBytes: 0,
+  };
+}
+
+function copyRGAStoredDocument(document: RGAWasmStoredDocument): RGAWasmStoredDocument {
+  return {
+    snapshot: document.snapshot === undefined ? undefined : copyRGASnapshot(document.snapshot),
+    updates: document.updates.map(copyPersistedUpdate),
+    nextSequence: document.nextSequence,
+    logBytes: document.logBytes,
+  };
+}
+
+function copyRGASnapshot(snapshot: RGASnapshot): RGASnapshot {
+  if (
+    !isRecord(snapshot) ||
+    !(snapshot.state instanceof Uint8Array) ||
+    !isRGATag(snapshot.clock) ||
+    !Array.isArray(snapshot.frontier) ||
+    !snapshot.frontier.every(isRGATag)
+  ) {
+    throw new NativeBrowserError("persistence_failed");
+  }
+  const frontier = snapshot.frontier.map(copyRGATag);
+  if (new Set(frontier.map((tag) => tag.replicaID)).size !== frontier.length) {
+    throw new NativeBrowserError("persistence_failed");
+  }
+  return { state: snapshot.state.slice(), clock: copyRGATag(snapshot.clock), frontier };
+}
+
+function isRGATag(value: unknown): value is RGASnapshot["clock"] {
+  return isRecord(value) &&
+    typeof value.replicaID === "string" && value.replicaID.trim() !== "" &&
+    typeof value.wallTime === "bigint" && value.wallTime >= 0n &&
+    typeof value.logical === "bigint" && value.logical >= 0n;
+}
+
+function copyRGATag(tag: RGASnapshot["clock"]): RGASnapshot["clock"] {
+  return { replicaID: tag.replicaID, wallTime: tag.wallTime, logical: tag.logical };
+}
+
+function rgaStoredFromIndexedRecord(value: unknown, updates: readonly IndexedUpdateRecord[]): RGAWasmStoredDocument {
+  const record = requireIndexedRGARecord(value);
+  if (record.updateCount !== updates.length || record.logBytes !== updates.reduce((total, update) => total + update.encoded.byteLength, 0)) {
+    throw new NativeBrowserError("persistence_failed");
+  }
+  return {
+    snapshot: record.snapshot === undefined ? undefined : copyRGASnapshot(record.snapshot),
+    updates: updates.map(copyPersistedUpdate),
+    nextSequence: record.nextSequence,
+    logBytes: record.logBytes,
+  };
+}
+
+function requireIndexedRGARecord(value: unknown): IndexedRGAWasmDocumentRecord {
+  if (
+    !isRecord(value) ||
+    value.format !== RGA_BROWSER_PERSISTENCE_FORMAT ||
+    typeof value.key !== "string" ||
+    !(value.snapshot === undefined || isRecord(value.snapshot)) ||
+    typeof value.nextSequence !== "number" ||
+    !Number.isSafeInteger(value.nextSequence) ||
+    value.nextSequence < 0 ||
+    typeof value.updateCount !== "number" ||
+    !Number.isSafeInteger(value.updateCount) ||
+    value.updateCount < 0 ||
+    typeof value.logBytes !== "number" ||
+    !Number.isSafeInteger(value.logBytes) ||
+    value.logBytes < 0
+  ) {
+    throw new NativeBrowserError("persistence_failed");
+  }
+  if (value.snapshot !== undefined) {
+    copyRGASnapshot(value.snapshot as unknown as RGASnapshot);
+  }
+  return value as unknown as IndexedRGAWasmDocumentRecord;
+}
+
 function restoreDocument(
   replicaID: string,
   stored: BrowserStoredDocument | undefined,
@@ -715,6 +1458,19 @@ function restoreDocument(
     document.applyEncodedUpdate(update.encoded, "persistence-replay");
   }
   return document;
+}
+
+function nativeSnapshotIfComplete(document: NativeDocument): NativeSnapshot | undefined {
+  try {
+    return document.snapshot();
+  } catch (error) {
+    // An unresolved array parent cannot form a complete compacted base. Its
+    // append log stays the recovery source until a later update resolves it.
+    if (error instanceof NativeCRDTError && error.code === "incomplete_state") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function resolvePersistenceLimits(options: Partial<BrowserPersistenceLimits> | undefined): Readonly<BrowserPersistenceLimits> {

@@ -130,6 +130,43 @@ func TestRuntimeReplace(t *testing.T) {
 	}
 }
 
+func TestRuntimeAnchorTracksConcurrentInsertAndSnapshotRecovery(t *testing.T) {
+	options := DefaultRunRGAOptions()
+	runtime, err := NewRuntime(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := mustCreate(t, runtime, "anchor-alice")
+	bob := mustCreate(t, runtime, "anchor-bob")
+	base := mustInsert(t, runtime, alice, 0, "abcd")
+	mustApply(t, runtime, bob, base)
+
+	anchor, err := runtime.AnchorAt(alice, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !anchor.Valid() {
+		t.Fatalf("AnchorAt returned invalid anchor %#v", anchor)
+	}
+	insert := mustInsert(t, runtime, bob, 2, "X")
+	mustApply(t, runtime, alice, insert)
+	if offset, err := runtime.ResolveAnchor(alice, anchor); err != nil || offset != 3 {
+		t.Fatalf("ResolveAnchor after concurrent insert = %d, %v; want 3, nil", offset, err)
+	}
+
+	saved, err := runtime.Snapshot(alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := runtime.Restore(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offset, err := runtime.ResolveAnchor(restored, anchor); err != nil || offset != 3 {
+		t.Fatalf("ResolveAnchor after snapshot recovery = %d, %v; want 3, nil", offset, err)
+	}
+}
+
 func testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T, options RGAOptions, wantProtocol RGAProtocol) {
 	t.Helper()
 	runtime, err := NewRuntime(options)

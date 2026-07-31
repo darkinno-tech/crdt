@@ -8,7 +8,7 @@
  * schema before binding a rich document tree.
  */
 
-import { CRDTRuntimeError, RGAWasmDocument } from "./wasm.js";
+import { CRDTRuntimeError, RGAAnchor, RGAWasmDocument } from "./wasm.js";
 
 export type RGAFrameListener = (frame: Uint8Array) => void;
 
@@ -19,11 +19,31 @@ export interface PlainTextEditorPort {
   observeText(listener: () => void): () => void;
 }
 
+/** A UTF-16 selection as used by DOM, Quill, and CodeMirror editor APIs. */
+export interface EditorTextSelection {
+  readonly anchor: number;
+  readonly head: number;
+}
+
+/** Optional editor capability for preserving a selection through remote RGA merges. */
+export interface SelectionEditorPort extends PlainTextEditorPort {
+  readSelection(): EditorTextSelection | undefined;
+  writeSelection(selection: EditorTextSelection): void;
+}
+
+/** A stable RGA Position/Tag selection suitable for local editor state or authenticated presence. */
+export interface RGASelection {
+  readonly anchor: RGAAnchor;
+  readonly head: RGAAnchor;
+}
+
 export interface BindRGAPlainTextOptions {
   /** Receives exact RGA frames for an authenticated, durable outbox. */
   readonly onLocalFrame: RGAFrameListener;
   /** Import an existing editor value as local CRDT edits instead of overwriting it. */
   readonly initialContent?: "document" | "editor";
+  /** Reports a malformed or compacted local selection without blocking a remote document merge. */
+  readonly onSelectionError?: (error: unknown) => void;
 }
 
 /**
@@ -58,9 +78,47 @@ export class RGAPlainTextBinding {
   /** Applies one authenticated, manifest-checked remote frame. */
   applyRemote(frame: Uint8Array): void {
     this.#assertOpen();
+    const selection = this.#captureSelectionSafely();
     this.document.applyDelta(frame);
     this.#text = this.document.text();
     this.#writeEditor(this.#text);
+    if (selection !== undefined) {
+      this.#restoreSelectionSafely(selection);
+    }
+  }
+
+  /** Captures the editor's current UTF-16 selection as stable RGA Position/Tag anchors. */
+  captureSelection(): RGASelection | undefined {
+    this.#assertOpen();
+    const port = selectionPort(this.editor);
+    if (port === undefined) {
+      return undefined;
+    }
+    const selection = port.readSelection();
+    if (selection === undefined) {
+      return undefined;
+    }
+    return {
+      anchor: this.document.anchorAt(runeOffsetAtUTF16(this.#text, selection.anchor)),
+      head: this.document.anchorAt(runeOffsetAtUTF16(this.#text, selection.head)),
+    };
+  }
+
+  /** Restores a retained RGA Position/Tag selection to the editor's UTF-16 offsets. */
+  restoreSelection(selection: RGASelection): boolean {
+    this.#assertOpen();
+    const port = selectionPort(this.editor);
+    if (port === undefined) {
+      return false;
+    }
+    if (!isRGASelection(selection)) {
+      throw new CRDTRuntimeError("invalid_anchor");
+    }
+    port.writeSelection({
+      anchor: utf16OffsetAtRune(this.#text, this.document.resolveAnchor(selection.anchor)),
+      head: utf16OffsetAtRune(this.#text, this.document.resolveAnchor(selection.head)),
+    });
+    return true;
   }
 
   /** Stops observation; it never closes the caller-owned RGA document. */
@@ -136,6 +194,25 @@ export class RGAPlainTextBinding {
     }
   }
 
+  #captureSelectionSafely(): RGASelection | undefined {
+    try {
+      return this.captureSelection();
+    } catch (error) {
+      this.options.onSelectionError?.(error);
+      return undefined;
+    }
+  }
+
+  #restoreSelectionSafely(selection: RGASelection): void {
+    try {
+      this.restoreSelection(selection);
+    } catch (error) {
+      // A compacted marker must clear or refresh the cursor instead of
+      // guessing a nearby editor offset. The document merge remains valid.
+      this.options.onSelectionError?.(error);
+    }
+  }
+
   #assertOpen(): void {
     if (this.#closed) {
       throw new CRDTRuntimeError("document_closed");
@@ -155,6 +232,8 @@ export function bindRGAPlainText(
 export interface QuillTextPort {
   getText(): string;
   setText(value: string, source?: "api" | "silent" | "user"): unknown;
+  getSelection?(focus?: boolean): { readonly index: number; readonly length: number } | null;
+  setSelection?(index: number, length: number, source?: "api" | "silent" | "user"): unknown;
   on(event: "text-change", listener: (delta: unknown, oldContents: unknown, source: string) => void): unknown;
   off?(event: "text-change", listener: (delta: unknown, oldContents: unknown, source: string) => void): unknown;
 }
@@ -168,7 +247,7 @@ export function bindQuillPlainText(
   quill: QuillTextPort,
   options: BindRGAPlainTextOptions,
 ): RGAPlainTextBinding {
-  return bindRGAPlainText(document, {
+  const port: SelectionEditorPort = {
     readText: () => quill.getText(),
     writeText: (value) => {
       quill.setText(value, "api");
@@ -182,7 +261,19 @@ export function bindQuillPlainText(
       quill.on("text-change", handler);
       return () => quill.off?.("text-change", handler);
     },
-  }, options);
+    readSelection: () => {
+      const selection = quill.getSelection?.();
+      return selection === null || selection === undefined
+        ? undefined
+        : { anchor: selection.index, head: selection.index + selection.length };
+    },
+    writeSelection: (selection: EditorTextSelection) => {
+      if (quill.setSelection !== undefined) {
+        quill.setSelection(selection.anchor, selection.head - selection.anchor, "api");
+      }
+    },
+  };
+  return bindRGAPlainText(document, port, options);
 }
 
 /** Structural type for a Monaco ITextModel without a Monaco dependency. */
@@ -215,13 +306,17 @@ export interface CodeMirrorTextPort {
       readonly length: number;
       toString(): string;
     };
+    readonly selection?: {
+      readonly main: EditorTextSelection;
+    };
   };
   dispatch(spec: {
-    readonly changes: {
+    readonly changes?: {
       readonly from: number;
       readonly to: number;
       readonly insert: string;
     };
+    readonly selection?: EditorTextSelection;
   }): void;
 }
 
@@ -246,7 +341,7 @@ export class CodeMirrorPlainTextBinding {
     private readonly view: CodeMirrorTextPort,
     options: BindRGAPlainTextOptions,
   ) {
-    this.#binding = bindRGAPlainText(document, {
+    const port: SelectionEditorPort = {
       readText: () => view.state.doc.toString(),
       writeText: (value) => {
         view.dispatch({
@@ -265,7 +360,10 @@ export class CodeMirrorPlainTextBinding {
           }
         };
       },
-    }, options);
+      readSelection: () => view.state.selection?.main,
+      writeSelection: (selection: EditorTextSelection) => view.dispatch({ selection }),
+    };
+    this.#binding = bindRGAPlainText(document, port, options);
   }
 
   /** Pass every `EditorView.updateListener` event through this method. */
@@ -277,6 +375,16 @@ export class CodeMirrorPlainTextBinding {
 
   applyRemote(frame: Uint8Array): void {
     this.#binding.applyRemote(frame);
+  }
+
+  /** Captures CodeMirror's selection as stable RGA Position/Tag anchors. */
+  captureSelection(): RGASelection | undefined {
+    return this.#binding.captureSelection();
+  }
+
+  /** Restores retained RGA Position/Tag anchors to CodeMirror's UTF-16 selection. */
+  restoreSelection(selection: RGASelection): boolean {
+    return this.#binding.restoreSelection(selection);
   }
 
   destroy(): boolean {
@@ -391,6 +499,286 @@ export function bindSlatePlainText(
   return bindRGAPlainText(document, port, options);
 }
 
+/** One renderable rich-text span from the separately negotiated richtext v1 CRDT. */
+export interface RichTextSpan {
+  readonly text: string;
+  readonly attributes?: Readonly<Record<string, string>>;
+}
+
+/** One named rich-text attribute assignment or removal. */
+export interface RichTextAttributeChange {
+  readonly key: string;
+  readonly value?: string;
+  readonly remove?: boolean;
+}
+
+/**
+ * The small, offset-based editor transaction accepted by richtext.Document.
+ * Every operation has exactly one of retain, delete, or insert. Offsets use
+ * Unicode scalar values, so a backend must not pass raw UTF-16 positions.
+ */
+export interface RichTextEditorOperation {
+  readonly retain?: number;
+  readonly delete?: number;
+  readonly insert?: string;
+  readonly changes?: readonly RichTextAttributeChange[];
+}
+
+/**
+ * The browser-facing rich-text runtime boundary. It is intentionally separate
+ * from RGAWasmDocument: rich-text v1 uses its own TypeIDs, manifest schema,
+ * atomic state/clock persistence unit, and frame decoder.
+ */
+export interface RichTextEditorDocument {
+  spans(): readonly RichTextSpan[];
+  applyEditorDelta(operations: readonly RichTextEditorOperation[]): Uint8Array;
+  applyDelta(frame: Uint8Array): void;
+}
+
+/** Quill's public Delta shape, kept structural to avoid a Quill dependency. */
+export interface QuillRichTextDelta {
+  readonly ops?: readonly QuillRichTextDeltaOperation[];
+}
+
+export interface QuillRichTextDeltaOperation {
+  readonly retain?: number;
+  readonly delete?: number;
+  readonly insert?: unknown;
+  readonly attributes?: Readonly<Record<string, unknown>>;
+}
+
+/** The subset of Quill 2 used by the rich-text delta binding. */
+export interface QuillRichTextPort {
+  getContents(): QuillRichTextDelta;
+  setContents(value: QuillRichTextDelta, source?: "api" | "silent" | "user"): unknown;
+  on(event: "text-change", listener: (delta: QuillRichTextDelta, oldContents: QuillRichTextDelta, source: string) => void): unknown;
+  off?(event: "text-change", listener: (delta: QuillRichTextDelta, oldContents: QuillRichTextDelta, source: string) => void): unknown;
+}
+
+/**
+ * Converts only an application-approved Quill attribute schema. The binding
+ * never guesses how a mark, link, block, mention, or embed should be mapped.
+ * The same codec must be selected by the rich-text Manifest SchemaID.
+ */
+export interface RichTextAttributeCodec {
+  toDocumentChanges(
+    attributes: Readonly<Record<string, unknown>>,
+    operation: "insert" | "retain",
+  ): readonly RichTextAttributeChange[];
+  toEditorAttributes(
+    attributes: Readonly<Record<string, string>>,
+    text: string,
+  ): Readonly<Record<string, unknown>> | undefined;
+}
+
+export interface BindQuillRichTextOptions {
+  /** Receives one atomic rich-text frame per accepted Quill transaction. */
+  readonly onLocalFrame: (frame: Uint8Array) => void;
+  /** The manifest-selected formatter/schema conversion. */
+  readonly attributes: RichTextAttributeCodec;
+  /** Import Quill's initial Delta once; otherwise render the document projection. */
+  readonly initialContent?: "document" | "editor";
+}
+
+/**
+ * Binds Quill's Delta API to an atomic rich-text v1 document transaction.
+ * Inline attributes are preserved through the mandatory codec. Unsupported
+ * embeds and non-string inserts are rejected and the last replicated
+ * projection is restored instead of flattening them into text.
+ *
+ * Quill requires a terminal newline. Every participating rich-text document
+ * must therefore include that newline in its CRDT projection; use
+ * initialContent: "editor" when importing a new Quill document.
+ */
+export class QuillRichTextBinding {
+  #writing = false;
+  #closed = false;
+  readonly #unobserve: () => void;
+
+  constructor(
+    readonly document: RichTextEditorDocument,
+    private readonly quill: QuillRichTextPort,
+    private readonly options: BindQuillRichTextOptions,
+  ) {
+    if (typeof options.onLocalFrame !== "function" || options.attributes === undefined ||
+      typeof options.attributes.toDocumentChanges !== "function" || typeof options.attributes.toEditorAttributes !== "function") {
+      throw new CRDTRuntimeError("invalid_binding_options");
+    }
+    const handler = (delta: QuillRichTextDelta, _old: QuillRichTextDelta, source: string) => {
+      if (source === "user") {
+        this.#handleLocalDelta(delta);
+      }
+    };
+    quill.on("text-change", handler);
+    this.#unobserve = () => quill.off?.("text-change", handler);
+    if (options.initialContent === "document") {
+      this.#writeProjection();
+    } else {
+      this.#importEditor();
+    }
+  }
+
+  /** Applies one authenticated, manifest-checked remote rich-text frame. */
+  applyRemote(frame: Uint8Array): void {
+    this.#assertOpen();
+    this.document.applyDelta(frame);
+    this.#writeProjection();
+  }
+
+  /** Stops observation; it never closes the caller-owned rich-text document. */
+  destroy(): boolean {
+    if (this.#closed) {
+      return false;
+    }
+    this.#closed = true;
+    this.#unobserve();
+    return true;
+  }
+
+  #importEditor(): void {
+    try {
+      const frame = this.document.applyEditorDelta(quillDeltaToDocumentOperations(this.quill.getContents(), this.options.attributes));
+      this.#writeProjection();
+      this.options.onLocalFrame(frame);
+    } catch (error) {
+      this.#writeProjection();
+      throw error;
+    }
+  }
+
+  #handleLocalDelta(delta: QuillRichTextDelta): void {
+    if (this.#closed || this.#writing) {
+      return;
+    }
+    try {
+      const frame = this.document.applyEditorDelta(quillDeltaToDocumentOperations(delta, this.options.attributes));
+      this.#writeProjection();
+      this.options.onLocalFrame(frame);
+    } catch (error) {
+      // ApplyEditorDelta is atomic. Re-render the authoritative projection so
+      // unsupported or over-limit local input cannot remain editor-only.
+      this.#writeProjection();
+      throw error;
+    }
+  }
+
+  #writeProjection(): void {
+    const projection = quillDeltaFromSpans(this.document.spans(), this.options.attributes);
+    if (!hasTerminalNewline(projection)) {
+      throw new CRDTRuntimeError("invalid_rich_text_projection");
+    }
+    this.#writing = true;
+    try {
+      this.quill.setContents(projection, "api");
+    } finally {
+      this.#writing = false;
+    }
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new CRDTRuntimeError("document_closed");
+    }
+  }
+}
+
+export function bindQuillRichText(
+  document: RichTextEditorDocument,
+  quill: QuillRichTextPort,
+  options: BindQuillRichTextOptions,
+): QuillRichTextBinding {
+  return new QuillRichTextBinding(document, quill, options);
+}
+
+function quillDeltaToDocumentOperations(delta: QuillRichTextDelta, codec: RichTextAttributeCodec): RichTextEditorOperation[] {
+  if (!isRecord(delta) || (delta.ops !== undefined && !Array.isArray(delta.ops))) {
+    throw new CRDTRuntimeError("unsupported_rich_text");
+  }
+  const operations: RichTextEditorOperation[] = [];
+  for (const operation of delta.ops ?? []) {
+    if (!isRecord(operation)) {
+      throw new CRDTRuntimeError("unsupported_rich_text");
+    }
+    const attributes = quillAttributes(operation.attributes);
+    const actionCount = Number(typeof operation.retain === "number" && operation.retain > 0)
+      + Number(typeof operation.delete === "number" && operation.delete > 0)
+      + Number(typeof operation.insert === "string" && operation.insert.length > 0);
+    if (actionCount !== 1 || !validRichTextLength(operation.retain) || !validRichTextLength(operation.delete)) {
+      throw new CRDTRuntimeError("unsupported_rich_text");
+    }
+    if (typeof operation.insert === "string" && operation.insert.length > 0) {
+      operations.push({ insert: operation.insert, changes: codec.toDocumentChanges(attributes, "insert") });
+    } else if (typeof operation.retain === "number" && operation.retain > 0) {
+      operations.push({ retain: operation.retain, changes: codec.toDocumentChanges(attributes, "retain") });
+    } else if (typeof operation.delete === "number") {
+      if (Object.keys(attributes).length !== 0) {
+        throw new CRDTRuntimeError("unsupported_rich_text");
+      }
+      operations.push({ delete: operation.delete });
+    } else {
+      throw new CRDTRuntimeError("unsupported_rich_text");
+    }
+  }
+  return operations;
+}
+
+function quillDeltaFromSpans(spans: readonly RichTextSpan[], codec: RichTextAttributeCodec): QuillRichTextDelta {
+  return {
+    ops: spans.flatMap((span) => richTextSpanToQuillOperations(span, codec)),
+  };
+}
+
+function richTextSpanToQuillOperations(span: RichTextSpan, codec: RichTextAttributeCodec): QuillRichTextDeltaOperation[] {
+  if (typeof span.text !== "string" || span.text.length === 0) {
+    return [];
+  }
+  const sourceAttributes = span.attributes ?? {};
+  const fragments = sourceAttributes["rt.block"] === undefined ? [span.text] : splitAfterNewlines(span.text);
+  return fragments.map((text) => {
+    const attributes = codec.toEditorAttributes(sourceAttributes, text);
+    return attributes === undefined || Object.keys(attributes).length === 0 ? { insert: text } : { insert: text, attributes };
+  });
+}
+
+function splitAfterNewlines(value: string): string[] {
+  const fragments: string[] = [];
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "\n") {
+      continue;
+    }
+    fragments.push(value.slice(start, index + 1));
+    start = index + 1;
+  }
+  if (start < value.length) {
+    fragments.push(value.slice(start));
+  }
+  return fragments;
+}
+
+function hasTerminalNewline(delta: QuillRichTextDelta): boolean {
+  const last = delta.ops?.at(-1);
+  return typeof last?.insert === "string" && last.insert.endsWith("\n");
+}
+
+function quillAttributes(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    throw new CRDTRuntimeError("unsupported_rich_text");
+  }
+  return value;
+}
+
+function validRichTextLength(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value > 0);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function textFromTiptapJSON(value: TiptapJSONNode): string {
   if (!hasOnlyKeys(value, ["type", "content"]) || value.type !== "doc") {
     throw new CRDTRuntimeError("unsupported_rich_text");
@@ -429,6 +817,61 @@ function tiptapJSONFromText(value: string): TiptapJSONNode {
 function hasOnlyKeys(value: unknown, allowed: readonly string[]): value is TiptapJSONNode {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     && Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function selectionPort(value: PlainTextEditorPort): SelectionEditorPort | undefined {
+  if (
+    typeof (value as Partial<SelectionEditorPort>).readSelection !== "function" ||
+    typeof (value as Partial<SelectionEditorPort>).writeSelection !== "function"
+  ) {
+    return undefined;
+  }
+  return value as SelectionEditorPort;
+}
+
+function isRGASelection(value: unknown): value is RGASelection {
+  return typeof value === "object" && value !== null && "anchor" in value && "head" in value;
+}
+
+function runeOffsetAtUTF16(value: string, offset: number): number {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > value.length) {
+    throw new CRDTRuntimeError("range_error");
+  }
+  let runes = 0;
+  let utf16 = 0;
+  for (const rune of value) {
+    if (utf16 === offset) {
+      return runes;
+    }
+    utf16 += rune.length;
+    runes += 1;
+    if (utf16 > offset) {
+      throw new CRDTRuntimeError("invalid_selection");
+    }
+  }
+  if (utf16 === offset) {
+    return runes;
+  }
+  throw new CRDTRuntimeError("range_error");
+}
+
+function utf16OffsetAtRune(value: string, offset: number): number {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new CRDTRuntimeError("range_error");
+  }
+  let runes = 0;
+  let utf16 = 0;
+  for (const rune of value) {
+    if (runes === offset) {
+      return utf16;
+    }
+    utf16 += rune.length;
+    runes += 1;
+  }
+  if (runes === offset) {
+    return utf16;
+  }
+  throw new CRDTRuntimeError("range_error");
 }
 
 /**

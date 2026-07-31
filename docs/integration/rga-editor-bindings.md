@@ -79,6 +79,29 @@ unreplicable delete-only state. Remote frames merge through the Wasm RGA
 before the adapter replaces editor text; a write guard prevents that
 replacement from echoing into `onLocalFrame`.
 
+## Position/Tag selections
+
+`RGAWasmDocument.anchorAt(runeOffset)` and `resolveAnchor(anchor)` expose the
+same RGA `Position`/Tag identity used by the Go `text.Anchor` API. An anchor
+is `{ position?: { replicaID, wallTime, logical }, association: "before" |
+"after" }`; omitting `position` represents the synthetic root (`before` =
+start, `after` = end). This is a small local cursor model, not a Yjs
+`RelativePosition` emulation and not a new RGA wire field.
+
+`RGAPlainTextBinding.captureSelection()` returns two anchors for a capable
+editor port, while `restoreSelection()` converts them back to the editor's
+UTF-16 offsets. The Quill and CodeMirror adapters supply those optional ports
+directly; CodeMirror also exposes the two methods on
+`CodeMirrorPlainTextBinding`. On a remote merge the binding captures before
+the frame, writes the merged text, then restores retained anchors. A malformed
+selection or a compacted marker calls `onSelectionError` and leaves selection
+handling to the host; it never guesses a nearby position.
+
+Anchors are ephemeral application metadata. Do not put them in a state or
+delta frame, IndexedDB outbox, snapshot, or unauthenticated peer message. A
+presence protocol must authenticate and authorize the actor/document, validate
+the bounded anchor shape, and clear a cursor when `anchor_gone` is returned.
+
 ## Scope boundary
 
 This is plain-text integration only. Quill's trailing newline is replicated as

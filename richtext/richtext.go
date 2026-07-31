@@ -362,9 +362,7 @@ func (d *Document) InsertWithAttributesWithLimits(offset int, value string, attr
 	if err := d.text.ApplyDelta(textDelta); err != nil {
 		return Delta{}, err
 	}
-	if err := d.applyOperationsLocked(delta.operations); err != nil {
-		return Delta{}, err
-	}
+	d.applyOperationsLocked(delta.operations)
 	return delta, nil
 }
 
@@ -478,25 +476,31 @@ func (d *Document) formatPositionsLocked(positions []text.Position, changes []At
 	if err := d.preflightOperationsLocked(delta.operations); err != nil {
 		return Delta{}, err
 	}
-	if err := d.applyOperationsLocked(delta.operations); err != nil {
-		return Delta{}, err
-	}
+	d.applyOperationsLocked(delta.operations)
 	return delta, nil
 }
 
 // ApplyDelta joins one canonical rich-text delta. The entire frame is decoded
 // and resource-checked before text or formatting metadata is changed.
 func (d *Document) ApplyDelta(delta Delta) error {
+	return d.ApplyDeltaWithLimits(delta, frame.DefaultLimits())
+}
+
+// ApplyDeltaWithLimits joins one canonical rich-text delta under explicit
+// decoder limits. The entire frame has already been decoded by callers that
+// receive bytes; keeping this method separate lets bounded browser runtimes
+// enforce their negotiated limits through both decode and mutation.
+func (d *Document) ApplyDeltaWithLimits(delta Delta, limits frame.DecoderLimits) error {
 	if d == nil || d.text == nil {
 		return ErrNilDocument
 	}
-	if err := validateDelta(delta, frame.DefaultLimits()); err != nil {
+	if err := validateDelta(delta, limits); err != nil {
 		return err
 	}
 	var textDelta text.Delta
 	var err error
 	if len(delta.textDelta) > 0 {
-		textDelta, err = text.UnmarshalRGARunDelta(delta.textDelta)
+		textDelta, err = text.UnmarshalRGARunDeltaWithLimits(delta.textDelta, limits)
 		if err != nil {
 			return ErrInvalidDelta
 		}
@@ -516,7 +520,8 @@ func (d *Document) ApplyDelta(delta Delta) error {
 			return err
 		}
 	}
-	return d.applyOperationsLocked(delta.operations)
+	d.applyOperationsLocked(delta.operations)
+	return nil
 }
 
 // Merge joins another rich-text document without exposing either document's
@@ -555,7 +560,8 @@ func (d *Document) Merge(other *Document) error {
 			return err
 		}
 	}
-	return d.applyMarksLocked(marks)
+	d.applyMarksLocked(marks)
+	return nil
 }
 
 // State returns a diagnostic summary without text, attributes, positions, or
@@ -685,7 +691,7 @@ func (d *Document) preflightOperationLocked(operation formatOperation) error {
 	return nil
 }
 
-func (d *Document) applyOperationsLocked(operations []formatOperation) error {
+func (d *Document) applyOperationsLocked(operations []formatOperation) {
 	for _, operation := range operations {
 		for _, target := range operation.targets {
 			entries := d.marks[target]
@@ -702,7 +708,6 @@ func (d *Document) applyOperationsLocked(operations []formatOperation) error {
 			d.marks[target] = entries
 		}
 	}
-	return nil
 }
 
 func (d *Document) preflightMarksLocked(marks map[text.Position]markSet) error {
@@ -741,7 +746,7 @@ func (d *Document) preflightMarksLocked(marks map[text.Position]markSet) error {
 	return nil
 }
 
-func (d *Document) applyMarksLocked(marks map[text.Position]markSet) error {
+func (d *Document) applyMarksLocked(marks map[text.Position]markSet) {
 	for position, incomingEntries := range marks {
 		entries := d.marks[position]
 		incomingEntries.rangeValues(func(key string, incoming markValue) {
@@ -755,7 +760,6 @@ func (d *Document) applyMarksLocked(marks map[text.Position]markSet) error {
 		})
 		d.marks[position] = entries
 	}
-	return nil
 }
 
 type markKey struct {

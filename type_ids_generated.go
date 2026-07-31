@@ -6,45 +6,48 @@ package crdt
 // must never be reused for a different payload shape. The source of truth is
 // docs/protocol/type-ids.json.
 const (
-	TypeIDGCounterState        uint64 = 1
-	TypeIDGCounterDelta        uint64 = 3
-	SemanticsVersionGCounter   uint64 = 1
-	TypeIDORSetState           uint64 = 2
-	TypeIDORSetDelta           uint64 = 4
-	SemanticsVersionORSet      uint64 = 1
-	TypeIDPNCounterState       uint64 = 5
-	TypeIDPNCounterDelta       uint64 = 6
-	SemanticsVersionPNCounter  uint64 = 1
-	TypeIDLWWSetState          uint64 = 7
-	TypeIDLWWSetDelta          uint64 = 8
-	SemanticsVersionLWWSet     uint64 = 1
-	TypeIDLWWMapState          uint64 = 9
-	TypeIDLWWMapDelta          uint64 = 10
-	SemanticsVersionLWWMap     uint64 = 1
-	TypeIDRGAState             uint64 = 11
-	TypeIDRGADelta             uint64 = 12
-	SemanticsVersionRGA        uint64 = 1
-	TypeIDGSetState            uint64 = 13
-	TypeIDGSetDelta            uint64 = 14
-	SemanticsVersionGSet       uint64 = 1
-	TypeIDMVRegisterState      uint64 = 15
-	TypeIDMVRegisterDelta      uint64 = 16
-	SemanticsVersionMVRegister uint64 = 1
-	TypeIDORTreeState          uint64 = 17
-	TypeIDORTreeDelta          uint64 = 18
-	SemanticsVersionORTree     uint64 = 1
-	TypeIDRGARunState          uint64 = 19
-	TypeIDRGARunDelta          uint64 = 20
-	SemanticsVersionRGARun     uint64 = 2
-	TypeIDListRGAState         uint64 = 21
-	TypeIDListRGADelta         uint64 = 22
-	SemanticsVersionListRGA    uint64 = 1
-	TypeIDRichTextState        uint64 = 23
-	TypeIDRichTextDelta        uint64 = 24
-	SemanticsVersionRichText   uint64 = 1
-	TypeIDMoveRGAState         uint64 = 25
-	TypeIDMoveRGADelta         uint64 = 26
-	SemanticsVersionMoveRGA    uint64 = 2
+	TypeIDGCounterState          uint64 = 1
+	TypeIDGCounterDelta          uint64 = 3
+	SemanticsVersionGCounter     uint64 = 1
+	TypeIDORSetState             uint64 = 2
+	TypeIDORSetDelta             uint64 = 4
+	SemanticsVersionORSet        uint64 = 1
+	TypeIDPNCounterState         uint64 = 5
+	TypeIDPNCounterDelta         uint64 = 6
+	SemanticsVersionPNCounter    uint64 = 1
+	TypeIDLWWSetState            uint64 = 7
+	TypeIDLWWSetDelta            uint64 = 8
+	SemanticsVersionLWWSet       uint64 = 1
+	TypeIDLWWMapState            uint64 = 9
+	TypeIDLWWMapDelta            uint64 = 10
+	SemanticsVersionLWWMap       uint64 = 1
+	TypeIDRGAState               uint64 = 11
+	TypeIDRGADelta               uint64 = 12
+	SemanticsVersionRGA          uint64 = 1
+	TypeIDGSetState              uint64 = 13
+	TypeIDGSetDelta              uint64 = 14
+	SemanticsVersionGSet         uint64 = 1
+	TypeIDMVRegisterState        uint64 = 15
+	TypeIDMVRegisterDelta        uint64 = 16
+	SemanticsVersionMVRegister   uint64 = 1
+	TypeIDORTreeState            uint64 = 17
+	TypeIDORTreeDelta            uint64 = 18
+	SemanticsVersionORTree       uint64 = 1
+	TypeIDRGARunState            uint64 = 19
+	TypeIDRGARunDelta            uint64 = 20
+	SemanticsVersionRGARun       uint64 = 2
+	TypeIDListRGAState           uint64 = 21
+	TypeIDListRGADelta           uint64 = 22
+	SemanticsVersionListRGA      uint64 = 1
+	TypeIDRichTextState          uint64 = 23
+	TypeIDRichTextDelta          uint64 = 24
+	SemanticsVersionRichText     uint64 = 1
+	TypeIDMoveRGAState           uint64 = 25
+	TypeIDMoveRGADelta           uint64 = 26
+	SemanticsVersionMoveRGA      uint64 = 2
+	TypeIDDocumentTreeState      uint64 = 27
+	TypeIDDocumentTreeDelta      uint64 = 28
+	SemanticsVersionDocumentTree uint64 = 1
 )
 
 var frameTypeRegistrations = [...]FrameTypeRegistration{
@@ -61,4 +64,5 @@ var frameTypeRegistrations = [...]FrameTypeRegistration{
 	{Name: "ListRGA", FrameType: FrameType{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, SemanticsVersion: SemanticsVersionListRGA, UsesHLC: true}},
 	{Name: "RichText", FrameType: FrameType{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, SemanticsVersion: SemanticsVersionRichText, UsesHLC: true}},
 	{Name: "MoveRGA", FrameType: FrameType{StateID: TypeIDMoveRGAState, DeltaID: TypeIDMoveRGADelta, SemanticsVersion: SemanticsVersionMoveRGA, UsesHLC: true}},
+	{Name: "DocumentTree", FrameType: FrameType{StateID: TypeIDDocumentTreeState, DeltaID: TypeIDDocumentTreeDelta, SemanticsVersion: SemanticsVersionDocumentTree, UsesHLC: true}},
 }

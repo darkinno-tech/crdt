@@ -6,9 +6,10 @@ import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
 import { decodeFrame } from "../dist/frame.js";
-import { bindCodeMirrorPlainText, bindRGAPlainText } from "../dist/bindings.js";
+import { bindCodeMirrorPlainText, bindQuillRichText, bindRGAPlainText } from "../dist/bindings.js";
 import {
   CRDTRuntimeError,
+  RICH_TEXT_PROTOCOL,
   RGA_PROTOCOL_RUN_V2,
   RGA_PROTOCOL_V1,
   RGA_WASM_GLOBAL,
@@ -29,6 +30,10 @@ const loaderRuntime = await wasmModule.initRGAWasm(
     ? { wasmURL: `${assets.url}/crdt-rga.wasm` }
     : { wasmURL: `${assets.url}/crdt-rga.wasm`, expectedProtocol: artifactProtocol },
 );
+const richTextRuntime = await wasmModule.initRichTextWasm({
+  wasmURL: `${assets.url}/crdt-rga.wasm`,
+  expectedRGAProtocol: artifactProtocol,
+});
 const rawAPI = globalThis[RGA_WASM_GLOBAL];
 after(async () => {
   await new Promise((resolve, reject) => {
@@ -51,6 +56,53 @@ test("TypeScript wrapper atomically replaces text", () => {
 	assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
 	assert.equal(document.text(), "aXYc");
 	assert.equal(document.close(), true);
+});
+
+test("Position/Tag anchors survive a concurrent insert and snapshot recovery", () => {
+  const alice = loaderRuntime.create("anchor-alice");
+  const bob = loaderRuntime.create("anchor-bob");
+  const base = alice.insert(0, "ab🙂cd");
+  bob.applyDelta(base);
+  const anchor = alice.anchorAt(3);
+  assert.equal(anchor.association, "before");
+  assert.ok(anchor.position);
+  assert.equal(typeof anchor.position.wallTime, "bigint");
+
+  const concurrent = bob.insert(3, "X");
+  alice.applyDelta(concurrent);
+  assert.equal(alice.resolveAnchor(anchor), 4);
+  const restored = loaderRuntime.restore(alice.snapshot());
+  assert.equal(restored.resolveAnchor(anchor), 4);
+  assert.deepEqual(alice.anchorAt(Array.from(alice.text()).length), { association: "after" });
+  assertRuntimeError(
+    () => alice.resolveAnchor({ association: "before", position: { replicaID: "", wallTime: 1n, logical: 0n } }),
+    "invalid_anchor",
+  );
+  assert.equal(alice.close(), true);
+  assert.equal(bob.close(), true);
+  assert.equal(restored.close(), true);
+});
+
+test("plain-text binding preserves a UTF-16 selection through a real remote RGA merge", () => {
+  const aliceDocument = loaderRuntime.create("selection-alice");
+  const bobDocument = loaderRuntime.create("selection-bob");
+  const port = new SelectionTextPort("a🙂bc", { anchor: 3, head: 3 });
+  const frames = [];
+  const alice = bindRGAPlainText(aliceDocument, port, {
+    initialContent: "editor",
+    onLocalFrame: (frame) => frames.push(frame),
+  });
+  bobDocument.applyDelta(frames[0]);
+  const before = alice.captureSelection();
+  assert.ok(before);
+  const remote = bobDocument.insert(0, "X");
+  alice.applyRemote(remote);
+  const expectedRune = aliceDocument.resolveAnchor(before.anchor);
+  assert.equal(port.selection.anchor, utf16OffsetAtRune(aliceDocument.text(), expectedRune));
+  assert.equal(port.selection.head, port.selection.anchor);
+  assert.equal(alice.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
 });
 
 test("plain-text binding exchanges actual Go Wasm RGA frames without echoing remote updates", () => {
@@ -79,6 +131,67 @@ test("plain-text binding exchanges actual Go Wasm RGA frames without echoing rem
   }
   assert.equal(aliceEditor.readText(), "Hello collaborative world");
   assert.equal(aliceFrames.length, 1);
+  assert.equal(alice.destroy(), true);
+  assert.equal(bob.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
+});
+
+test("Quill rich-text binding exchanges actual Go Wasm rich-text frames without losing approved formats", () => {
+  const aliceDocument = richTextRuntime.create("rich-binding-alice");
+  const bobDocument = richTextRuntime.create("rich-binding-bob");
+  const aliceEditor = new TestRichQuillPort({ ops: [{ insert: "Hello\n" }] });
+  const bobEditor = new TestRichQuillPort({ ops: [{ insert: "\n" }] });
+  const aliceFrames = [];
+  const bobFrames = [];
+  const alice = bindQuillRichText(aliceDocument, aliceEditor, {
+    onLocalFrame: (frame) => aliceFrames.push(frame),
+    attributes: testRichTextAttributes,
+  });
+  bobDocument.applyDelta(aliceFrames[0]);
+  const bob = bindQuillRichText(bobDocument, bobEditor, {
+    onLocalFrame: (frame) => bobFrames.push(frame),
+    attributes: testRichTextAttributes,
+    initialContent: "document",
+  });
+  assert.deepEqual(bobEditor.getContents(), { ops: [{ insert: "Hello\n" }] });
+  assert.equal(bobFrames.length, 0);
+
+  aliceEditor.userDelta({
+    ops: [
+      { retain: 5, attributes: { bold: true } },
+      { insert: " world", attributes: { italic: true } },
+    ],
+  });
+  const aliceEdit = aliceFrames.at(-1);
+  assert.ok(aliceEdit instanceof Uint8Array);
+  assert.equal(decodeFrame(aliceEdit).typeID, RICH_TEXT_PROTOCOL.deltaTypeID);
+  bob.applyRemote(aliceEdit);
+  assert.deepEqual(bobEditor.getContents(), {
+    ops: [
+      { insert: "Hello", attributes: { bold: true } },
+      { insert: " world", attributes: { italic: true } },
+      { insert: "\n" },
+    ],
+  });
+  assert.equal(bobFrames.length, 0);
+
+  aliceEditor.userDelta({ ops: [{ retain: 11 }, { retain: 1, attributes: { header: 2 } }] });
+  const blockEdit = aliceFrames.at(-1);
+  assert.ok(blockEdit instanceof Uint8Array);
+  bob.applyRemote(blockEdit);
+  assert.deepEqual(bobEditor.getContents(), {
+    ops: [
+      { insert: "Hello", attributes: { bold: true } },
+      { insert: " world", attributes: { italic: true } },
+      { insert: "\n", attributes: { header: 2 } },
+    ],
+  });
+
+  const snapshot = aliceDocument.snapshot();
+  const recovered = richTextRuntime.restore(snapshot);
+  assert.deepEqual(recovered.spans(), aliceDocument.spans());
+  assert.equal(recovered.close(), true);
   assert.equal(alice.destroy(), true);
   assert.equal(bob.destroy(), true);
   assert.equal(aliceDocument.close(), true);
@@ -358,4 +471,84 @@ class TestCodeMirrorPort {
   userWrite(value) {
     this.value = value;
   }
+}
+
+const testRichTextAttributes = {
+  toDocumentChanges(attributes, operation) {
+    const changes = [];
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key === "header" && value === 2) {
+        changes.push({ key: "rt.block", value: "heading:2" });
+        continue;
+      }
+      if (key !== "bold" && key !== "italic") throw new CRDTRuntimeError("unsupported_rich_text");
+      if (operation === "retain" && value === null) {
+        changes.push({ key: `rt.${key}`, remove: true });
+      } else if (value === true) {
+        changes.push({ key: `rt.${key}`, value: "true" });
+      } else {
+        throw new CRDTRuntimeError("unsupported_rich_text");
+      }
+    }
+    return changes;
+  },
+  toEditorAttributes(attributes, text) {
+    const output = {};
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key === "rt.bold" && value === "true") output.bold = true;
+      else if (key === "rt.italic" && value === "true") output.italic = true;
+      else if (key === "rt.block" && value === "heading:2" && text.endsWith("\n")) output.header = 2;
+      else if (key === "rt.block" && value === "heading:2") continue;
+      else throw new CRDTRuntimeError("unsupported_rich_text");
+    }
+    return output;
+  },
+};
+
+class TestRichQuillPort {
+  #listeners = new Set();
+
+  constructor(contents) {
+    this.contents = contents;
+  }
+
+  getContents() {
+    return this.contents;
+  }
+
+  setContents(contents, source = "api") {
+    this.contents = contents;
+    for (const listener of [...this.#listeners]) listener(contents, {}, source);
+  }
+
+  on(_event, listener) {
+    this.#listeners.add(listener);
+  }
+
+  off(_event, listener) {
+    this.#listeners.delete(listener);
+  }
+
+  userDelta(delta) {
+    for (const listener of [...this.#listeners]) listener(delta, this.contents, "user");
+  }
+}
+
+class SelectionTextPort extends TestTextPort {
+  constructor(value, selection) {
+    super(value);
+    this.selection = selection;
+  }
+
+  readSelection() {
+    return this.selection;
+  }
+
+  writeSelection(selection) {
+    this.selection = selection;
+  }
+}
+
+function utf16OffsetAtRune(value, offset) {
+  return Array.from(value).slice(0, offset).join("").length;
 }

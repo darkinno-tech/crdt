@@ -11,17 +11,26 @@ export {
 export type { Frame, FrameDecoderLimits, FrameDecodeErrorCode } from "./frame.js";
 export {
   CRDTRuntimeError,
+  initRichTextWasm,
   initRGAWasm,
+  RICH_TEXT_PROTOCOL,
   RGA_PROTOCOL_RUN_V2,
   RGA_PROTOCOL_V1,
   RGA_WASM_GLOBAL,
+  RichTextWasmDocument,
+  RichTextWasmRuntime,
   RGAWasmDocument,
   RGAWasmRuntime,
 } from "./wasm.js";
 export type {
   InitRGAWasmOptions,
+  InitRichTextWasmOptions,
+  RichTextProtocol,
   RGAProtocolExpectation,
   RGASnapshot,
+  RGAAnchor,
+  RGAAnchorAssociation,
+  RGAPosition,
   RGATag,
   RGAProtocol,
 } from "./wasm.js";
@@ -60,10 +69,14 @@ export {
   createBrowserReplicaID,
   BroadcastChannelNativeTransport,
   IndexedDBNativePersistence,
+  IndexedDBRGAWasmPersistence,
   MemoryNativeBrowserPersistence,
+  MemoryRGAWasmBrowserPersistence,
   NativeBrowserDocument,
   NativeBrowserError,
   openNativeBrowserDocument,
+  openRGAWasmBrowserDocument,
+  RGAWasmBrowserDocument,
 } from "./browser.js";
 export type {
   BrowserNativeDocumentOptions,
@@ -74,28 +87,46 @@ export type {
   NativeBrowserPersistence,
   NativeBrowserTransport,
   NativeBrowserUpdateEvent,
+  RGAWasmBrowserDocumentOptions,
+  RGAWasmBrowserPersistence,
+  RGAWasmBrowserUpdateEvent,
+  RGAWasmStoredDocument,
 } from "./browser.js";
 export {
   bindCodeMirrorPlainText,
   bindLexicalPlainText,
   bindMonacoPlainText,
+  bindQuillRichText,
   bindProseMirrorPlainText,
   bindQuillPlainText,
   bindRGAPlainText,
   bindSlatePlainText,
   bindTiptapPlainText,
   CodeMirrorPlainTextBinding,
+  QuillRichTextBinding,
   RGAPlainTextBinding,
 } from "./bindings.js";
 export type {
   BindRGAPlainTextOptions,
+  BindQuillRichTextOptions,
   CodeMirrorTextPort,
   CodeMirrorViewUpdate,
+  EditorTextSelection,
   LexicalTextPort,
   MonacoTextPort,
   PlainTextEditorPort,
+  QuillRichTextDelta,
+  QuillRichTextDeltaOperation,
+  QuillRichTextPort,
   QuillTextPort,
+  RichTextAttributeChange,
+  RichTextAttributeCodec,
+  RichTextEditorDocument,
+  RichTextEditorOperation,
+  RichTextSpan,
   RGAFrameListener,
+  RGASelection,
+  SelectionEditorPort,
   TiptapJSONNode,
   TiptapTextPort,
 } from "./bindings.js";
@@ -105,6 +136,24 @@ export {
   NativeNestedMap,
   NATIVE_NESTED_SEMANTICS,
 } from "./nested.js";
+export {
+  DEFAULT_NATIVE_COLLECTION_LIMITS,
+  NATIVE_COLLECTIONS_SEMANTICS,
+  NATIVE_COLLECTIONS_SNAPSHOT_VERSION,
+  NativeCollectionsDocument,
+  NativeCounter,
+  NativeLWWRegister,
+  NativeORSet,
+  NativeORTree,
+} from "./collections.js";
+export type {
+  NativeCollectionLimits,
+  NativeCollectionRoot,
+  NativeCollectionType,
+  NativeCollectionsDocumentOptions,
+  NativeCollectionsSnapshot,
+  NativeTreeNode,
+} from "./collections.js";
 export type {
   NativeNestedContainerSnapshot,
   NativeNestedDocumentOptions,
