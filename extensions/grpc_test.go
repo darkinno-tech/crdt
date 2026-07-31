@@ -785,7 +785,7 @@ func BenchmarkGRPCRelayLoopback(b *testing.B) {
 }
 
 // BenchmarkGRPCDeltaEquality isolates the payload check used after a real
-// loopback relay receive. Both slices contain the same 4 KiB delta payload.
+// loopback relay receive. Both slices contain the same 5 KiB delta payload.
 func BenchmarkGRPCDeltaEquality(b *testing.B) {
 	payload := bytes.Repeat([]byte("crdt-delta"), 512)
 	want := append([]byte(nil), payload...)
