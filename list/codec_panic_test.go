@@ -60,3 +60,54 @@ func TestElementCodecPanicsReturnInvalidCodec(t *testing.T) {
 		t.Fatalf("ApplyDelta() error = %v, want %v", err, ErrInvalidCodec)
 	}
 }
+
+func TestMoveRGAElementCodecPanicsReturnInvalidCodec(t *testing.T) {
+	if _, err := NewMoveRGA("id", panicBoundaryCodec{panicID: true}); !errors.Is(err, ErrInvalidCodec) {
+		t.Fatalf("NewMoveRGA() error = %v, want %v", err, ErrInvalidCodec)
+	}
+	writer, err := NewMoveRGA("writer", panicBoundaryCodec{panicMarshal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Insert(0, []string{"item"}); !errors.Is(err, ErrInvalidCodec) {
+		t.Fatalf("Insert() error = %v, want %v", err, ErrInvalidCodec)
+	}
+
+	source, err := NewMoveRGA("source", panicBoundaryCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta, err := source.Insert(0, []string{"item"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewMoveRGA("reader", panicBoundaryCodec{panicUnmarshal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.ApplyDelta(delta); !errors.Is(err, ErrInvalidCodec) {
+		t.Fatalf("ApplyDelta() error = %v, want %v", err, ErrInvalidCodec)
+	}
+	if state := reader.State(); state.ElementCount != 0 {
+		t.Fatalf("ApplyDelta() panic changed state: %+v", state)
+	}
+	encoded, err := delta.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnmarshalMoveDelta(encoded, panicBoundaryCodec{panicUnmarshal: true}); !errors.Is(err, ErrInvalidCodec) {
+		t.Fatalf("UnmarshalMoveDelta() error = %v, want %v", err, ErrInvalidCodec)
+	}
+
+	reader, err = NewMoveRGA("reader", panicBoundaryCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.ApplyDelta(delta); err != nil {
+		t.Fatal(err)
+	}
+	reader.codec = panicBoundaryCodec{panicUnmarshal: true}
+	if _, err := reader.Values(); !errors.Is(err, ErrInvalidCodec) {
+		t.Fatalf("Values() error = %v, want %v", err, ErrInvalidCodec)
+	}
+}

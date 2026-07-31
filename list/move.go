@@ -1,6 +1,7 @@
 package list
 
 import (
+	"bytes"
 	"sort"
 	"strings"
 	"sync"
@@ -238,7 +239,7 @@ func (r *MoveRGA[T]) Values() ([]T, error) {
 	r.mu.RUnlock()
 	values := make([]T, len(encoded))
 	for index, value := range encoded {
-		decoded, err := r.codec.Unmarshal(value)
+		decoded, err := unmarshalCodec(r.codec, value)
 		if err != nil {
 			return nil, ErrInvalidCodec
 		}
@@ -350,16 +351,16 @@ func (r *MoveRGA[T]) State() crdt.StateSnapshot {
 }
 
 func (r *MoveRGA[T]) canonical(value T) ([]byte, error) {
-	encoded, err := r.codec.Marshal(value)
+	encoded, err := marshalCodec(r.codec, value)
 	if err != nil || len(encoded) > r.options.MaxValueBytes {
 		return nil, ErrInvalidCodec
 	}
-	decoded, err := r.codec.Unmarshal(encoded)
+	decoded, err := unmarshalCodec(r.codec, encoded)
 	if err != nil {
 		return nil, ErrInvalidCodec
 	}
-	canonical, err := r.codec.Marshal(decoded)
-	if err != nil || string(canonical) != string(encoded) {
+	canonical, err := marshalCodec(r.codec, decoded)
+	if err != nil || !bytes.Equal(canonical, encoded) {
 		return nil, ErrInvalidCodec
 	}
 	return append([]byte(nil), encoded...), nil
@@ -370,12 +371,12 @@ func (r *MoveRGA[T]) validateMoveValues(delta MoveDelta) error {
 		if len(item.value) > r.options.MaxValueBytes {
 			return ErrResourceLimit
 		}
-		decoded, err := r.codec.Unmarshal(item.value)
+		decoded, err := unmarshalCodec(r.codec, item.value)
 		if err != nil {
 			return ErrInvalidCodec
 		}
-		canonical, err := r.codec.Marshal(decoded)
-		if err != nil || string(canonical) != string(item.value) {
+		canonical, err := marshalCodec(r.codec, decoded)
+		if err != nil || !bytes.Equal(canonical, item.value) {
 			return ErrInvalidCodec
 		}
 	}
