@@ -22,6 +22,8 @@ be committed.
 - [Browser and provider architecture](integration/provider-architecture.md)
 - [WebSocket provider reference](integration/websocket-provider.md)
 - [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
+- [Yjs / y-protocols compatibility relay](integration/yjs-relay.md)
+- [Yjs / y-protocols 兼容 relay](integration/yjs-relay.zh-CN.md)
 - [Attachment reference integration](integration/attachment.md)
 - [附件引用集成](integration/attachment.zh-CN.md)
 - [Application change observation](integration/observe.md)
@@ -62,6 +64,7 @@ be committed.
 - [WebSocket batch latency evidence — 2026-07-29](operations/websocket-batch-latency-2026-07-29.md)
 - [Controlled performance-regression CI](operations/performance-regression-ci.md)
 - [受控性能回归 CI](operations/performance-regression-ci.zh-CN.md)
+- [Yjs relay controlled validation — 2026-07-31](operations/yjs-relay-benchmark-2026-07-31.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 

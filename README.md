@@ -77,6 +77,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Add replay and reconnect | [Durable relay reference](docs/integration/durable-provider.md) |
 | Choose browser, WebRTC, Redis, or PostgreSQL boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
 | Use a bounded live relay | [WebSocket provider reference](docs/integration/websocket-provider.md) |
+| Connect stable Yjs/y-websocket clients | [Yjs / y-protocols compatibility relay](docs/integration/yjs-relay.md) |
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
 | Implement run-v2 outside Go/Wasm | [RGA run-v2 protocol and vectors](docs/protocol/rga-run-v2.md) |
 | Implement stable formatting or trees | [Rich-text v1](docs/protocol/richtext-v1.md) and [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
