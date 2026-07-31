@@ -42,5 +42,5 @@ export const FrameSemanticsVersion = {
   RGARun: 2n,
   ListRGA: 1n,
   RichText: 1n,
-  MoveRGA: 1n,
+  MoveRGA: 2n,
 } as const;

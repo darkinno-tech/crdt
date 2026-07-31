@@ -43,8 +43,9 @@ node with a retained child or unresolved dependent.
 
 `list.MoveRGA[T]` is the separately versioned answer for products whose domain
 identity must survive drag-and-drop, prioritisation, or kanban reordering. It
-uses TypeIDs `25/26`; it is not wire-compatible with `list.RGA[T]` and has its
-own manifest schema/semantics contract.
+uses TypeIDs `25/26` with MoveRGA semantics version `2`; it is not
+wire-compatible with `list.RGA[T]` or MoveRGA semantics version `1`, and has
+its own manifest schema/semantics contract.
 
 ```go
 tasks, err := list.NewMoveRGA("desktop-a", stringCodec{})

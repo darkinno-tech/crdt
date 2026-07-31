@@ -44,7 +44,7 @@ const (
 	SemanticsVersionRichText   uint64 = 1
 	TypeIDMoveRGAState         uint64 = 25
 	TypeIDMoveRGADelta         uint64 = 26
-	SemanticsVersionMoveRGA    uint64 = 1
+	SemanticsVersionMoveRGA    uint64 = 2
 )
 
 var frameTypeRegistrations = [...]FrameTypeRegistration{

@@ -54,6 +54,17 @@ type MoveDelta struct {
 var _ crdt.CRDT[*MoveRGA[any]] = (*MoveRGA[any])(nil)
 var _ crdt.DeltaCapable[*MoveRGA[any], MoveDelta] = (*MoveRGA[any])(nil)
 
+// MoveSemanticsVersion is the immutable contract for the move-capable list.
+// It is intentionally distinct from the insert/delete-only list RGA version.
+const MoveSemanticsVersion uint64 = crdt.SemanticsVersionMoveRGA
+
+// MoveFrameType returns the framed protocol a manifest must negotiate for a
+// MoveRGA document. It is not interchangeable with StableFrameType, which
+// describes the insert/delete-only generic list RGA.
+func MoveFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDMoveRGAState, DeltaID: crdt.TypeIDMoveRGADelta, SemanticsVersion: MoveSemanticsVersion, UsesHLC: true}
+}
+
 // NewMoveRGA constructs a move-capable sequence using conservative defaults.
 func NewMoveRGA[T any](replicaID string, codec ElementCodec[T]) (*MoveRGA[T], error) {
 	return NewMoveRGAWithOptions(replicaID, codec, DefaultOptions())
@@ -186,6 +197,12 @@ func (r *MoveRGA[T]) Delete(offset, count int) (MoveDelta, error) {
 // visible list after the selected range has been removed, so Move(2, 1, 0)
 // moves the third item to the front. A single operation tag and rank preserve
 // the moved block's order under concurrent delivery.
+//
+// Besides the selected range, a move rewrites the visible suffix that followed
+// it. RGA insertions commonly form a parent chain; only moving the selected
+// nodes would otherwise pull descendants from that suffix along with them.
+// Reattaching the suffix as a chain at the former predecessor performs the
+// required sequence splice while retaining every element's immutable identity.
 func (r *MoveRGA[T]) Move(from, count, to int) (MoveDelta, error) {
 	if r == nil || r.clock == nil {
 		return MoveDelta{}, ErrNilList
@@ -199,10 +216,17 @@ func (r *MoveRGA[T]) Move(from, count, to int) (MoveDelta, error) {
 	if from > len(positions) || count > len(positions)-from || to > len(positions)-count {
 		return MoveDelta{}, ErrRange
 	}
-	if count == 0 {
+	// The destination is measured after removal, so identical offsets leave the
+	// range in place. Returning an empty delta avoids rewriting its successor's
+	// placement and, importantly, preserves the exact current subtree shape.
+	if count == 0 || to == from {
 		return MoveDelta{codecID: r.codecID, nodes: map[Position]node{}, tombstones: map[Position]struct{}{}, moves: map[Position]moveRecord{}}, nil
 	}
 	selected := append([]Position(nil), positions[from:from+count]...)
+	formerAnchor := Position{}
+	if from > 0 {
+		formerAnchor = positions[from-1]
+	}
 	remaining := make([]Position, 0, len(positions)-count)
 	remaining = append(remaining, positions[:from]...)
 	remaining = append(remaining, positions[from+count:]...)
@@ -214,10 +238,19 @@ func (r *MoveRGA[T]) Move(from, count, to int) (MoveDelta, error) {
 	if err != nil {
 		return MoveDelta{}, err
 	}
-	delta := MoveDelta{codecID: r.codecID, nodes: map[Position]node{}, tombstones: map[Position]struct{}{}, moves: make(map[Position]moveRecord, len(selected))}
+	delta := MoveDelta{codecID: r.codecID, nodes: map[Position]node{}, tombstones: map[Position]struct{}{}, moves: make(map[Position]moveRecord, len(positions)-from)}
 	for rank, position := range selected {
 		delta.moves[position] = moveRecord{tag: tag, anchor: anchor, rank: uint64(rank)}
 		anchor = position
+	}
+	// Preserve the entire remaining suffix, not merely the first child of the
+	// range. A placement tag sorts before older siblings, so reattaching only a
+	// direct child could still put it ahead of its unchanged descendants. The
+	// explicit chain gives every legal sequential move its exact list result.
+	repairAnchor := formerAnchor
+	for rank, position := range positions[from+count:] {
+		delta.moves[position] = moveRecord{tag: tag, anchor: repairAnchor, rank: uint64(len(selected) + rank)}
+		repairAnchor = position
 	}
 	if err := r.ApplyDelta(delta); err != nil {
 		return MoveDelta{}, err
