@@ -295,6 +295,29 @@ test("Tiptap adapter accepts only canonical plain-text documents and restores re
   assert.equal(binding.destroy(), true);
 });
 
+test("Tiptap adapter rejects malformed and schema-expanding JSON without leaking a native exception", () => {
+  const document = new FakeRGA("safe");
+  const editor = new TiptapPort("safe");
+  const binding = bindTiptapPlainText(document, editor, { onLocalFrame() {} });
+  const invalidDocuments = [
+    null,
+    [],
+    {},
+    { type: "doc", content: "not-an-array" },
+    { type: "doc", content: [{ type: "heading", content: [] }] },
+    { type: "doc", content: [{ type: "paragraph", attrs: { align: "center" }, content: [] }] },
+    { type: "doc", content: [{ type: "paragraph", content: [null] }] },
+    { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: 42 }] }] },
+  ];
+
+  for (const invalid of invalidDocuments) {
+    assert.throws(() => editor.userWriteJSON(invalid), /unsupported_rich_text/);
+    assert.deepEqual(editor.getJSON(), tiptapJSON("safe"));
+    assert.equal(document.text(), "safe");
+  }
+  assert.equal(binding.destroy(), true);
+});
+
 test("Lexical text leaf adapter sends local text and suppresses remote listener echoes", () => {
   const document = new FakeRGA("hello");
   const editor = new LexicalPort("hello");

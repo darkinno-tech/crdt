@@ -25,12 +25,14 @@
     "test": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/rga-run-v2-vectors.test.mjs",
     "test:adapters:types": "tsc --project tsconfig.adapters.json",
     "test:wasm": "npm run build && node --test test/wasm.integration.test.mjs",
-    "test:compat": "npm run build && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/bindings.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm.integration.test.mjs",
+    "test:compat": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm.integration.test.mjs",
     "bench:frame": "npm run build && node bench/frame.bench.mjs",
     "bench:native": "npm run build && node bench/native.bench.mjs",
     "bench:browser": "npm run build && node bench/browser.bench.mjs",
+    "bench:bindings": "npm run build && node bench/bindings.bench.mjs",
     "bench:nested": "npm run build && node bench/nested.bench.mjs",
-    "bench:wasm": "node bench/wasm.bench.mjs"
+    "bench:wasm": "node bench/wasm.bench.mjs",
+    "bench:wasm-bindings": "npm run build && node bench/wasm-bindings.bench.mjs"
   },
   "devDependencies": {
     "@codemirror/state": "^6.7.1",

@@ -74,7 +74,7 @@ test("actual CodeMirror 6 view emits local RGA state and applies remote state wi
   view.destroy();
 });
 
-test("actual Tiptap plain-text schema rejects no content and converges through RGA frames", () => {
+test("actual Tiptap plain-text schema converges through RGA frames", () => {
   const document = new FakeRGA("draft");
   const editor = new Editor({
     element: dom.window.document.createElement("div"),

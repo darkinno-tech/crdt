@@ -426,8 +426,9 @@ function tiptapJSONFromText(value: string): TiptapJSONNode {
   };
 }
 
-function hasOnlyKeys(value: TiptapJSONNode, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
+function hasOnlyKeys(value: unknown, allowed: readonly string[]): value is TiptapJSONNode {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && Object.keys(value).every((key) => allowed.includes(key));
 }
 
 /**
