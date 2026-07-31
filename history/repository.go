@@ -463,14 +463,15 @@ func unmarshalRepository(data []byte, options RepositoryOptions) (map[ID]version
 	}
 	position := len(repositoryMagic) + 1
 	count, next, ok := frame.ReadUvarint(data[:payloadEnd], position)
-	if !ok || count > uint64(options.MaxVersions) {
+	versionCount, bounded := decodeCount(count, options.MaxVersions)
+	if !ok || !bounded {
 		return nil, nil, 0, ErrInvalidState
 	}
 	position = next
-	versions := make(map[ID]versionRecord, int(count))
+	versions := make(map[ID]versionRecord, versionCount)
 	versionBytes := 0
 	var previous ID
-	for index := uint64(0); index < count; index++ {
+	for index := 0; index < versionCount; index++ {
 		recordStart := position
 		id, next, ok := readID(data[:payloadEnd], position)
 		if !ok || !id.valid() || (index > 0 && bytes.Compare(previous[:], id[:]) >= 0) {
@@ -478,13 +479,14 @@ func unmarshalRepository(data []byte, options RepositoryOptions) (map[ID]version
 		}
 		position = next
 		parentCount, next, ok := frame.ReadUvarint(data[:payloadEnd], position)
-		if !ok || parentCount > uint64(options.MaxParents) {
+		parentLimit, bounded := decodeCount(parentCount, options.MaxParents)
+		if !ok || !bounded {
 			return nil, nil, 0, ErrInvalidState
 		}
 		position = next
-		parents := make([]ID, 0, int(parentCount))
+		parents := make([]ID, 0, parentLimit)
 		var previousParent ID
-		for parentIndex := uint64(0); parentIndex < parentCount; parentIndex++ {
+		for parentIndex := 0; parentIndex < parentLimit; parentIndex++ {
 			parent, next, ok := readID(data[:payloadEnd], position)
 			if !ok || !parent.valid() || (parentIndex > 0 && bytes.Compare(previousParent[:], parent[:]) >= 0) {
 				return nil, nil, 0, ErrInvalidState
@@ -518,13 +520,14 @@ func unmarshalRepository(data []byte, options RepositoryOptions) (map[ID]version
 		}
 	}
 	branchCount, next, ok := frame.ReadUvarint(data[:payloadEnd], position)
-	if !ok || branchCount > uint64(options.MaxBranches) {
+	branchLimit, bounded := decodeCount(branchCount, options.MaxBranches)
+	if !ok || !bounded {
 		return nil, nil, 0, ErrInvalidState
 	}
 	position = next
-	branches := make(map[string]branchHead, int(branchCount))
+	branches := make(map[string]branchHead, branchLimit)
 	previousBranch := ""
-	for index := uint64(0); index < branchCount; index++ {
+	for index := 0; index < branchLimit; index++ {
 		name, next, ok := frame.ReadBytes(data[:payloadEnd], position, options.MaxScopeBytes)
 		if !ok {
 			return nil, nil, 0, ErrInvalidState
@@ -772,13 +775,14 @@ func appendState(encoded []byte, state State, options RepositoryOptions, maximum
 
 func readState(data []byte, position int, options RepositoryOptions) (State, int, error) {
 	count, next, ok := frame.ReadUvarint(data, position)
-	if !ok || count == 0 || count > uint64(options.MaxSnapshots) {
+	snapshotCount, bounded := decodeCount(count, options.MaxSnapshots)
+	if !ok || snapshotCount == 0 || !bounded {
 		return State{}, 0, ErrInvalidState
 	}
 	position = next
-	state := State{Snapshots: make([]Snapshot, 0, int(count))}
+	state := State{Snapshots: make([]Snapshot, 0, snapshotCount)}
 	previousScope := ""
-	for index := uint64(0); index < count; index++ {
+	for index := 0; index < snapshotCount; index++ {
 		scope, next, ok := frame.ReadBytes(data, position, options.MaxScopeBytes)
 		if !ok {
 			return State{}, 0, ErrInvalidState
@@ -794,13 +798,14 @@ func readState(data []byte, position int, options RepositoryOptions) (State, int
 		}
 		position = next
 		frontierCount, next, ok := frame.ReadUvarint(data, position)
-		if !ok || frontierCount > uint64(options.MaxFrontierEntries) {
+		frontierLimit, bounded := decodeCount(frontierCount, options.MaxFrontierEntries)
+		if !ok || !bounded {
 			return State{}, 0, ErrInvalidState
 		}
 		position = next
-		frontier := make(map[string]crdt.Tag, int(frontierCount))
+		frontier := make(map[string]crdt.Tag, frontierLimit)
 		previousReplicaID := ""
-		for frontierIndex := uint64(0); frontierIndex < frontierCount; frontierIndex++ {
+		for frontierIndex := 0; frontierIndex < frontierLimit; frontierIndex++ {
 			tag, next, ok := frame.ReadTag(data, position, options.MaxReplicaIDBytes)
 			if !ok || tag.ReplicaID <= previousReplicaID {
 				return State{}, 0, ErrInvalidState
@@ -815,13 +820,14 @@ func readState(data []byte, position int, options RepositoryOptions) (State, int
 		flag := data[position]
 		position++
 		var saved snapshot.Snapshot
-		if flag == 0 {
+		switch flag {
+		case 0:
 			candidate, err := snapshot.New(stateBytes, frontier)
 			if err != nil {
 				return State{}, 0, ErrInvalidState
 			}
 			saved = candidate
-		} else if flag == 1 {
+		case 1:
 			tag, next, ok := frame.ReadTag(data, position, options.MaxReplicaIDBytes)
 			if !ok {
 				return State{}, 0, ErrInvalidState
@@ -832,7 +838,7 @@ func readState(data []byte, position int, options RepositoryOptions) (State, int
 				return State{}, 0, ErrInvalidState
 			}
 			saved = candidate
-		} else {
+		default:
 			return State{}, 0, ErrInvalidState
 		}
 		normalized, err := normalizeSnapshot(saved, options)
@@ -859,10 +865,12 @@ func canonicalParents(parents []ID) []ID {
 }
 
 func parentsCanonical(parents []ID) bool {
+	var previous ID
 	for index, parent := range parents {
-		if !parent.valid() || (index > 0 && bytes.Compare(parents[index-1][:], parent[:]) >= 0) {
+		if !parent.valid() || (index > 0 && bytes.Compare(previous[:], parent[:]) >= 0) {
 			return false
 		}
+		previous = parent
 	}
 	return true
 }

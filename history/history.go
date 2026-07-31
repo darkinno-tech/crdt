@@ -399,12 +399,13 @@ func unmarshalManager(data []byte, options Options) ([]entry, []entry, error) {
 
 func readEntries(data []byte, position int, options Options) ([]entry, int, error) {
 	count, next, ok := frame.ReadUvarint(data, position)
-	if !ok || count > uint64(options.MaxEntries) {
+	entryCount, bounded := decodeCount(count, options.MaxEntries)
+	if !ok || !bounded {
 		return nil, 0, ErrInvalidState
 	}
 	position = next
-	entries := make([]entry, 0, int(count))
-	for index := uint64(0); index < count; index++ {
+	entries := make([]entry, 0, entryCount)
+	for index := 0; index < entryCount; index++ {
 		scope, next, ok := frame.ReadBytes(data, position, options.MaxScopeBytes)
 		if !ok {
 			return nil, 0, ErrInvalidState
@@ -450,6 +451,19 @@ func validateScope(scope string, maximum int) error {
 
 func validCommand(command []byte, maximum int) bool {
 	return len(command) > 0 && len(command) <= maximum
+}
+
+// decodeCount bounds an attacker-controlled uvarint before converting it to
+// int for allocation or loop control.
+func decodeCount(value uint64, maximum int) (int, bool) {
+	if maximum < 0 {
+		return 0, false
+	}
+	limit := uint64(maximum)
+	if value > limit {
+		return 0, false
+	}
+	return int(value), true // #nosec G115 -- value is bounded by the nonnegative int maximum above.
 }
 
 func appendBoundedBytes(encoded, value []byte, maximum int) ([]byte, bool) {

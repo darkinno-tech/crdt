@@ -301,10 +301,11 @@ func outputWriter(path string) (io.Writer, func() error, error) {
 	if path == "-" {
 		return os.Stdout, func() error { return nil }, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, nil, err
 	}
-	file, err := os.Create(path)
+	// The CLI's explicit --output value deliberately selects the report path.
+	file, err := os.Create(path) // #nosec G304 -- user-selected CLI output path
 	if err != nil {
 		return nil, nil, err
 	}

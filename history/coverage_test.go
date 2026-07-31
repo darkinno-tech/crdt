@@ -37,6 +37,15 @@ func TestHistoryHelperBoundaries(t *testing.T) {
 	if _, ok := appendBoundedUvarint([]byte{1}, 2, 1); ok {
 		t.Fatal("bounded varint overflow accepted")
 	}
+	if value, ok := decodeCount(2, 2); !ok || value != 2 {
+		t.Fatalf("bounded count = %d, %t", value, ok)
+	}
+	if _, ok := decodeCount(3, 2); ok {
+		t.Fatal("over-limit count accepted")
+	}
+	if _, ok := decodeCount(0, -1); ok {
+		t.Fatal("negative count limit accepted")
+	}
 	if _, _, ok := readID([]byte{1}, 0); ok {
 		t.Fatal("short ID accepted")
 	}
@@ -246,13 +255,12 @@ func TestSnapshotNormalizationClockAndFrameBoundaries(t *testing.T) {
 	if _, err := normalizeSnapshot(counterSnapshot, validOptions); err != nil {
 		t.Fatalf("valid counter snapshot = %v", err)
 	}
-	largeFrontier := counterSnapshot
 	frontier := make(map[string]crdt.Tag, 2)
 	frontier["a"] = crdt.Tag{ReplicaID: "a", WallTime: 1}
 	frontier["b"] = crdt.Tag{ReplicaID: "b", WallTime: 1}
 	// Recreate the snapshot through its public constructor to keep its immutable
 	// internals valid while exercising the repository's frontier quota.
-	largeFrontier, err = snapshot.New(counterState, frontier)
+	largeFrontier, err := snapshot.New(counterState, frontier)
 	if err != nil {
 		t.Fatal(err)
 	}
