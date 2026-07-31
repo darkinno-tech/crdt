@@ -24,10 +24,13 @@ socket.onmessage = ({ data }) => binding.applyRemote(new Uint8Array(data));
 // binding.destroy() only removes observers; it does not close document.
 ```
 
-The binding finds the common Unicode-scalar prefix/suffix of an editor change,
-emits a delete plus ordered insert frames, and splits every insertion at the
-runtime's negotiated byte/rune limits. Remote frames merge through the Wasm
-RGA before the adapter replaces editor text; a write guard prevents that
+The binding finds the common Unicode-scalar prefix/suffix of an editor change
+and emits one atomic RGA replacement frame. The changed text must fit the
+runtime's negotiated byte/rune limit; an over-limit replacement is rejected
+and the editor is restored to its last replicated text. This avoids a
+delete-plus-later-insert sequence that could otherwise leave a local,
+unreplicable delete-only state. Remote frames merge through the Wasm RGA
+before the adapter replaces editor text; a write guard prevents that
 replacement from echoing into `onLocalFrame`.
 
 ## Scope boundary

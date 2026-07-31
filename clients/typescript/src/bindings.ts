@@ -77,7 +77,16 @@ export class RGAPlainTextBinding {
     if (this.#closed || this.#writing) {
       return;
     }
-    this.#replaceDocument(this.editor.readText());
+    try {
+      this.#replaceDocument(this.editor.readText());
+    } catch (error) {
+      // The editor has already accepted this local input, while the RGA may
+      // have rejected it during frame/state preflight. Restore the last
+      // replicated projection so a rejected edit cannot remain as an
+      // unreplicable editor-only fork.
+      this.#writeEditor(this.#text);
+      throw error;
+    }
   }
 
   #replaceDocument(next: string): void {
@@ -98,22 +107,14 @@ export class RGAPlainTextBinding {
       nextEnd -= 1;
     }
 
-    const frames: Uint8Array[] = [];
-    if (previousEnd > prefix) {
-      frames.push(this.document.delete(prefix, previousEnd - prefix));
-    }
-    let offset = prefix;
-    for (const chunk of splitText(nextRunes.slice(prefix, nextEnd), this.document)) {
-      frames.push(this.document.insert(offset, chunk));
-      offset += Array.from(chunk).length;
-    }
+    const replacement = nextRunes.slice(prefix, nextEnd).join("");
+    assertBoundedReplacement(replacement, this.document);
+    const frame = this.document.replace(prefix, previousEnd - prefix, replacement);
     this.#text = this.document.text();
     if (this.#text !== next) {
       throw new CRDTRuntimeError("binding_diverged");
     }
-    for (const frame of frames) {
-      this.options.onLocalFrame(frame);
-    }
+    this.options.onLocalFrame(frame);
   }
 
   #writeEditor(value: string): void {
@@ -222,33 +223,22 @@ export function bindSlatePlainText(
   return bindRGAPlainText(document, port, options);
 }
 
-function splitText(runes: readonly string[], document: RGAWasmDocument): string[] {
-  if (runes.length === 0) {
-    return [];
-  }
+/**
+ * RGA replacement is atomic only when its inserted text fits one negotiated
+ * local edit. Splitting a replacement into delete/insert frames can leave a
+ * delete-only state if a later insertion is rejected, so callers must split
+ * large editor operations before they reach this binding.
+ */
+function assertBoundedReplacement(value: string, document: RGAWasmDocument): void {
   const { maxLocalEditBytes, maxLocalEditRunes } = document.protocol;
   const encoder = new TextEncoder();
-  const chunks: string[] = [];
-  let current = "";
-  let currentRunes = 0;
-  let currentBytes = 0;
-  for (const rune of runes) {
-    const bytes = encoder.encode(rune).byteLength;
-    if (bytes > maxLocalEditBytes) {
+  let runes = 0;
+  let bytes = 0;
+  for (const rune of value) {
+    runes += 1;
+    bytes += encoder.encode(rune).byteLength;
+    if (runes > maxLocalEditRunes || bytes > maxLocalEditBytes) {
       throw new CRDTRuntimeError("resource_limit");
     }
-    if (currentRunes === maxLocalEditRunes || currentBytes + bytes > maxLocalEditBytes) {
-      chunks.push(current);
-      current = "";
-      currentRunes = 0;
-      currentBytes = 0;
-    }
-    current += rune;
-    currentRunes += 1;
-    currentBytes += bytes;
   }
-  if (current !== "") {
-    chunks.push(current);
-  }
-  return chunks;
 }

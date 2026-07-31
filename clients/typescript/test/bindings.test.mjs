@@ -30,12 +30,21 @@ class FakeRGA {
     return new TextEncoder().encode(JSON.stringify({ kind: "delete", offset, count }));
   }
 
+  replace(offset, count, value) {
+    const runes = Array.from(this.value);
+    runes.splice(offset, count, ...Array.from(value));
+    this.value = runes.join("");
+    return new TextEncoder().encode(JSON.stringify({ kind: "replace", offset, count, value }));
+  }
+
   applyDelta(frame) {
     const operation = JSON.parse(new TextDecoder().decode(frame));
     if (operation.kind === "insert") {
       this.insert(operation.offset, operation.value);
-    } else {
+    } else if (operation.kind === "delete") {
       this.delete(operation.offset, operation.count);
+    } else {
+      this.replace(operation.offset, operation.count, operation.value);
     }
   }
 }
@@ -66,20 +75,20 @@ class TextPort {
 }
 
 test("plain-text binding emits bounded rune-aware RGA frames and prevents remote echo", () => {
-  const document = new FakeRGA("", { maxLocalEditRunes: 2, maxLocalEditBytes: 8 });
+  const document = new FakeRGA("", { maxLocalEditRunes: 8, maxLocalEditBytes: 16 });
   const port = new TextPort("");
   const frames = [];
   const binding = bindRGAPlainText(document, port, { onLocalFrame: (frame) => frames.push(frame) });
 
   port.userWrite("ab🙂cd");
   assert.equal(document.text(), "ab🙂cd");
-  assert.equal(frames.length, 3);
+  assert.equal(frames.length, 1);
 
   const remote = new FakeRGA("ab🙂cd");
   const deleteFrame = remote.delete(2, 1);
   binding.applyRemote(deleteFrame);
   assert.equal(port.readText(), "abcd");
-  assert.equal(frames.length, 3);
+  assert.equal(frames.length, 1);
 
   assert.equal(binding.destroy(), true);
   port.userWrite("local after close");
@@ -99,9 +108,20 @@ test("editor initial content can be explicitly imported and replacements preserv
   assert.equal(document.text(), "daft!");
   const operations = frames.slice(1).map((frame) => JSON.parse(new TextDecoder().decode(frame)));
   assert.deepEqual(operations, [
-    { kind: "delete", offset: 1, count: 4 },
-    { kind: "insert", offset: 1, value: "aft!" },
+    { kind: "replace", offset: 1, count: 4, value: "aft!" },
   ]);
+});
+
+test("a replacement over the negotiated bound restores the editor without mutating the RGA", () => {
+  const document = new FakeRGA("safe", { maxLocalEditBytes: 4, maxLocalEditRunes: 4 });
+  const port = new TextPort("safe");
+  const frames = [];
+  bindRGAPlainText(document, port, { onLocalFrame: (frame) => frames.push(frame) });
+
+  assert.throws(() => port.userWrite("banana"), /resource_limit/);
+  assert.equal(document.text(), "safe");
+  assert.equal(port.readText(), "safe");
+  assert.equal(frames.length, 0);
 });
 
 test("Quill adapter accepts user text changes and ignores API writes used for remote merges", () => {
