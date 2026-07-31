@@ -30,7 +30,10 @@ const loaderRuntime = await wasmModule.initRGAWasm(
     ? { wasmURL: `${assets.url}/crdt-rga.wasm` }
     : { wasmURL: `${assets.url}/crdt-rga.wasm`, expectedProtocol: artifactProtocol },
 );
-const richTextRuntime = await wasmModule.initRichTextWasm({ wasmURL: `${assets.url}/crdt-rga.wasm` });
+const richTextRuntime = await wasmModule.initRichTextWasm({
+  wasmURL: `${assets.url}/crdt-rga.wasm`,
+  expectedRGAProtocol: artifactProtocol,
+});
 const rawAPI = globalThis[RGA_WASM_GLOBAL];
 after(async () => {
   await new Promise((resolve, reject) => {

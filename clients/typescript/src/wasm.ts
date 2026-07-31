@@ -68,6 +68,12 @@ export interface InitRichTextWasmOptions {
   readonly wasmURL: string | URL;
   /** Exact rich-text contract authenticated for the rich-text replication group. */
   readonly expectedProtocol?: Readonly<RGAProtocolExpectation>;
+  /**
+   * RGA protocol compiled into the shared artifact. This is independent of
+   * the rich-text Manifest: omit it for the default run-v2 artifact, or pass
+   * the authenticated v1 contract when loading a legacy combined build.
+   */
+  readonly expectedRGAProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
   readonly startupTimeoutMs?: number;
 }
@@ -375,9 +381,11 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
  * its frames must never be sent to an RGA run-v2 document.
  */
 export async function initRichTextWasm(options: InitRichTextWasmOptions): Promise<RichTextWasmRuntime> {
-  const sharedOptions: InitRGAWasmOptions = options.startupTimeoutMs === undefined
-    ? { wasmURL: options.wasmURL }
-    : { wasmURL: options.wasmURL, startupTimeoutMs: options.startupTimeoutMs };
+  const sharedOptions: InitRGAWasmOptions = {
+    wasmURL: options.wasmURL,
+    expectedProtocol: options.expectedRGAProtocol ?? RGA_PROTOCOL_RUN_V2,
+    ...(options.startupTimeoutMs === undefined ? {} : { startupTimeoutMs: options.startupTimeoutMs }),
+  };
   await initRGAWasm(sharedOptions);
   const api = rawAPIFromGlobal();
   if (api === undefined) {

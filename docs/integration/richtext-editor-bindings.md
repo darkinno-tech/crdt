@@ -78,6 +78,12 @@ const binding = bindQuillRichText(document, quill, {
 socket.onmessage = ({ data }) => binding.applyRemote(new Uint8Array(data));
 ```
 
+The ordinary `make wasm` artifact carries RGA run-v2 and needs no additional
+option. If a separately authenticated deployment intentionally loads the
+legacy combined RGA v1 artifact, pass its Manifest-selected RGA expectation as
+`expectedRGAProtocol`; this validates the artifact's shared runtime without
+changing the rich-text v1 frame contract.
+
 Quill always has a terminal newline. It must be part of the rich-text CRDT
 projection for every participant. Use `initialContent: "editor"` only for the
 one-time import of a new Quill document. A joining client must first receive
