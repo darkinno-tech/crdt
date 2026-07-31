@@ -33,12 +33,6 @@ type RichTextProtocol struct {
 	SemanticsVersion uint64
 }
 
-func (p RichTextProtocol) valid() bool {
-	return p == (RichTextProtocol{
-		StateTypeID: RichTextStateTypeID, DeltaTypeID: RichTextDeltaTypeID, SemanticsVersion: RichTextSemanticsVersion,
-	})
-}
-
 // RichTextOptions bounds untrusted rich-text frames and one local editor
 // transaction. They are intentionally browser-sized rather than inheriting
 // the process-wide library defaults.
