@@ -4,9 +4,9 @@
 
 Build one complete bounded native Rust implementation of the stable
 [`rga-run-v2`](../protocol/rga-run-v2.md) contract, then expose it through a
-small owned-buffer C ABI to Python and Swift. Keep an explicit path for later
-independent Python/Swift implementations, but do not call a thin frame decoder
-or a language wrapper an independent CRDT implementation.
+small owned-buffer C ABI to Python, Swift, and C++20. Keep an explicit path for
+later independent language implementations, but do not call a thin frame
+decoder or a language wrapper an independent CRDT implementation.
 
 This is deliberately separate from `native-ts-v1`/`native-ts-nested-v1`.
 Those are useful TypeScript-only JSON contracts but are not Go RGA frames,
@@ -25,16 +25,16 @@ TypeIDs `19/20`, or a safe upgrade path for a manifest-bound RGA group.
 
 | Option | Correctness / security | Performance / cost | Decision |
 | --- | --- | --- | --- |
-| Independent Go-wire implementation in Rust, Python, and Swift immediately | Three merge/HLC/canonical decoders must stay identical; widest attack surface | Best language-native integration, but three expensive audits and divergent fixes | Defer after conformance maturity. |
+| Independent Go-wire implementation in Rust, Python, Swift, and C++ immediately | Four merge/HLC/canonical decoders must stay identical; widest attack surface | Best language-native integration, but four expensive audits and divergent fixes | Defer after conformance maturity. |
 | Rust core plus FFI wrappers | One bounded decoder/merge engine and one wire test surface; ABI ownership must be audited | Native speed and one implementation; FFI crossing costs are tiny versus a frame merge | **Adopt now.** |
 | Go/Wasm everywhere | Reuses Go semantics, but desktop/mobile package and startup restrictions remain | Good browser portability; unsuitable as the only Python/Swift native story | Retain for browser groups only. |
 
 The chosen Rust core is a real local client: local insert/delete, canonical
 state/delta encode/decode, set-union merge, bounded pending parents,
 tombstones, deterministic projection, and HLC state are all implemented. The
-Python and Swift packages call that native core through `crdt_rga.h`; therefore
-they provide supported client capability today but are not independent source
-ports. This distinction is part of the public contract.
+Python, Swift, and C++20 packages call that native core through `crdt_rga.h`;
+therefore they provide supported client capability today but are not independent
+source ports. This distinction is part of the public contract.
 
 ## Correctness model
 
@@ -89,7 +89,9 @@ tombstone, and concurrent-editor measurements.
 | `make rust-test` | Go vector decode/re-encode; malformed/limit atomicity; pending/reorder/duplicate/recovery behavior | Network auth, storage durability, Python/Swift dynamic loader packaging |
 | `make python-test` | Real Python → C ABI → Rust core state/merge/recovery path | Independent Python semantics or wheel packaging |
 | `make swift-test` | Real Swift → C ABI → Rust core vector/session/recovery path on macOS | iOS binary signing/XCTest/device performance |
+| `make cpp-test` | Real C++20 → C ABI → Rust core Go-vector, atomic-rejection, convergence, and recovery path | Independent C++ semantics, ABI stability across compiler/libc++ versions, or package-manager delivery |
 | `make rust-benchmark` | Controlled native insert/relay/recovery regression number | Production capacity or latency SLA |
+| `make cpp-benchmark` | Controlled C++ facade → ABI → native insert/relay/recovery regression number | Production C++ allocator, packaging, or device SLA |
 
 The next independent-port milestone is not “decode a frame.” It requires a
 language implementation to pass the published vectors, hostile-frame atomicity

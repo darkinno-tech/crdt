@@ -81,7 +81,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Connect stable Yjs/y-websocket clients | [Yjs / y-protocols compatibility relay](docs/integration/yjs-relay.md) |
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
 | Implement run-v2 outside Go/Wasm | [RGA run-v2 protocol and vectors](docs/protocol/rga-run-v2.md) |
-| Use the native Rust, Python, or Swift RGA runtime | [Multilanguage RGA decision](docs/design/native-multilanguage-rga.md) |
+| Use the native Rust, Python, Swift, or C++ RGA runtime | [Multilanguage RGA decision](docs/design/native-multilanguage-rga.md) |
 | Implement stable formatting or trees | [Rich-text v1](docs/protocol/richtext-v1.md) and [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
 
 The [documentation index](docs/README.md) separates getting-started, integration, protocol/design, and operational material. Detailed performance evidence and deployment runbooks live there instead of making this entry page a manual.

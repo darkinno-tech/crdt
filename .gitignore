@@ -15,6 +15,7 @@
 /clients/rust/Cargo.lock
 /clients/python/**/__pycache__/
 /clients/swift/.build/
+/clients/cpp/.build/
 
 # Go test -c executables are local validation artifacts.
 /*.test

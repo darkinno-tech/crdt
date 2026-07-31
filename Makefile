@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -14,6 +14,18 @@ RUST_MANIFEST ?= clients/rust/Cargo.toml
 RUST_LIBRARY_DIR ?= $(CURDIR)/clients/rust/target/debug
 RUST_LIBRARY_EXTENSION ?= $(shell uname -s | sed -e 's/^Darwin$$/dylib/' -e 's/^Linux$$/so/')
 RUST_LIBRARY_NAME ?= libdarkinno_crdt_rga.$(RUST_LIBRARY_EXTENSION)
+RUST_RELEASE_LIBRARY_DIR ?= $(CURDIR)/clients/rust/target/release
+CPP_COMPILER ?= c++
+CPP_FLAGS ?= -std=c++20 -Wall -Wextra -Werror -pedantic
+CPP_BUILD_DIR ?= clients/cpp/.build
+CPP_TEST_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-conformance
+CPP_BENCHMARK_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-benchmark
+
+ifeq ($(shell uname -s),Darwin)
+CPP_LIBRARY_PATH_ENV := DYLD_LIBRARY_PATH
+else
+CPP_LIBRARY_PATH_ENV := LD_LIBRARY_PATH
+endif
 
 fmt-check:
 	test -z "$$(gofmt -l .)"
@@ -137,6 +149,20 @@ swift-test:
 	@test "$$(uname -s)" = Darwin || (echo "swift-test requires a Darwin Rust dynamic library" >&2; exit 2)
 	cargo build --manifest-path "$(RUST_MANIFEST)"
 	CRDT_RGA_LIBRARY_DIR="$(RUST_LIBRARY_DIR)" DYLD_LIBRARY_PATH="$(RUST_LIBRARY_DIR)" swift run --package-path clients/swift crdt-rga-swift-conformance
+
+# The C++20 facade is an owned-handle binding over the same Rust run-v2 core.
+# It intentionally has no package manager or generated source dependency.
+cpp-test:
+	cargo build --manifest-path "$(RUST_MANIFEST)"
+	mkdir -p "$(CPP_BUILD_DIR)"
+	$(CPP_COMPILER) $(CPP_FLAGS) -Iclients/cpp/include -Iclients/rust/include clients/cpp/tests/conformance.cpp -L"$(RUST_LIBRARY_DIR)" -ldarkinno_crdt_rga -o "$(CPP_TEST_BINARY)"
+	$(CPP_LIBRARY_PATH_ENV)="$(RUST_LIBRARY_DIR)" "$(CPP_TEST_BINARY)"
+
+cpp-benchmark:
+	cargo build --release --manifest-path "$(RUST_MANIFEST)"
+	mkdir -p "$(CPP_BUILD_DIR)"
+	$(CPP_COMPILER) $(CPP_FLAGS) -O3 -Iclients/cpp/include -Iclients/rust/include clients/cpp/bench/rga.cpp -L"$(RUST_RELEASE_LIBRARY_DIR)" -ldarkinno_crdt_rga -o "$(CPP_BENCHMARK_BINARY)"
+	$(CPP_LIBRARY_PATH_ENV)="$(RUST_RELEASE_LIBRARY_DIR)" "$(CPP_BENCHMARK_BINARY)"
 
 docker-test:
 	docker build --build-arg GO_IMAGE=$${DOCKER_GO_IMAGE:-golang:1.26-bookworm} --file Dockerfile.ci --tag crdt-ci:local .

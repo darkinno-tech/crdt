@@ -42,6 +42,7 @@ go vet ./...
 | Rust run-v2 向量、收敛和原子拒绝 | `make rust-test` |
 | Python native-runtime 绑定 | `make python-test` |
 | Swift native-runtime conformance（macOS） | `make swift-test` |
+| C++20 native-runtime 绑定 | `make cpp-test` |
 | 静态检查 | `make staticcheck`、`make lint` |
 | 完整本地门禁 | `make verify` |
 | CI 容器复现 | `make docker-test` |
