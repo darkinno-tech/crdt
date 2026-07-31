@@ -3,6 +3,7 @@ package text
 import (
 	"bytes"
 	"sort"
+	"strconv"
 	"unicode/utf8"
 
 	"github.com/DarkInno/crdt"
@@ -74,6 +75,26 @@ func (r *RGA) MarshalRunBinaryWithLimits(limits frame.DecoderLimits) ([]byte, er
 	return marshalRGARunState(state, limits)
 }
 
+// MarshalRunFrameV2 encodes complete RGA state in the separately negotiated
+// compression-aware outer frame v2. It preserves the run-v2 RGA payload and
+// scalar Position semantics; only the outer representation changes.
+func (r *RGA) MarshalRunFrameV2() ([]byte, error) {
+	return r.MarshalRunFrameV2WithLimits(frame.DefaultLimits())
+}
+
+// MarshalRunFrameV2WithLimits encodes complete RGA state in a bounded outer
+// frame v2. Peers must negotiate frame.FormatVersionV2 before accepting it.
+func (r *RGA) MarshalRunFrameV2WithLimits(limits frame.DecoderLimits) ([]byte, error) {
+	if r == nil {
+		return nil, ErrNilText
+	}
+	state, _, err := r.captureRunState(false)
+	if err != nil {
+		return nil, err
+	}
+	return marshalRGARunStateFrameV2(state, limits)
+}
+
 // MarshalRunBinary encodes a delta with compact same-replica parent chains.
 func (d Delta) MarshalRunBinary() ([]byte, error) {
 	return d.MarshalRunBinaryWithLimits(frame.DefaultLimits())
@@ -85,7 +106,31 @@ func (d Delta) MarshalRunBinaryWithLimits(limits frame.DecoderLimits) ([]byte, e
 	return marshalRGARun(crdt.TypeIDRGARunDelta, d.nodes, d.tombstones, limits)
 }
 
+// MarshalRunFrameV2 encodes a run-v2 delta in the separately negotiated
+// compression-aware outer frame v2. It does not change the canonical run-v2
+// payload, RGA IDs, or merge semantics.
+func (d Delta) MarshalRunFrameV2() ([]byte, error) {
+	return d.MarshalRunFrameV2WithLimits(frame.DefaultLimits())
+}
+
+// MarshalRunFrameV2WithLimits encodes a bounded run-v2 delta in outer frame
+// v2. It may select a raw v2 payload when DEFLATE would not reduce the final
+// frame, so callers must negotiate v2 even for small edits.
+func (d Delta) MarshalRunFrameV2WithLimits(limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGARunFrameV2(crdt.TypeIDRGARunDelta, d.nodes, d.tombstones, limits)
+}
+
+type runBlockEncoder func(uint64, [][]runNode, []Position, frame.DecoderLimits) ([]byte, error)
+
 func marshalRGARun(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGARunWithEncoder(typeID, nodes, tombstones, limits, marshalRunBlocks)
+}
+
+func marshalRGARunFrameV2(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGARunWithEncoder(typeID, nodes, tombstones, limits, marshalRunFrameV2Blocks)
+}
+
+func marshalRGARunWithEncoder(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits, encode runBlockEncoder) ([]byte, error) {
 	delta := Delta{nodes: nodes, tombstones: tombstones}
 	if err := validateDelta(delta); err != nil {
 		return nil, err
@@ -98,10 +143,18 @@ func marshalRGARun(typeID uint64, nodes map[Position]node, tombstones map[Positi
 	}
 	blocks := makeRunBlocks(nodes)
 	tombIDs := sortedTombstoneIDs(tombstones)
-	return marshalRunBlocks(typeID, blocks, tombIDs, limits)
+	return encode(typeID, blocks, tombIDs, limits)
 }
 
 func marshalRGARunState(state rgaRunState, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGARunStateWithEncoder(state, limits, marshalRunBlocks)
+}
+
+func marshalRGARunStateFrameV2(state rgaRunState, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGARunStateWithEncoder(state, limits, marshalRunFrameV2Blocks)
+}
+
+func marshalRGARunStateWithEncoder(state rgaRunState, limits frame.DecoderLimits, encode runBlockEncoder) ([]byte, error) {
 	if len(state.nodes) > limits.MaxElements || len(state.nodes) > limits.MaxTags || len(state.tombstones) > limits.MaxTags-len(state.nodes) {
 		return nil, frame.ErrFrameLimit
 	}
@@ -115,7 +168,7 @@ func marshalRGARunState(state rgaRunState, limits frame.DecoderLimits) ([]byte, 
 	if linear {
 		blocks = [][]runNode{state.nodes}
 	}
-	return marshalRunBlocks(crdt.TypeIDRGARunState, blocks, state.tombstones, limits)
+	return encode(crdt.TypeIDRGARunState, blocks, state.tombstones, limits)
 }
 
 func marshalRunBlocks(typeID uint64, blocks [][]runNode, tombIDs []Position, limits frame.DecoderLimits) ([]byte, error) {
@@ -124,38 +177,73 @@ func marshalRunBlocks(typeID uint64, blocks [][]runNode, tombIDs []Position, lim
 		return nil, err
 	}
 	return frame.MarshalFrameWithPayloadAndLimits(typeID, "", payloadSize, limits, func(payload []byte) error {
-		output := frame.AppendUvarint(payload[:0], uint64(len(blocks)))
-		for _, block := range blocks {
-			if len(block) == 1 {
-				output = frame.AppendUvarint(output, runBlockNode)
-				output = appendRunNode(output, block[0])
-				continue
-			}
-			output = frame.AppendUvarint(output, runBlockChain)
-			output = frame.AppendUvarint(output, uint64(len(block)))
-			output = frame.AppendUvarint(output, uint64(len(block[0].id.ReplicaID)))
-			output = append(output, block[0].id.ReplicaID...)
-			if block[0].item.parent.Valid() {
-				output = frame.AppendUvarint(output, 1)
-				output = frame.AppendTag(output, block[0].item.parent)
-			} else {
-				output = frame.AppendUvarint(output, 0)
-			}
-			for _, item := range block {
-				output = frame.AppendUvarint(output, item.id.WallTime)
-				output = frame.AppendUvarint(output, item.id.Logical)
-				output = frame.AppendUvarint(output, uint64(item.item.rune))
-			}
-		}
-		output = frame.AppendUvarint(output, uint64(len(tombIDs)))
-		for _, id := range tombIDs {
-			output = frame.AppendTag(output, id)
-		}
-		if len(output) != payloadSize {
-			return frame.ErrInvalidFrame
-		}
-		return nil
+		return writeRunPayload(payload, blocks, tombIDs)
 	})
+}
+
+// marshalRunFrameV2Blocks writes the canonical run-v2 payload directly into
+// the outer-v2 encoder. This avoids allocating and validating an intermediate
+// v1 envelope before compression, while retaining exactly the same payload.
+func marshalRunFrameV2Blocks(typeID uint64, blocks [][]runNode, tombIDs []Position, limits frame.DecoderLimits) ([]byte, error) {
+	payload, err := marshalRunPayload(blocks, tombIDs, limits)
+	if err != nil {
+		return nil, err
+	}
+	return frame.MarshalFrameV2WithLimits(frame.Frame{TypeID: typeID, Payload: payload}, limits)
+}
+
+func marshalRunPayload(blocks [][]runNode, tombIDs []Position, limits frame.DecoderLimits) ([]byte, error) {
+	payloadSize, err := runPayloadSizeWithTombstoneIDs(blocks, tombIDs, limits)
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, payloadSize)
+	if err := writeRunPayload(payload, blocks, tombIDs); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func writeRunPayload(payload []byte, blocks [][]runNode, tombIDs []Position) error {
+	output := frame.AppendUvarint(payload[:0], uint64(len(blocks)))
+	for _, block := range blocks {
+		if len(block) == 1 {
+			output = frame.AppendUvarint(output, runBlockNode)
+			var err error
+			output, err = appendRunNode(output, block[0])
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		output = frame.AppendUvarint(output, runBlockChain)
+		output = frame.AppendUvarint(output, uint64(len(block)))
+		output = frame.AppendUvarint(output, uint64(len(block[0].id.ReplicaID)))
+		output = append(output, block[0].id.ReplicaID...)
+		if block[0].item.parent.Valid() {
+			output = frame.AppendUvarint(output, 1)
+			output = frame.AppendTag(output, block[0].item.parent)
+		} else {
+			output = frame.AppendUvarint(output, 0)
+		}
+		for _, item := range block {
+			scalar, ok := encodeRunScalar(item.item.rune)
+			if !ok {
+				return frame.ErrInvalidFrame
+			}
+			output = frame.AppendUvarint(output, item.id.WallTime)
+			output = frame.AppendUvarint(output, item.id.Logical)
+			output = frame.AppendUvarint(output, scalar)
+		}
+	}
+	output = frame.AppendUvarint(output, uint64(len(tombIDs)))
+	for _, id := range tombIDs {
+		output = frame.AppendTag(output, id)
+	}
+	if len(output) != len(payload) {
+		return frame.ErrInvalidFrame
+	}
+	return nil
 }
 
 // captureRunState snapshots complete state into compact slices while holding
@@ -277,7 +365,11 @@ func acyclicSortedRunNodes(items []runNode) bool {
 	return true
 }
 
-func appendRunNode(output []byte, item runNode) []byte {
+func appendRunNode(output []byte, item runNode) ([]byte, error) {
+	scalar, ok := encodeRunScalar(item.item.rune)
+	if !ok {
+		return nil, frame.ErrInvalidFrame
+	}
 	output = frame.AppendTag(output, item.id)
 	if item.item.parent.Valid() {
 		output = frame.AppendUvarint(output, 1)
@@ -285,7 +377,22 @@ func appendRunNode(output []byte, item runNode) []byte {
 	} else {
 		output = frame.AppendUvarint(output, 0)
 	}
-	return frame.AppendUvarint(output, uint64(item.item.rune))
+	return frame.AppendUvarint(output, scalar), nil
+}
+
+func encodeRunScalar(value rune) (uint64, bool) {
+	if value < 0 || !utf8.ValidRune(value) {
+		return 0, false
+	}
+	return uint64(value), true
+}
+
+func decodeRunScalar(value uint64) (rune, bool) {
+	if value > uint64(utf8.MaxRune) {
+		return 0, false
+	}
+	scalar := rune(value)
+	return scalar, utf8.ValidRune(scalar)
 }
 
 func runPayloadSize(blocks [][]runNode, tombstones map[Position]struct{}, limits frame.DecoderLimits) (int, error) {
@@ -297,10 +404,14 @@ func runPayloadSizeWithTombstoneIDs(blocks [][]runNode, tombIDs []Position, limi
 	for _, block := range blocks {
 		if len(block) == 1 {
 			item := block[0]
+			scalar, ok := encodeRunScalar(item.item.rune)
+			if !ok {
+				return 0, frame.ErrInvalidFrame
+			}
 			if err := addWireTagSize(&size, item.id, limits); err != nil {
 				return 0, err
 			}
-			additional := frame.UvarintSize(uint64(item.item.rune)) + 1
+			additional := frame.UvarintSize(scalar) + 1
 			if item.item.parent.Valid() {
 				if len(item.item.parent.ReplicaID) > limits.MaxStringBytes {
 					return 0, frame.ErrFrameLimit
@@ -324,7 +435,11 @@ func runPayloadSizeWithTombstoneIDs(blocks [][]runNode, tombIDs []Position, limi
 			additional += frame.TagSize(block[0].item.parent)
 		}
 		for _, item := range block {
-			additional += frame.UvarintSize(item.id.WallTime) + frame.UvarintSize(item.id.Logical) + frame.UvarintSize(uint64(item.item.rune))
+			scalar, ok := encodeRunScalar(item.item.rune)
+			if !ok {
+				return 0, frame.ErrInvalidFrame
+			}
+			additional += frame.UvarintSize(item.id.WallTime) + frame.UvarintSize(item.id.Logical) + frame.UvarintSize(scalar)
 		}
 		if additional > limits.MaxPayload-size-1 {
 			return 0, frame.ErrFrameLimit
@@ -536,7 +651,7 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 	}
 	position := 0
 	blockCount, next, ok := frame.ReadUvarint(decoded.Payload, position)
-	if !ok || blockCount > uint64(limits.MaxElements) {
+	if !ok || limits.MaxElements < 0 || blockCount > uint64(limits.MaxElements) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	position = next
@@ -559,7 +674,8 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 			continue
 		}
 		count, next, ok := frame.ReadUvarint(decoded.Payload, position)
-		if !ok || count < 2 || count > uint64(limits.MaxElements-len(nodes)) {
+		remainingNodes := limits.MaxElements - len(nodes)
+		if !ok || count < 2 || remainingNodes < 0 || count > uint64(remainingNodes) {
 			return nil, nil, frame.ErrInvalidFrame
 		}
 		position = next
@@ -592,23 +708,29 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 				return nil, nil, frame.ErrInvalidFrame
 			}
 			runeValue, next, ok := frame.ReadUvarint(decoded.Payload, next)
-			if !ok || runeValue > uint64(^uint32(0)) {
+			scalar, validScalar := decodeRunScalar(runeValue)
+			if !ok || !validScalar {
 				return nil, nil, frame.ErrInvalidFrame
 			}
 			id := Position{ReplicaID: replicaID, WallTime: wallTime, Logical: logical}
 			if _, exists := nodes[id]; exists {
 				return nil, nil, frame.ErrInvalidFrame
 			}
-			nodes[id] = node{parent: parent, rune: rune(runeValue)}
+			nodes[id] = node{parent: parent, rune: scalar}
 			parent, position = id, next
 		}
 	}
 	tombCount, next, ok := frame.ReadUvarint(decoded.Payload, position)
-	if !ok || tombCount > uint64(limits.MaxTags-len(nodes)) {
+	remainingTags := limits.MaxTags - len(nodes)
+	if !ok || remainingTags < 0 || tombCount > uint64(remainingTags) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	position = next
-	tombstones := make(map[Position]struct{}, int(tombCount))
+	tombstoneCapacity, ok := runCountAsInt(tombCount)
+	if !ok {
+		return nil, nil, frame.ErrInvalidFrame
+	}
+	tombstones := make(map[Position]struct{}, tombstoneCapacity)
 	for index := uint64(0); index < tombCount; index++ {
 		id, next, ok := frame.ReadTag(decoded.Payload, position, limits.MaxStringBytes)
 		if !ok {
@@ -622,9 +744,8 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 	if position != len(decoded.Payload) || validateDelta(Delta{nodes: nodes, tombstones: tombstones}) != nil || !acyclicAgainst(nodes, nil) || (complete && !hasCompleteParents(nodes)) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
-	canonical, err := marshalRGARun(expectedType, nodes, tombstones, limits)
-	canonicalFrame, canonicalErr := frame.UnmarshalFrameView(canonical, limits)
-	if err != nil || canonicalErr != nil || !bytes.Equal(canonicalFrame.Payload, decoded.Payload) {
+	canonical, err := marshalRunPayload(makeRunBlocks(nodes), sortedTombstoneIDs(tombstones), limits)
+	if err != nil || !bytes.Equal(canonical, decoded.Payload) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	return nodes, tombstones, nil
@@ -647,10 +768,19 @@ func readRunNode(payload []byte, position int, limits frame.DecoderLimits) (Posi
 		}
 	}
 	runeValue, next, ok := frame.ReadUvarint(payload, next)
-	if !ok || runeValue > uint64(^uint32(0)) {
+	scalar, validScalar := decodeRunScalar(runeValue)
+	if !ok || !validScalar {
 		return Position{}, node{}, position, false
 	}
-	return id, node{parent: parent, rune: rune(runeValue)}, next, true
+	return id, node{parent: parent, rune: scalar}, next, true
+}
+
+func runCountAsInt(value uint64) (int, bool) {
+	const maxInt = 1<<(strconv.IntSize-1) - 1
+	if value > uint64(maxInt) {
+		return 0, false
+	}
+	return int(value), true
 }
 
 // SnapshotRunCurrentState returns an HLC-backed run-v2 snapshot.
@@ -676,6 +806,30 @@ func (r *RGA) SnapshotRunCurrentStateWithLimits(limits frame.DecoderLimits) (sna
 	// marshalRGARunState. Do not use this constructor for externally supplied
 	// state: recovery still decodes and validates type-specific bytes before
 	// mutation in NewFromSnapshotWithOptions.
+	return snapshot.NewWithClockState(state, frontierForRunState(captured), clockState)
+}
+
+// SnapshotRunFrameV2CurrentState returns an HLC-backed run-v2 snapshot in a
+// separately negotiated compression-aware outer frame v2.
+func (r *RGA) SnapshotRunFrameV2CurrentState() (snapshot.Snapshot, error) {
+	return r.SnapshotRunFrameV2CurrentStateWithLimits(frame.DefaultLimits())
+}
+
+// SnapshotRunFrameV2CurrentStateWithLimits returns a bounded HLC-backed
+// run-v2 snapshot in outer frame v2. Persist its state, frontier, and clock
+// atomically before reusing the same replica ID.
+func (r *RGA) SnapshotRunFrameV2CurrentStateWithLimits(limits frame.DecoderLimits) (snapshot.Snapshot, error) {
+	if r == nil || r.clock == nil {
+		return snapshot.Snapshot{}, ErrNilText
+	}
+	captured, clockState, err := r.captureRunState(true)
+	if err != nil {
+		return snapshot.Snapshot{}, err
+	}
+	state, err := marshalRGARunStateFrameV2(captured, limits)
+	if err != nil {
+		return snapshot.Snapshot{}, err
+	}
 	return snapshot.NewWithClockState(state, frontierForRunState(captured), clockState)
 }
 

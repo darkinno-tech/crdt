@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/DarkInno/crdt"
 	"github.com/DarkInno/crdt/clock"
@@ -33,7 +34,7 @@ func TestRGARunWireFailureAndLimitPaths(t *testing.T) {
 	if _, err := marshalRGARun(crdt.TypeIDRGARunState, map[Position]node{second: nodes[second]}, nil, limits); !errors.Is(err, ErrIncompleteState) {
 		t.Fatalf("incomplete run state = %v", err)
 	}
-	if _, err := marshalRGARun(crdt.TypeIDRGARunDelta, map[Position]node{Position{}: {rune: 'x'}}, nil, limits); !errors.Is(err, ErrInvalidDelta) {
+	if _, err := marshalRGARun(crdt.TypeIDRGARunDelta, map[Position]node{{}: {rune: 'x'}}, nil, limits); !errors.Is(err, ErrInvalidDelta) {
 		t.Fatalf("invalid run delta = %v", err)
 	}
 	limitedNodes := limits
@@ -61,7 +62,22 @@ func TestRGARunWireFailureAndLimitPaths(t *testing.T) {
 	if _, err := runPayloadSize(nil, map[Position]struct{}{longParent: {}}, limitedString); !errors.Is(err, frame.ErrFrameLimit) {
 		t.Fatalf("tombstone string-limited run payload = %v", err)
 	}
-	encodedNode := appendRunNode(nil, runNode{id: second, item: nodes[second]})
+	encodedNode, err := appendRunNode(nil, runNode{id: second, item: nodes[second]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scalar, ok := encodeRunScalar('界'); !ok || scalar != uint64('界') {
+		t.Fatalf("encodeRunScalar = %d, %v", scalar, ok)
+	}
+	if _, ok := encodeRunScalar(rune(-1)); ok {
+		t.Fatal("encodeRunScalar accepted a negative scalar")
+	}
+	if _, ok := decodeRunScalar(uint64(utf8.MaxRune) + 1); ok {
+		t.Fatal("decodeRunScalar accepted an out-of-range scalar")
+	}
+	if _, err := appendRunNode(nil, runNode{id: second, item: node{rune: rune(-1)}}); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("append invalid scalar = %v", err)
+	}
 	if got, item, _, ok := readRunNode(encodedNode, 0, limits); !ok || got != second || item != nodes[second] {
 		t.Fatalf("readRunNode = %#v, %#v, %v", got, item, ok)
 	}

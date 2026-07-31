@@ -55,6 +55,24 @@ func TestRGAMarshalDeltaSinceSnapshotRoundTrip(t *testing.T) {
 	if !bytes.Equal(cachedEncoded, encoded) {
 		t.Fatal("cached snapshot base changed the canonical delta")
 	}
+	outerV2, err := source.MarshalRunDeltaSinceFrameV2(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerFrame, err := frame.UnmarshalFrame(outerV2, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outerFrame.Version() != frame.FormatVersionV2 || outerFrame.TypeID != crdt.TypeIDRGARunDelta || !bytes.Equal(outerFrame.Payload, decoded.Payload) {
+		t.Fatal("outer v2 snapshot delta changed the canonical run-v2 payload")
+	}
+	cachedOuterV2, err := source.MarshalRunDeltaSinceFrameV2Base(cachedBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(cachedOuterV2, outerV2) {
+		t.Fatal("cached snapshot base changed the outer v2 delta")
+	}
 
 	target, err := NewFromSnapshot(base)
 	if err != nil {
@@ -65,6 +83,20 @@ func TestRGAMarshalDeltaSinceSnapshotRoundTrip(t *testing.T) {
 	}
 	if got, want := target.String(), source.String(); got != want {
 		t.Fatalf("delta recovery text = %q, want %q", got, want)
+	}
+	outerTarget, err := NewFromSnapshot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerDelta, err := UnmarshalRGARunDelta(outerV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := outerTarget.ApplyDelta(outerDelta); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := outerTarget.String(), source.String(); got != want {
+		t.Fatalf("outer v2 delta recovery text = %q, want %q", got, want)
 	}
 	wantState, err := source.MarshalRunBinary()
 	if err != nil {
