@@ -14,12 +14,19 @@ separate local-merge paths:
    The default artifact uses compact run-v2 frames, matching new Go RGA
    groups. Local edits produce canonical delta frames; incoming frames go
    through the same bounded Go decoder and merge semantics as server-side Go.
+4. `../rust` is a complete native Rust run-v2 client. Its owned-buffer C ABI
+   is the implementation used by the checked-in Python and Swift bindings.
+   It is the native alternative for hosts that cannot use Go/Wasm.
 
 `NativeDocument` is not a substitute implementation of Go RGA run-v2. Its
 canonical UTF-8 JSON updates are called **`native-ts-v1`** in this guide, have
 no `FrameType`, and must never be passed to `decodeFrame`, a Go frame decoder,
 or an existing Go replication group. For a group that must interoperate with
 Go, native mobile, or prior RGA data, retain the negotiated Wasm path below.
+
+For native desktop/server/mobile hosts that need the same TypeID `19/20`
+semantics without embedding Go, use the [Rust client](../rust/README.md) and
+its [multilanguage design](../../docs/design/native-multilanguage-rga.md).
 
 ## Native TypeScript shared types
 
