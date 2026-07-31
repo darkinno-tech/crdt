@@ -166,7 +166,11 @@ func insertModel(values []string, offset int, value string) []string {
 }
 
 func deleteModel(values []string, offset, count int) []string {
-	result := append([]string(nil), values[:offset]...)
+	// Keep the model's empty projection non-nil to match MoveRGA.Values(). The
+	// distinction is observable through reflect.DeepEqual even though both
+	// slices have zero elements.
+	result := make([]string, 0, len(values)-count)
+	result = append(result, values[:offset]...)
 	return append(result, values[offset+count:]...)
 }
 
