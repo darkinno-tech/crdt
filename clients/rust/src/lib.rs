@@ -285,7 +285,13 @@ impl Delta {
 
     /// Encodes the delta as its one canonical TypeID 20 frame.
     pub fn encode(&self, limits: Limits) -> Result<Vec<u8>, Error> {
-        encode_payload_frame(RGA_RUN_DELTA_TYPE_ID, self, false, limits)
+        encode_payload_frame(
+            RGA_RUN_DELTA_TYPE_ID,
+            &self.nodes,
+            &self.tombstones,
+            false,
+            limits,
+        )
     }
 
     /// Returns true when this delta carries no nodes or tombstones.
@@ -394,13 +400,17 @@ impl Rga {
         {
             return Err(Error::ResourceLimit);
         }
+        // Build local tags on a private HLC copy. Encoding or admission can
+        // still reject this edit, and every rejected operation must retain the
+        // caller-visible clock together with its RGA state.
+        let mut local_clock = self.clock.clone();
         let mut delta = Delta::default();
         let mut parent = offset
             .checked_sub(1)
             .and_then(|index| visible.get(index))
             .cloned();
         for value in values {
-            let id = self.clock.next(physical_millis)?;
+            let id = local_clock.next(physical_millis)?;
             delta.nodes.insert(
                 id.clone(),
                 Node {
@@ -473,11 +483,13 @@ impl Rga {
         if !self.pending.is_empty() {
             return Err(Error::IncompleteState);
         }
-        let state = Delta {
-            nodes: self.nodes.clone(),
-            tombstones: self.tombstones.clone(),
-        };
-        encode_payload_frame(RGA_RUN_STATE_TYPE_ID, &state, true, self.limits)
+        encode_payload_frame(
+            RGA_RUN_STATE_TYPE_ID,
+            &self.nodes,
+            &self.tombstones,
+            true,
+            self.limits,
+        )
     }
 
     fn install_state_at(&mut self, state: &Delta, physical_millis: u64) -> Result<(), Error> {
@@ -732,7 +744,8 @@ fn decode_payload(
     let delta = Delta { nodes, tombstones };
     validate_delta(&delta)?;
     validate_graph(&delta.nodes, complete)?;
-    let canonical = encode_payload_frame(type_id, &delta, complete, limits)?;
+    let canonical =
+        encode_payload_frame(type_id, &delta.nodes, &delta.tombstones, complete, limits)?;
     let canonical_frame = decode_frame(&canonical, limits)?;
     if canonical_frame.payload != payload {
         return Err(Error::InvalidFrame);
@@ -814,22 +827,23 @@ fn read_uvarint(data: &[u8], cursor: &mut usize, end: usize) -> Result<u64, Erro
 
 fn encode_payload_frame(
     type_id: u64,
-    delta: &Delta,
+    nodes: &BTreeMap<Position, Node>,
+    tombstones: &BTreeSet<Position>,
     complete: bool,
     limits: Limits,
 ) -> Result<Vec<u8>, Error> {
     if !limits.valid() || (type_id != RGA_RUN_STATE_TYPE_ID && type_id != RGA_RUN_DELTA_TYPE_ID) {
         return Err(Error::ProtocolMismatch);
     }
-    validate_delta(delta)?;
-    validate_graph(&delta.nodes, complete)?;
-    if delta.nodes.len() > limits.max_nodes
-        || delta.nodes.len() > limits.max_tags
-        || delta.tombstones.len() > limits.max_tags.saturating_sub(delta.nodes.len())
+    validate_parts(nodes, tombstones)?;
+    validate_graph(nodes, complete)?;
+    if nodes.len() > limits.max_nodes
+        || nodes.len() > limits.max_tags
+        || tombstones.len() > limits.max_tags.saturating_sub(nodes.len())
     {
         return Err(Error::ResourceLimit);
     }
-    let blocks = canonical_blocks(&delta.nodes);
+    let blocks = canonical_blocks(nodes);
     let mut payload = Vec::new();
     append_uvarint(
         &mut payload,
@@ -838,7 +852,7 @@ fn encode_payload_frame(
     for block in blocks {
         if block.len() == 1 {
             append_uvarint(&mut payload, BLOCK_NODE);
-            append_node(&mut payload, &block[0].0, &block[0].1);
+            append_node(&mut payload, block[0].0, block[0].1);
         } else {
             append_uvarint(&mut payload, BLOCK_CHAIN);
             append_uvarint(
@@ -859,9 +873,9 @@ fn encode_payload_frame(
     }
     append_uvarint(
         &mut payload,
-        u64::try_from(delta.tombstones.len()).map_err(|_| Error::ResourceLimit)?,
+        u64::try_from(tombstones.len()).map_err(|_| Error::ResourceLimit)?,
     );
-    for id in &delta.tombstones {
+    for id in tombstones {
         append_position(&mut payload, id);
         if payload.len() > limits.max_payload_bytes {
             return Err(Error::ResourceLimit);
@@ -870,38 +884,35 @@ fn encode_payload_frame(
     encode_frame(type_id, &payload, limits)
 }
 
-fn canonical_blocks(nodes: &BTreeMap<Position, Node>) -> Vec<Vec<(Position, Node)>> {
-    let mut successors: HashMap<(Position, Vec<u8>), Vec<Position>> = HashMap::new();
+fn canonical_blocks(nodes: &BTreeMap<Position, Node>) -> Vec<Vec<(&Position, &Node)>> {
+    let mut successors: HashMap<(&Position, &[u8]), Vec<&Position>> = HashMap::new();
     for (id, node) in nodes {
         if let Some(parent) = &node.parent {
             successors
-                .entry((parent.clone(), id.replica_id.clone()))
+                .entry((parent, &id.replica_id))
                 .or_default()
-                .push(id.clone());
+                .push(id);
         }
     }
-    let mut used = HashSet::new();
+    let mut used: HashSet<&Position> = HashSet::new();
     let mut blocks = Vec::new();
     for start in nodes.keys() {
         if used.contains(start) {
             continue;
         }
-        let replica_id = start.replica_id.clone();
+        let replica_id = start.replica_id.as_slice();
         let mut block = Vec::new();
-        let mut current = start.clone();
+        let mut current = start;
         loop {
-            let node = nodes
-                .get(&current)
-                .expect("canonical block id must exist")
-                .clone();
-            used.insert(current.clone());
-            block.push((current.clone(), node));
-            let next = successors.get(&(current.clone(), replica_id.clone()));
+            let node = nodes.get(current).expect("canonical block id must exist");
+            used.insert(current);
+            block.push((current, node));
+            let next = successors.get(&(current, replica_id));
             let Some(next) = next else { break };
             if next.len() != 1 || used.contains(&next[0]) {
                 break;
             }
-            current = next[0].clone();
+            current = next[0];
         }
         blocks.push(block);
     }
@@ -976,7 +987,14 @@ fn uvarint_size(mut value: u64) -> usize {
 }
 
 fn validate_delta(delta: &Delta) -> Result<(), Error> {
-    for (id, node) in &delta.nodes {
+    validate_parts(&delta.nodes, &delta.tombstones)
+}
+
+fn validate_parts(
+    nodes: &BTreeMap<Position, Node>,
+    tombstones: &BTreeSet<Position>,
+) -> Result<(), Error> {
+    for (id, node) in nodes {
         if !id.valid()
             || node
                 .parent
@@ -986,7 +1004,7 @@ fn validate_delta(delta: &Delta) -> Result<(), Error> {
             return Err(Error::InvalidDelta);
         }
     }
-    if delta.tombstones.iter().any(|id| !id.valid()) {
+    if tombstones.iter().any(|id| !id.valid()) {
         return Err(Error::InvalidDelta);
     }
     Ok(())

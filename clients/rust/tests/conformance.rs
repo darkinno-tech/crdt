@@ -66,6 +66,24 @@ fn malformed_or_limited_frames_leave_document_unchanged() {
 }
 
 #[test]
+fn rejected_local_insert_leaves_clock_and_state_unchanged() {
+    let limits = Limits {
+        max_frame_bytes: 1,
+        ..Limits::default()
+    };
+    let mut document = Rga::new("locally-atomic", limits).expect("valid bounds");
+    let before_clock = document.clock_state();
+
+    assert_eq!(
+        document.insert_at(0, "A", 10),
+        Err(Error::ResourceLimit),
+        "the complete frame limit rejects the local edit"
+    );
+    assert_eq!(document.text(), "");
+    assert_eq!(document.clock_state(), before_clock);
+}
+
+#[test]
 fn duplicate_reordered_and_snapshot_recovery_converge() {
     let limits = Limits::default();
     let mut alice = Rga::new("alice", limits).expect("alice");

@@ -26,6 +26,10 @@ int main() {
     for (std::uint32_t index = 0; index < 128; ++index) {
       content += "rga-run-v2 ";
     }
+    content.append(128, 'x');
+    if (content.size() != 1536) {
+      return 1;
+    }
     const auto started = std::chrono::steady_clock::now();
     const auto delta = writer.Insert(0, content);
     reader.Apply(Bytes(delta));
