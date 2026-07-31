@@ -19,6 +19,7 @@ import (
 	"github.com/DarkInno/crdt/clock"
 	frame "github.com/DarkInno/crdt/encoding"
 	clientwasm "github.com/DarkInno/crdt/internal/wasm"
+	"github.com/DarkInno/crdt/richtext"
 	"github.com/DarkInno/crdt/text"
 )
 
@@ -41,6 +42,11 @@ func main() {
 	runtime, err := clientwasm.NewRuntime(options)
 	if err != nil {
 		js.Global().Get("console").Call("error", "crdt RGA Wasm initialization failed")
+		return
+	}
+	richTextRuntime, err := clientwasm.NewRichTextRuntime(clientwasm.DefaultRichTextOptions())
+	if err != nil {
+		js.Global().Get("console").Call("error", "crdt rich-text Wasm initialization failed")
 		return
 	}
 
@@ -209,6 +215,7 @@ func main() {
 		}
 		return runtime.Restore(saved)
 	})
+	registerRichTextAPI(api, richTextRuntime)
 	js.Global().Set(runtimeGlobalName, api)
 	select {}
 }
@@ -222,6 +229,241 @@ func runtimeOptions() (clientwasm.RGAOptions, error) {
 	default:
 		return clientwasm.RGAOptions{}, errors.New("wasm: unsupported build wire format")
 	}
+}
+
+func registerRichTextAPI(api js.Value, runtime *clientwasm.RichTextRuntime) {
+	register(api, "richTextProtocol", func([]js.Value) (any, error) {
+		protocol := runtime.Protocol()
+		value := newObject()
+		value.Set("stateTypeID", strconv.FormatUint(protocol.StateTypeID, 10))
+		value.Set("deltaTypeID", strconv.FormatUint(protocol.DeltaTypeID, 10))
+		value.Set("semanticsVersion", strconv.FormatUint(protocol.SemanticsVersion, 10))
+		value.Set("maxFrameBytes", runtime.MaxFrameBytes())
+		value.Set("maxTags", runtime.MaxTags())
+		value.Set("maxStringBytes", runtime.MaxStringBytes())
+		value.Set("maxLocalEditBytes", runtime.MaxLocalEditBytes())
+		value.Set("maxLocalEditRunes", runtime.MaxLocalEditRunes())
+		value.Set("maxLocalEditorOps", runtime.MaxLocalEditorOps())
+		value.Set("maxAttributesPerOperation", runtime.MaxAttributesPerOperation())
+		return value, nil
+	})
+	register(api, "richTextCreate", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		replicaID, err := requiredBoundedString(args[0], runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		return runtime.Create(replicaID)
+	})
+	register(api, "richTextDrop", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		return runtime.Drop(handle), nil
+	})
+	register(api, "richTextApplyEditorDelta", func(args []js.Value) (any, error) {
+		if len(args) != 2 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		operations, err := editorOperationsFromJS(args[1], runtime.MaxLocalEditorOps(), runtime.MaxAttributesPerOperation(), runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := runtime.ApplyEditorDelta(handle, operations)
+		if err != nil {
+			return nil, err
+		}
+		return bytesToJS(encoded), nil
+	})
+	register(api, "richTextApplyDelta", func(args []js.Value) (any, error) {
+		if len(args) != 2 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := requiredBytes(args[1], runtime.MaxFrameBytes())
+		if err != nil {
+			return nil, err
+		}
+		if err := runtime.ApplyDelta(handle, encoded); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	})
+	register(api, "richTextSpans", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		spans, err := runtime.Spans(handle)
+		if err != nil {
+			return nil, err
+		}
+		return spansToJS(spans), nil
+	})
+	register(api, "richTextSnapshot", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		saved, err := runtime.Snapshot(handle)
+		if err != nil {
+			return nil, err
+		}
+		return snapshotToJS(clientwasm.RGASnapshot{State: saved.State, Frontier: saved.Frontier, Clock: saved.Clock}), nil
+	})
+	register(api, "richTextRestore", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		saved, err := snapshotFromJS(args[0], runtime.MaxFrameBytes(), runtime.MaxTags(), runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		return runtime.Restore(clientwasm.RichTextSnapshot{State: saved.State, Frontier: saved.Frontier, Clock: saved.Clock})
+	})
+}
+
+func editorOperationsFromJS(value js.Value, maxOperations, maxAttributes, maxStringBytes int) ([]richtext.EditorOperation, error) {
+	if !js.Global().Get("Array").Call("isArray", value).Bool() {
+		return nil, errInvalidArgument
+	}
+	length, err := requiredBoundedLength(value.Get("length"), maxOperations)
+	if err != nil {
+		return nil, err
+	}
+	operations := make([]richtext.EditorOperation, 0, length)
+	for index := 0; index < length; index++ {
+		item := value.Index(index)
+		if item.Type() != js.TypeObject || item.IsNull() || item.IsUndefined() {
+			return nil, errInvalidArgument
+		}
+		retain, retainPresent, err := optionalIndex(item.Get("retain"))
+		if err != nil {
+			return nil, err
+		}
+		deleted, deletePresent, err := optionalIndex(item.Get("delete"))
+		if err != nil {
+			return nil, err
+		}
+		insert, insertPresent, err := optionalBoundedString(item.Get("insert"), maxStringBytes)
+		if err != nil {
+			return nil, err
+		}
+		if boolToInt(retainPresent && retain > 0)+boolToInt(deletePresent && deleted > 0)+boolToInt(insertPresent && insert != "") != 1 {
+			return nil, errInvalidArgument
+		}
+		changes, err := attributeChangesFromJS(item.Get("changes"), maxAttributes, maxStringBytes)
+		if err != nil {
+			return nil, err
+		}
+		operations = append(operations, richtext.EditorOperation{Retain: retain, Delete: deleted, Insert: insert, Changes: changes})
+	}
+	return operations, nil
+}
+
+func attributeChangesFromJS(value js.Value, maxAttributes, maxStringBytes int) ([]richtext.AttributeChange, error) {
+	if value.IsUndefined() {
+		return nil, nil
+	}
+	if !js.Global().Get("Array").Call("isArray", value).Bool() {
+		return nil, errInvalidArgument
+	}
+	length, err := requiredBoundedLength(value.Get("length"), maxAttributes)
+	if err != nil {
+		return nil, err
+	}
+	changes := make([]richtext.AttributeChange, 0, length)
+	for index := 0; index < length; index++ {
+		item := value.Index(index)
+		if item.Type() != js.TypeObject || item.IsNull() || item.IsUndefined() {
+			return nil, errInvalidArgument
+		}
+		key, err := requiredBoundedString(item.Get("key"), maxStringBytes)
+		if err != nil {
+			return nil, err
+		}
+		removeValue := item.Get("remove")
+		remove := false
+		if !removeValue.IsUndefined() {
+			if removeValue.Type() != js.TypeBoolean {
+				return nil, errInvalidArgument
+			}
+			remove = removeValue.Bool()
+		}
+		attribute := richtext.AttributeChange{Key: key, Remove: remove}
+		if !remove {
+			attribute.Value, err = requiredBoundedString(item.Get("value"), maxStringBytes)
+			if err != nil {
+				return nil, err
+			}
+		} else if value := item.Get("value"); !value.IsUndefined() {
+			return nil, errInvalidArgument
+		}
+		changes = append(changes, attribute)
+	}
+	return changes, nil
+}
+
+func spansToJS(spans []richtext.Span) js.Value {
+	result := js.Global().Get("Array").New(len(spans))
+	for index, span := range spans {
+		value := newObject()
+		value.Set("text", span.Text)
+		attributes := newObject()
+		keys := make([]string, 0, len(span.Attributes))
+		for key := range span.Attributes {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			attributes.Set(key, span.Attributes[key])
+		}
+		value.Set("attributes", attributes)
+		result.SetIndex(index, value)
+	}
+	return result
+}
+
+func optionalIndex(value js.Value) (int, bool, error) {
+	if value.IsUndefined() {
+		return 0, false, nil
+	}
+	index, err := requiredIndex(value)
+	return index, true, err
+}
+
+func optionalBoundedString(value js.Value, maxBytes int) (string, bool, error) {
+	if value.IsUndefined() {
+		return "", false, nil
+	}
+	text, err := requiredBoundedString(value, maxBytes)
+	return text, true, err
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func register(api js.Value, name string, invoke method) {
@@ -265,9 +507,9 @@ func errorCode(err error) string {
 		return "unknown_document"
 	case errors.Is(err, clientwasm.ErrHandleExhausted):
 		return "handle_exhausted"
-	case errors.Is(err, frame.ErrFrameLimit), errors.Is(err, text.ErrResourceLimit):
+	case errors.Is(err, frame.ErrFrameLimit), errors.Is(err, text.ErrResourceLimit), errors.Is(err, richtext.ErrResourceLimit):
 		return "resource_limit"
-	case errors.Is(err, frame.ErrInvalidFrame), errors.Is(err, text.ErrInvalidDelta), errors.Is(err, text.ErrInvalidText):
+	case errors.Is(err, frame.ErrInvalidFrame), errors.Is(err, text.ErrInvalidDelta), errors.Is(err, text.ErrInvalidText), errors.Is(err, richtext.ErrInvalidDelta), errors.Is(err, richtext.ErrInvalidAttribute):
 		return "invalid_frame"
 	case errors.Is(err, text.ErrRange):
 		return "range_error"

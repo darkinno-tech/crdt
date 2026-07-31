@@ -391,6 +391,286 @@ export function bindSlatePlainText(
   return bindRGAPlainText(document, port, options);
 }
 
+/** One renderable rich-text span from the separately negotiated richtext v1 CRDT. */
+export interface RichTextSpan {
+  readonly text: string;
+  readonly attributes?: Readonly<Record<string, string>>;
+}
+
+/** One named rich-text attribute assignment or removal. */
+export interface RichTextAttributeChange {
+  readonly key: string;
+  readonly value?: string;
+  readonly remove?: boolean;
+}
+
+/**
+ * The small, offset-based editor transaction accepted by richtext.Document.
+ * Every operation has exactly one of retain, delete, or insert. Offsets use
+ * Unicode scalar values, so a backend must not pass raw UTF-16 positions.
+ */
+export interface RichTextEditorOperation {
+  readonly retain?: number;
+  readonly delete?: number;
+  readonly insert?: string;
+  readonly changes?: readonly RichTextAttributeChange[];
+}
+
+/**
+ * The browser-facing rich-text runtime boundary. It is intentionally separate
+ * from RGAWasmDocument: rich-text v1 uses its own TypeIDs, manifest schema,
+ * atomic state/clock persistence unit, and frame decoder.
+ */
+export interface RichTextEditorDocument {
+  spans(): readonly RichTextSpan[];
+  applyEditorDelta(operations: readonly RichTextEditorOperation[]): Uint8Array;
+  applyDelta(frame: Uint8Array): void;
+}
+
+/** Quill's public Delta shape, kept structural to avoid a Quill dependency. */
+export interface QuillRichTextDelta {
+  readonly ops?: readonly QuillRichTextDeltaOperation[];
+}
+
+export interface QuillRichTextDeltaOperation {
+  readonly retain?: number;
+  readonly delete?: number;
+  readonly insert?: unknown;
+  readonly attributes?: Readonly<Record<string, unknown>>;
+}
+
+/** The subset of Quill 2 used by the rich-text delta binding. */
+export interface QuillRichTextPort {
+  getContents(): QuillRichTextDelta;
+  setContents(value: QuillRichTextDelta, source?: "api" | "silent" | "user"): unknown;
+  on(event: "text-change", listener: (delta: QuillRichTextDelta, oldContents: QuillRichTextDelta, source: string) => void): unknown;
+  off?(event: "text-change", listener: (delta: QuillRichTextDelta, oldContents: QuillRichTextDelta, source: string) => void): unknown;
+}
+
+/**
+ * Converts only an application-approved Quill attribute schema. The binding
+ * never guesses how a mark, link, block, mention, or embed should be mapped.
+ * The same codec must be selected by the rich-text Manifest SchemaID.
+ */
+export interface RichTextAttributeCodec {
+  toDocumentChanges(
+    attributes: Readonly<Record<string, unknown>>,
+    operation: "insert" | "retain",
+  ): readonly RichTextAttributeChange[];
+  toEditorAttributes(
+    attributes: Readonly<Record<string, string>>,
+    text: string,
+  ): Readonly<Record<string, unknown>> | undefined;
+}
+
+export interface BindQuillRichTextOptions {
+  /** Receives one atomic rich-text frame per accepted Quill transaction. */
+  readonly onLocalFrame: (frame: Uint8Array) => void;
+  /** The manifest-selected formatter/schema conversion. */
+  readonly attributes: RichTextAttributeCodec;
+  /** Import Quill's initial Delta once; otherwise render the document projection. */
+  readonly initialContent?: "document" | "editor";
+}
+
+/**
+ * Binds Quill's Delta API to an atomic rich-text v1 document transaction.
+ * Inline attributes are preserved through the mandatory codec. Unsupported
+ * embeds and non-string inserts are rejected and the last replicated
+ * projection is restored instead of flattening them into text.
+ *
+ * Quill requires a terminal newline. Every participating rich-text document
+ * must therefore include that newline in its CRDT projection; use
+ * initialContent: "editor" when importing a new Quill document.
+ */
+export class QuillRichTextBinding {
+  #writing = false;
+  #closed = false;
+  readonly #unobserve: () => void;
+
+  constructor(
+    readonly document: RichTextEditorDocument,
+    private readonly quill: QuillRichTextPort,
+    private readonly options: BindQuillRichTextOptions,
+  ) {
+    if (typeof options.onLocalFrame !== "function" || options.attributes === undefined ||
+      typeof options.attributes.toDocumentChanges !== "function" || typeof options.attributes.toEditorAttributes !== "function") {
+      throw new CRDTRuntimeError("invalid_binding_options");
+    }
+    const handler = (delta: QuillRichTextDelta, _old: QuillRichTextDelta, source: string) => {
+      if (source === "user") {
+        this.#handleLocalDelta(delta);
+      }
+    };
+    quill.on("text-change", handler);
+    this.#unobserve = () => quill.off?.("text-change", handler);
+    if (options.initialContent === "document") {
+      this.#writeProjection();
+    } else {
+      this.#importEditor();
+    }
+  }
+
+  /** Applies one authenticated, manifest-checked remote rich-text frame. */
+  applyRemote(frame: Uint8Array): void {
+    this.#assertOpen();
+    this.document.applyDelta(frame);
+    this.#writeProjection();
+  }
+
+  /** Stops observation; it never closes the caller-owned rich-text document. */
+  destroy(): boolean {
+    if (this.#closed) {
+      return false;
+    }
+    this.#closed = true;
+    this.#unobserve();
+    return true;
+  }
+
+  #importEditor(): void {
+    try {
+      const frame = this.document.applyEditorDelta(quillDeltaToDocumentOperations(this.quill.getContents(), this.options.attributes));
+      this.#writeProjection();
+      this.options.onLocalFrame(frame);
+    } catch (error) {
+      this.#writeProjection();
+      throw error;
+    }
+  }
+
+  #handleLocalDelta(delta: QuillRichTextDelta): void {
+    if (this.#closed || this.#writing) {
+      return;
+    }
+    try {
+      const frame = this.document.applyEditorDelta(quillDeltaToDocumentOperations(delta, this.options.attributes));
+      this.#writeProjection();
+      this.options.onLocalFrame(frame);
+    } catch (error) {
+      // ApplyEditorDelta is atomic. Re-render the authoritative projection so
+      // unsupported or over-limit local input cannot remain editor-only.
+      this.#writeProjection();
+      throw error;
+    }
+  }
+
+  #writeProjection(): void {
+    const projection = quillDeltaFromSpans(this.document.spans(), this.options.attributes);
+    if (!hasTerminalNewline(projection)) {
+      throw new CRDTRuntimeError("invalid_rich_text_projection");
+    }
+    this.#writing = true;
+    try {
+      this.quill.setContents(projection, "api");
+    } finally {
+      this.#writing = false;
+    }
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new CRDTRuntimeError("document_closed");
+    }
+  }
+}
+
+export function bindQuillRichText(
+  document: RichTextEditorDocument,
+  quill: QuillRichTextPort,
+  options: BindQuillRichTextOptions,
+): QuillRichTextBinding {
+  return new QuillRichTextBinding(document, quill, options);
+}
+
+function quillDeltaToDocumentOperations(delta: QuillRichTextDelta, codec: RichTextAttributeCodec): RichTextEditorOperation[] {
+  if (!isRecord(delta) || (delta.ops !== undefined && !Array.isArray(delta.ops))) {
+    throw new CRDTRuntimeError("unsupported_rich_text");
+  }
+  const operations: RichTextEditorOperation[] = [];
+  for (const operation of delta.ops ?? []) {
+    if (!isRecord(operation)) {
+      throw new CRDTRuntimeError("unsupported_rich_text");
+    }
+    const attributes = quillAttributes(operation.attributes);
+    const actionCount = Number(typeof operation.retain === "number" && operation.retain > 0)
+      + Number(typeof operation.delete === "number" && operation.delete > 0)
+      + Number(typeof operation.insert === "string" && operation.insert.length > 0);
+    if (actionCount !== 1 || !validRichTextLength(operation.retain) || !validRichTextLength(operation.delete)) {
+      throw new CRDTRuntimeError("unsupported_rich_text");
+    }
+    if (typeof operation.insert === "string" && operation.insert.length > 0) {
+      operations.push({ insert: operation.insert, changes: codec.toDocumentChanges(attributes, "insert") });
+    } else if (typeof operation.retain === "number" && operation.retain > 0) {
+      operations.push({ retain: operation.retain, changes: codec.toDocumentChanges(attributes, "retain") });
+    } else if (typeof operation.delete === "number") {
+      if (Object.keys(attributes).length !== 0) {
+        throw new CRDTRuntimeError("unsupported_rich_text");
+      }
+      operations.push({ delete: operation.delete });
+    } else {
+      throw new CRDTRuntimeError("unsupported_rich_text");
+    }
+  }
+  return operations;
+}
+
+function quillDeltaFromSpans(spans: readonly RichTextSpan[], codec: RichTextAttributeCodec): QuillRichTextDelta {
+  return {
+    ops: spans.flatMap((span) => richTextSpanToQuillOperations(span, codec)),
+  };
+}
+
+function richTextSpanToQuillOperations(span: RichTextSpan, codec: RichTextAttributeCodec): QuillRichTextDeltaOperation[] {
+  if (typeof span.text !== "string" || span.text.length === 0) {
+    return [];
+  }
+  const sourceAttributes = span.attributes ?? {};
+  const fragments = sourceAttributes["rt.block"] === undefined ? [span.text] : splitAfterNewlines(span.text);
+  return fragments.map((text) => {
+    const attributes = codec.toEditorAttributes(sourceAttributes, text);
+    return attributes === undefined || Object.keys(attributes).length === 0 ? { insert: text } : { insert: text, attributes };
+  });
+}
+
+function splitAfterNewlines(value: string): string[] {
+  const fragments: string[] = [];
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "\n") {
+      continue;
+    }
+    fragments.push(value.slice(start, index + 1));
+    start = index + 1;
+  }
+  if (start < value.length) {
+    fragments.push(value.slice(start));
+  }
+  return fragments;
+}
+
+function hasTerminalNewline(delta: QuillRichTextDelta): boolean {
+  const last = delta.ops?.at(-1);
+  return typeof last?.insert === "string" && last.insert.endsWith("\n");
+}
+
+function quillAttributes(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    throw new CRDTRuntimeError("unsupported_rich_text");
+  }
+  return value;
+}
+
+function validRichTextLength(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value > 0);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function textFromTiptapJSON(value: TiptapJSONNode): string {
   if (!hasOnlyKeys(value, ["type", "content"]) || value.type !== "doc") {
     throw new CRDTRuntimeError("unsupported_rich_text");
