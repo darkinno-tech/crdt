@@ -701,6 +701,7 @@ type webSocketSubscriber struct {
 }
 
 func newWebSocketSubscriber(conn *websocket.Conn, maxMessages, maxBytes int, writeTimeout time.Duration, batchEnabled bool) *webSocketSubscriber {
+	// #nosec G118 -- cancel is retained by the subscriber and invoked by close.
 	connectionContext, cancel := context.WithCancel(context.Background())
 	return &webSocketSubscriber{
 		context:      connectionContext,

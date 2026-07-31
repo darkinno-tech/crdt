@@ -416,6 +416,7 @@ type yjsSubscriber struct {
 }
 
 func newYJSSubscriber(conn *websocket.Conn, maxMessages, maxBytes int, writeTimeout time.Duration) *yjsSubscriber {
+	// #nosec G118 -- cancel is retained by the subscriber and invoked by close.
 	ctx, cancel := context.WithCancel(context.Background())
 	return &yjsSubscriber{context: ctx, cancel: cancel, conn: conn, queue: newPeerQueue(maxMessages, maxBytes), writeTimeout: writeTimeout}
 }
@@ -451,6 +452,10 @@ func (subscriber *yjsSubscriber) close() {
 }
 
 const (
+	// maxYJSMessageBytes keeps decoder conversions and retained room state
+	// bounded even when an embedding application supplies custom limits.
+	maxYJSMessageBytes              = 64 << 20
+	maxYJSAwarenessClients          = 1 << 16
 	yjsMessageSync           uint64 = 0
 	yjsMessageAwareness      uint64 = 1
 	yjsMessageAwarenessQuery uint64 = 3
@@ -531,11 +536,14 @@ func unmarshalYJSMessages(data []byte, maxMessageBytes, maxAwarenessClients int)
 
 func unmarshalYJSAwareness(data []byte, maxClients int) ([]yjsAwarenessEntry, bool) {
 	count, position, ok := yjsReadUvarint(data, 0)
-	if !ok || count > uint64(maxClients) {
+	if !ok || maxClients < 0 || maxClients > maxYJSAwarenessClients || count > maxYJSAwarenessClients {
 		return nil, false
 	}
-	entries := make([]yjsAwarenessEntry, 0, int(count))
+	entries := make([]yjsAwarenessEntry, 0)
 	for index := uint64(0); index < count; index++ {
+		if len(entries) >= maxClients {
+			return nil, false
+		}
 		clientID, next, ok := yjsReadUvarint(data, position)
 		if !ok {
 			return nil, false
@@ -595,10 +603,14 @@ func yjsReadUvarint(data []byte, position int) (uint64, int, bool) {
 
 func yjsReadBytes(data []byte, position, maximum int) ([]byte, int, bool) {
 	length, next, ok := yjsReadUvarint(data, position)
-	if !ok || length > uint64(maximum) || length > uint64(len(data)-next) {
+	if !ok || maximum < 0 || maximum > maxYJSMessageBytes || length > maxYJSMessageBytes {
 		return nil, position, false
 	}
-	end := next + int(length)
+	size := int(length)
+	if size > maximum || size > len(data)-next {
+		return nil, position, false
+	}
+	end := next + size
 	return data[next:end], end, true
 }
 
@@ -632,7 +644,7 @@ func normalizeYJSLimits(config YJSConfig) (transportLimits, error) {
 	if config.WriteTimeout == 0 {
 		config.WriteTimeout = defaultWriteTimeout
 	}
-	if config.MaxMessageBytes < 1024 || config.MaxQueuedMessages <= 0 || config.MaxQueuedBytes < config.MaxMessageBytes || config.HandshakeTimeout <= 0 || config.WriteTimeout <= 0 {
+	if config.MaxMessageBytes < 1024 || config.MaxMessageBytes > maxYJSMessageBytes || config.MaxQueuedMessages <= 0 || config.MaxQueuedBytes < config.MaxMessageBytes || config.HandshakeTimeout <= 0 || config.WriteTimeout <= 0 {
 		return transportLimits{}, errors.New("invalid Yjs limits")
 	}
 	return transportLimits{maxMessageBytes: config.MaxMessageBytes, maxQueuedMessages: config.MaxQueuedMessages, maxQueuedBytes: config.MaxQueuedBytes, handshakeTimeout: config.HandshakeTimeout, writeTimeout: config.WriteTimeout}, nil

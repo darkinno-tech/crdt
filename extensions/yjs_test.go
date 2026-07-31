@@ -22,12 +22,12 @@ var yjsHelloUpdate = []byte{1, 1, 191, 253, 254, 15, 0, 4, 1, 6, 115, 104, 97, 1
 func TestYJSHandlerBootstrapsAndRelaysYProtocolUpdates(t *testing.T) {
 	server, room := newYJSTestServer(t)
 	writer := newYJSTestClient(t, server.URL, "writer")
-	defer writer.CloseNow()
+	defer func() { _ = writer.CloseNow() }()
 	if data := readYJSMessage(t, writer); !bytes.Equal(data, marshalYJSSync(yjsWireSyncStep2, yjsEmptyUpdate)) {
 		t.Fatalf("writer bootstrap = %x", data)
 	}
 	observer := newYJSTestClient(t, server.URL, "observer")
-	defer observer.CloseNow()
+	defer func() { _ = observer.CloseNow() }()
 	if data := readYJSMessage(t, observer); !bytes.Equal(data, marshalYJSSync(yjsWireSyncStep2, yjsEmptyUpdate)) {
 		t.Fatalf("observer bootstrap = %x", data)
 	}
@@ -44,7 +44,7 @@ func TestYJSHandlerBootstrapsAndRelaysYProtocolUpdates(t *testing.T) {
 	}
 
 	late := newYJSTestClient(t, server.URL, "late")
-	defer late.CloseNow()
+	defer func() { _ = late.CloseNow() }()
 	if data := readYJSMessage(t, late); !bytes.Equal(data, marshalYJSSync(yjsWireSyncStep2, yjsEmptyUpdate)) {
 		t.Fatalf("late step 2 = %x", data)
 	}
@@ -66,10 +66,10 @@ func TestYJSHandlerBootstrapsAndRelaysYProtocolUpdates(t *testing.T) {
 func TestYJSHandlerAwarenessOwnershipAndDisconnect(t *testing.T) {
 	server, _ := newYJSTestServer(t)
 	owner := newYJSTestClient(t, server.URL, "owner")
-	defer owner.CloseNow()
+	defer func() { _ = owner.CloseNow() }()
 	_ = readYJSMessage(t, owner)
 	observer := newYJSTestClient(t, server.URL, "observer")
-	defer observer.CloseNow()
+	defer func() { _ = observer.CloseNow() }()
 	_ = readYJSMessage(t, observer)
 
 	initial := marshalYJSAwareness([]yjsAwarenessEntry{{clientID: 42, clock: 1, state: []byte(`{"user":"owner"}`)}})
@@ -99,7 +99,7 @@ func TestYJSHandlerAwarenessOwnershipAndDisconnect(t *testing.T) {
 	// The observer was intentionally closed by the forged message, so attach a
 	// fresh authorized receiver to verify that offline state is not replayed.
 	late := newYJSTestClient(t, server.URL, "late")
-	defer late.CloseNow()
+	defer func() { _ = late.CloseNow() }()
 	_ = readYJSMessage(t, late)
 	ctx, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -138,16 +138,263 @@ func TestYJSWireRejectsMalformedAndOverlargeInputBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestYJSWireLimitsAndAwarenessSnapshots(t *testing.T) {
+	if _, _, ok := yjsReadBytes([]byte{0x01, 0x7f}, 0, 1); !ok {
+		t.Fatal("bounded byte payload was rejected")
+	}
+	if _, _, ok := yjsReadBytes([]byte{0x02, 0x7f}, 0, 1); ok {
+		t.Fatal("payload above configured limit was accepted")
+	}
+	if _, _, ok := yjsReadBytes([]byte{0x80, 0x00}, 0, 1); ok {
+		t.Fatal("non-canonical byte length was accepted")
+	}
+	if _, _, ok := yjsReadBytes([]byte{0x01}, 0, -1); ok {
+		t.Fatal("negative byte limit was accepted")
+	}
+	tooMany := marshalYJSAwareness([]yjsAwarenessEntry{{clientID: 1, clock: 1, state: []byte(`{}`)}})
+	if _, ok := unmarshalYJSAwareness(tooMany[2:], 0); ok {
+		t.Fatal("awareness entry exceeded zero-client limit")
+	}
+	if _, ok := unmarshalYJSAwareness(tooMany[2:], maxYJSAwarenessClients+1); ok {
+		t.Fatal("unbounded awareness limit was accepted")
+	}
+
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "snapshots", MaxUpdateBytes: 64, MaxHistoryBytes: 128, MaxUpdates: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if room.Name() != "snapshots" {
+		t.Fatalf("room name = %q", room.Name())
+	}
+	if !room.applyAwareness(Peer{ID: "owner"}, []yjsAwarenessEntry{{clientID: 9, clock: 3, state: []byte(`{"user":"owner"}`)}}, 2) {
+		t.Fatal("initial awareness state was rejected")
+	}
+	messages := room.awarenessMessages()
+	if len(messages) != 1 {
+		t.Fatalf("awareness snapshot count = %d", len(messages))
+	}
+	incoming, err := unmarshalYJSMessages(messages[0], 64, 2)
+	if err != nil || len(incoming) != 1 || incoming[0].kind != YJSAwareness {
+		t.Fatalf("awareness snapshot = %#v, %v", incoming, err)
+	}
+	subscriber := &yjsSubscriber{}
+	room.addAndBootstrap(subscriber, Peer{ID: "owner"})
+	room.remove(subscriber, Peer{ID: "owner"})
+	if got := room.awarenessMessages(); len(got) != 0 {
+		t.Fatalf("removed awareness snapshot count = %d", len(got))
+	}
+}
+
+func TestYJSHandlerConfigurationAndRoutingBoundaries(t *testing.T) {
+	var emptyRoom *YJSRoom
+	if emptyRoom.Name() != "" {
+		t.Fatal("nil room reported a name")
+	}
+	if uvarintSize(128) != 2 {
+		t.Fatalf("two-byte varuint size = %d", uvarintSize(128))
+	}
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "notes", MaxUpdateBytes: 1024, MaxHistoryBytes: 1024, MaxUpdates: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := YJSConfig{
+		Rooms:                 []*YJSRoom{room},
+		Authenticate:          func(*http.Request) (Peer, error) { return Peer{ID: "peer"}, nil },
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		MaxMessageBytes:       1024,
+		MaxQueuedMessages:     1,
+		MaxQueuedBytes:        1024,
+		MaxAwarenessClients:   1,
+	}
+	handler, err := NewYJSHandler(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, requestPath := range []string{"/notes/extra", "/", "/missing", "/%2Fnotes"} {
+		if resolved, ok := handler.roomForPath(requestPath); ok || resolved != nil {
+			t.Fatalf("invalid room path %q resolved", requestPath)
+		}
+	}
+	if resolved, ok := handler.roomForPath("/notes"); !ok || resolved != room {
+		t.Fatalf("configured room path = %v, %v", resolved, ok)
+	}
+	config.MaxMessageBytes = maxYJSMessageBytes + 1
+	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("oversized message limit error = %v", err)
+	}
+	config.MaxMessageBytes = 1024
+	config.MaxAwarenessClients = -1
+	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("negative awareness limit error = %v", err)
+	}
+	config.MaxAwarenessClients = 1
+	config.Rooms = nil
+	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("empty rooms error = %v", err)
+	}
+	config.Rooms = []*YJSRoom{room, room}
+	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("duplicate room error = %v", err)
+	}
+}
+
+func TestYJSRoomCapacityAndSubscriberBackpressure(t *testing.T) {
+	server, _ := newYJSTestServer(t)
+	client := newYJSTestClient(t, server.URL, "queued")
+	defer func() { _ = client.CloseNow() }()
+	_ = readYJSMessage(t, client)
+
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "capacity", MaxUpdateBytes: 4, MaxHistoryBytes: 4, MaxUpdates: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if room.appendUpdate(nil) || room.appendUpdate([]byte("oversize")) {
+		t.Fatal("invalid update was accepted")
+	}
+	if !room.appendUpdate([]byte("one")) {
+		t.Fatal("first update was rejected")
+	}
+	if room.appendUpdate([]byte("two")) {
+		t.Fatal("update above room capacity was accepted")
+	}
+	if !room.applyAwareness(Peer{ID: "owner"}, []yjsAwarenessEntry{{clientID: 1, clock: 3, state: []byte(`{}`)}}, 1) {
+		t.Fatal("initial awareness was rejected")
+	}
+	if !room.applyAwareness(Peer{ID: "owner"}, []yjsAwarenessEntry{{clientID: 1, clock: 2, state: []byte(`{}`)}}, 1) {
+		t.Fatal("older awareness retry was rejected")
+	}
+	if !room.applyAwareness(Peer{ID: "owner"}, []yjsAwarenessEntry{{clientID: 1, clock: 4, state: []byte("null")}}, 1) {
+		t.Fatal("awareness removal was rejected")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	subscriber := &yjsSubscriber{context: ctx, cancel: cancel, conn: client, queue: newPeerQueue(1, 32)}
+	room.mu.Lock()
+	room.peers[subscriber] = Peer{ID: "queued"}
+	room.mu.Unlock()
+	room.broadcast([]byte("first"))
+	room.broadcast([]byte("second"))
+	room.mu.Lock()
+	remaining := len(room.peers)
+	room.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("backpressured subscriber count = %d", remaining)
+	}
+}
+
+func TestYJSHandlerProtocolControlMessages(t *testing.T) {
+	server, _ := newYJSTestServer(t)
+	client := newYJSTestClient(t, server.URL, "control")
+	defer func() { _ = client.CloseNow() }()
+	_ = readYJSMessage(t, client)
+	if err := client.Write(context.Background(), websocket.MessageBinary, marshalYJSSync(yjsWireSyncStep1, yjsEmptyUpdate)); err != nil {
+		t.Fatal(err)
+	}
+	if data := readYJSMessage(t, client); !bytes.Equal(data, marshalYJSSync(yjsWireSyncStep2, yjsEmptyUpdate)) {
+		t.Fatalf("sync step 1 response = %x", data)
+	}
+	awareness := marshalYJSAwareness([]yjsAwarenessEntry{{clientID: 7, clock: 1, state: []byte(`{"user":"control"}`)}})
+	if err := client.Write(context.Background(), websocket.MessageBinary, awareness); err != nil {
+		t.Fatal(err)
+	}
+	_ = readYJSMessage(t, client)
+	if err := client.Write(context.Background(), websocket.MessageBinary, []byte{byte(yjsMessageAwarenessQuery)}); err != nil {
+		t.Fatal(err)
+	}
+	if data := readYJSMessage(t, client); !bytes.Equal(data, awareness) {
+		t.Fatalf("awareness query response = %x", data)
+	}
+}
+
+func TestYJSHandlerRejectsHTTPBoundaries(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "http://relay.test/notes", nil)
+	response := httptest.NewRecorder()
+	var unavailable *YJSHandler
+	unavailable.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nil handler status = %d", response.Code)
+	}
+
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "notes", MaxUpdateBytes: 1024, MaxHistoryBytes: 1024, MaxUpdates: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := YJSConfig{
+		Rooms:                 []*YJSRoom{room},
+		Authenticate:          func(*http.Request) (Peer, error) { return Peer{ID: "peer"}, nil },
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		OriginPatterns:        []string{"allowed.test"},
+		MaxMessageBytes:       1024,
+		MaxQueuedMessages:     1,
+		MaxQueuedBytes:        1024,
+		MaxAwarenessClients:   1,
+	}
+	handler, err := NewYJSHandler(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://relay.test/missing", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("unknown room status = %d", response.Code)
+	}
+	forbidden := httptest.NewRequest(http.MethodGet, "http://relay.test/notes", nil)
+	forbidden.Header.Set("Origin", "https://denied.test")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, forbidden)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("origin rejection status = %d", response.Code)
+	}
+	config.OriginPatterns = nil
+	config.Authenticate = func(*http.Request) (Peer, error) { return Peer{}, ErrUnauthorized }
+	handler, err = NewYJSHandler(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("authentication rejection status = %d", response.Code)
+	}
+	config.Authenticate = func(*http.Request) (Peer, error) { return Peer{ID: "peer"}, nil }
+	config.AuthorizeSubscription = func(Peer, string) error { return ErrUnauthorized }
+	handler, err = NewYJSHandler(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("subscription rejection status = %d", response.Code)
+	}
+}
+
+func TestYJSDecodeRejectsProtocolBoundaries(t *testing.T) {
+	for _, data := range [][]byte{
+		nil,
+		make([]byte, maxYJSMessageBytes+1),
+		marshalYJSSync(99, []byte{1}),
+		marshalYJSSync(yjsWireUpdate, nil),
+		{9},
+	} {
+		if _, err := unmarshalYJSMessages(data, maxYJSMessageBytes, 1); !errors.Is(err, errInvalidWireMessage) {
+			t.Fatalf("decode %x error = %v", data[:min(len(data), 8)], err)
+		}
+	}
+}
+
 func TestYJSConcurrentPublishSimulationRetainsEveryDistinctOpaqueUpdate(t *testing.T) {
 	server, room := newYJSTestServer(t)
 	observer := newYJSTestClient(t, server.URL, "observer")
-	defer observer.CloseNow()
+	defer func() { _ = observer.CloseNow() }()
 	_ = readYJSMessage(t, observer)
 	const writers = 8
 	clients := make([]*websocket.Conn, writers)
 	for index := range clients {
 		clients[index] = newYJSTestClient(t, server.URL, string(rune('a'+index)))
-		defer clients[index].CloseNow()
+		defer func(connection *websocket.Conn) { _ = connection.CloseNow() }(clients[index])
 		_ = readYJSMessage(t, clients[index])
 	}
 	updates := make([][]byte, writers)

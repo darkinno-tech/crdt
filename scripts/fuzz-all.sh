@@ -16,7 +16,9 @@ while IFS='|' read -r package directory test_files xtest_files; do
 		tr ',' '\n' |
 		while IFS= read -r test_file; do
 			if [ -n "$test_file" ]; then
-				rg --no-filename -o '^func Fuzz[[:alnum:]_]+\(' "$directory/$test_file" || true
+				# The CI image intentionally contains only POSIX userland tools; keep
+				# fuzz discovery independent of developer-only search utilities.
+				grep -h -o -E '^func Fuzz[[:alnum:]_]+\(' "$directory/$test_file" || true
 			fi
 		done |
 		sed -e 's/^func //' -e 's/(//' |
