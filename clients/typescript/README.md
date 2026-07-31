@@ -223,6 +223,15 @@ machine-readable vectors are the contract for a non-Wasm implementation. The
 Wasm wrapper remains the recommended path when the host can run it because it
 uses the same parser and merge engine as Go.
 
+For text editors, import `@darkinno/crdt-client/bindings`. It provides named
+plain-text bindings for Quill, Monaco, CodeMirror 6, Tiptap, Lexical,
+ProseMirror, and Slate. Tiptap is accepted only with a canonical unmarked
+paragraph/text schema; Lexical, ProseMirror, and Slate require an
+application-owned schema-preserving text-leaf port. These adapters are not
+Yjs bindings and do not replicate editor formatting, nodes, embeds, selections,
+or undo history. See the [editor binding guide](../../docs/integration/rga-editor-bindings.md)
+and [2026-07-31 assessment](../../docs/operations/rga-editor-bindings-2026-07-31.md).
+
 ## Build and verify
 
 From the repository root:
@@ -232,10 +241,12 @@ make wasm
 make wasm-v1 # optional legacy scalar-v1 artifact in .tmp/crdt-rga-v1-wasm/
 make typescript-test
 make typescript-native-benchmark
+make typescript-bindings-benchmark
 make wasm-test
 make wasm-v1-test # verifies the separately built legacy artifact
 make typescript-benchmark
 make wasm-benchmark
+make wasm-bindings-benchmark
 ```
 
 `make wasm` writes the matching `crdt-rga.wasm` and Go toolchain's
