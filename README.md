@@ -79,6 +79,8 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Choose browser, WebRTC, Redis, or PostgreSQL boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
 | Use a bounded live relay | [WebSocket provider reference](docs/integration/websocket-provider.md) |
 | Connect stable Yjs/y-websocket clients | [Yjs / y-protocols compatibility relay](docs/integration/yjs-relay.md) |
+| Bind Quill Deltas with approved rich-text formatting | [Rich-text editor binding](docs/integration/richtext-editor-bindings.md) |
+| Plan durable, deeper Yjs support safely | [Yjs deeper interoperability decision](docs/design/yjs-deeper-interoperability.md) |
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
 | Implement run-v2 outside Go/Wasm | [RGA run-v2 protocol and vectors](docs/protocol/rga-run-v2.md) |
 | Use the native Rust, Python, Swift, or C++ RGA runtime | [Multilanguage RGA decision](docs/design/native-multilanguage-rga.md) |

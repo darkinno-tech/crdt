@@ -1,0 +1,122 @@
+# Rich-text editor bindings
+
+`@darkinno/crdt-client/bindings` can bind a Quill Delta surface to the
+manifest-bound `richtext` v1 protocol. This is not an upgrade of a plain-text
+RGA binding: rich-text uses state/delta TypeIDs `23/24`, semantic version `1`,
+its own renderer `SchemaID`, and an atomic state/frontier/HLC persistence unit.
+
+## Architecture and scope
+
+```text
+Quill Delta
+  -> application RichTextAttributeCodec (approved schema only)
+  -> RichTextEditorOperation retain / insert / delete
+  -> Go/Wasm richtext.Document.ApplyEditorDelta
+  -> one canonical rich-text v1 frame
+  -> authenticated outbox / transport
+```
+
+The core first simulates the full editor transaction in an isolated RGA copy,
+then preflights the complete text, mark, target, attribute, and frame budget.
+Only after that preflight succeeds does it apply the nested text delta and
+formatting operations to the real document. A rejected replacement therefore
+cannot leave a local delete-only state.
+
+Inline formatting preserves exact positions. The reserved `rt.block` marker
+has one intentional editor adaptation: Quill stores a paragraph attribute on
+its newline, while rich-text v1 requires every current position in a formatted
+paragraph to carry one consistent marker. An editor transaction targeting a
+newline with `rt.block` expands to that complete newline-delimited paragraph
+inside the same canonical frame. This keeps `Document.Blocks()` truthful under
+concurrent formatting instead of pretending that a newline-only mark formatted
+the preceding text.
+
+Embeds, links, block kinds, colors, custom marks, and nested editor nodes are
+not guessed. The application explicitly maps each allowed value through a
+codec selected by the authenticated rich-text Manifest `SchemaID`.
+
+## Use the combined Go/Wasm runtime
+
+Build the artifact with `make wasm`, load the matching `wasm_exec.js`, then
+construct a separately negotiated rich-text runtime:
+
+```ts
+import {
+  bindQuillRichText,
+  initRichTextWasm,
+} from "@darkinno/crdt-client";
+
+const runtime = await initRichTextWasm({ wasmURL: "/assets/crdt-rga.wasm" });
+const document = runtime.create("browser-replica-7");
+
+const attributes = {
+  toDocumentChanges(quill, operation) {
+    const changes = [];
+    if (quill.bold === true) changes.push({ key: "rt.bold", value: "true" });
+    if (operation === "retain" && quill.bold === null) changes.push({ key: "rt.bold", remove: true });
+    if (quill.header === 2) changes.push({ key: "rt.block", value: "heading:2" });
+    return changes;
+  },
+  toEditorAttributes(crdt, text) {
+    const result = {};
+    if (crdt["rt.bold"] === "true") result.bold = true;
+    // Quill owns block attributes on newlines only.
+    if (crdt["rt.block"] === "heading:2" && text.endsWith("\n")) result.header = 2;
+    return result;
+  },
+};
+
+const binding = bindQuillRichText(document, quill, {
+  initialContent: "editor", // imports Quill's required terminal newline once
+  attributes,
+  onLocalFrame(frame) {
+    // Verify the rich-text Manifest, append to the durable outbox, then send.
+    outbox.append(frame);
+  },
+});
+
+socket.onmessage = ({ data }) => binding.applyRemote(new Uint8Array(data));
+```
+
+Quill always has a terminal newline. It must be part of the rich-text CRDT
+projection for every participant. Use `initialContent: "editor"` only for the
+one-time import of a new Quill document. A joining client must first receive
+the rich-text frame/snapshot and then bind with `initialContent: "document"`;
+creating an unrelated local newline would be a concurrent document edit.
+
+## Safety and deployment boundary
+
+- The browser runtime caps frames at 1 MiB, local inserted text at 64 KiB and
+  16,384 Unicode scalars, local editor transactions at 512 operations, and
+  attributes per operation at 32. Hosts should lower these to their document
+  budget when appropriate.
+- A checksum only detects accidental corruption. Authenticate the peer and
+  bind state/delta IDs, semantic version, group, epoch, and the exact renderer
+  schema before accepting a frame.
+- Attribute values are opaque strings. Validate links, mentions, embeds, CSS,
+  and block schemas in the codec, then sanitize at rendering boundaries. Do
+  not treat attributes as HTML, authorization claims, or executable data.
+- Persist `document.snapshot()` atomically. Its state, frontier, and clock are
+  one unit; persisting the state without the HLC clock can reuse mutation IDs
+  after a browser restart.
+- Presence, selection positions, collaborative undo policy, transport retry,
+  TLS, authorization, and durable outbox delivery are application-owned.
+
+## Verification
+
+```sh
+go test ./richtext ./internal/wasm
+go test -race ./richtext ./internal/wasm
+make wasm-test
+go test -run '^$' \
+  -bench='BenchmarkRichText(ApplyEditorDeltaReviewTransaction|RuntimeApplyEditorDelta)$' \
+  -benchmem -count=3 ./richtext ./internal/wasm
+```
+
+The Go tests cover atomic rejection, Quill newline-to-block expansion,
+duplicate/reordered three-replica convergence, and snapshot recovery. The
+Wasm integration test runs a real Go rich-text runtime through the TypeScript
+Quill Delta binding, including approved inline marks, paragraph headers,
+remote no-echo, and recovery. Benchmarks are controlled local regression
+measurements; they do not establish browser, WAN, TLS, persistence, or
+service-capacity latency.

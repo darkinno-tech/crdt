@@ -300,6 +300,15 @@ Yjs bindings and do not replicate editor formatting, nodes, embeds, selections,
 or undo history. See the [editor binding guide](../../docs/integration/rga-editor-bindings.md)
 and [2026-07-31 assessment](../../docs/operations/rga-editor-bindings-2026-07-31.md).
 
+For Quill Deltas that must retain approved formatting, use `initRichTextWasm`
+and `bindQuillRichText` instead. It is a separate manifest-bound rich-text v1
+runtime (state/delta TypeIDs `23/24`), not an extension of the plain RGA
+adapter. The application must supply a schema-specific attribute codec; embeds
+and unknown attributes are rejected. Quill's required terminal newline belongs
+to the document projection, and a joining client must bind after state recovery
+with `initialContent: "document"`. See the [rich-text editor binding
+guide](../../docs/integration/richtext-editor-bindings.md).
+
 ## Build and verify
 
 From the repository root:
