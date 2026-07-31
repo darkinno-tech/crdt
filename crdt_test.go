@@ -137,8 +137,8 @@ func TestFrameTypeRegistrationsAreCompleteAndIsolated(t *testing.T) {
 
 func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 	stable := (ProtocolPolicy{}).FrameTypes()
-	if len(stable) != 13 {
-		t.Fatalf("stable protocol count = %d, want 13", len(stable))
+	if len(stable) != 14 {
+		t.Fatalf("stable protocol count = %d, want 14", len(stable))
 	}
 	for _, kind := range stable {
 		if kind.SemanticsVersion == 0 {
@@ -163,15 +163,18 @@ func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 	if !(ProtocolPolicy{}).SupportsFrame(TypeIDMoveRGAState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDMoveRGADelta) {
 		t.Fatal("default policy omitted move RGA frames")
 	}
+	if !(ProtocolPolicy{}).SupportsFrame(TypeIDDocumentTreeState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDDocumentTreeDelta) {
+		t.Fatal("default policy omitted document-tree frames")
+	}
 }
 
 func TestProtocolPolicyCompatibilityFlagAndUnknownFrameHandling(t *testing.T) {
 	policy := ProtocolPolicy{AllowExperimental: true}
 	types := policy.FrameTypes()
-	if len(types) != 13 {
-		t.Fatalf("stable protocol count = %d, want 13", len(types))
+	if len(types) != 14 {
+		t.Fatalf("stable protocol count = %d, want 14", len(types))
 	}
-	if !policy.SupportsFrame(TypeIDLWWSetState) || !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDRGARunDelta) || !policy.SupportsFrame(TypeIDListRGADelta) || !policy.SupportsFrame(TypeIDMoveRGADelta) || !policy.SupportsFrame(TypeIDORTreeDelta) || !policy.SupportsFrame(TypeIDRichTextDelta) {
+	if !policy.SupportsFrame(TypeIDLWWSetState) || !policy.SupportsFrame(TypeIDLWWMapState) || !policy.SupportsFrame(TypeIDRGAState) || !policy.SupportsFrame(TypeIDRGARunDelta) || !policy.SupportsFrame(TypeIDListRGADelta) || !policy.SupportsFrame(TypeIDMoveRGADelta) || !policy.SupportsFrame(TypeIDORTreeDelta) || !policy.SupportsFrame(TypeIDRichTextDelta) || !policy.SupportsFrame(TypeIDDocumentTreeDelta) {
 		t.Fatal("enabled policy omitted an implemented protocol")
 	}
 	if policy.SupportsFrame(999) {
