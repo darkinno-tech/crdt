@@ -105,6 +105,24 @@ export {
   NativeNestedMap,
   NATIVE_NESTED_SEMANTICS,
 } from "./nested.js";
+export {
+  DEFAULT_NATIVE_COLLECTION_LIMITS,
+  NATIVE_COLLECTIONS_SEMANTICS,
+  NATIVE_COLLECTIONS_SNAPSHOT_VERSION,
+  NativeCollectionsDocument,
+  NativeCounter,
+  NativeLWWRegister,
+  NativeORSet,
+  NativeORTree,
+} from "./collections.js";
+export type {
+  NativeCollectionLimits,
+  NativeCollectionRoot,
+  NativeCollectionType,
+  NativeCollectionsDocumentOptions,
+  NativeCollectionsSnapshot,
+  NativeTreeNode,
+} from "./collections.js";
 export type {
   NativeNestedContainerSnapshot,
   NativeNestedDocumentOptions,

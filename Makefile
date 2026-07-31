@@ -120,6 +120,9 @@ typescript-benchmark:
 typescript-native-benchmark:
 	$(NPM) --prefix clients/typescript run bench:native
 
+typescript-collections-benchmark:
+	$(NPM) --prefix clients/typescript run bench:collections
+
 typescript-browser-benchmark:
 	$(NPM) --prefix clients/typescript run bench:browser
 
