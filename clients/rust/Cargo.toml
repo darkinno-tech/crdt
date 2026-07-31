@@ -1,0 +1,25 @@
+[package]
+name = "darkinno-crdt-rga"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Bounded native Rust implementation of the DarkInno rga-run-v2 protocol"
+repository = "https://github.com/DarkInno/crdt"
+keywords = ["crdt", "rga", "collaboration", "replication"]
+categories = ["data-structures", "encoding"]
+
+[lib]
+name = "darkinno_crdt_rga"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[features]
+default = ["ffi"]
+ffi = []
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[[bench]]
+name = "rga"
+harness = false

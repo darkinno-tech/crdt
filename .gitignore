@@ -10,5 +10,11 @@
 /clients/typescript/dist/
 /clients/typescript/node_modules/
 
+# Native language-client build and interpreter artifacts.
+/clients/rust/target/
+/clients/rust/Cargo.lock
+/clients/python/**/__pycache__/
+/clients/swift/.build/
+
 # Go test -c executables are local validation artifacts.
 /*.test
