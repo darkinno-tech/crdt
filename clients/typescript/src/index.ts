@@ -76,19 +76,28 @@ export type {
   NativeBrowserUpdateEvent,
 } from "./browser.js";
 export {
+  bindCodeMirrorPlainText,
+  bindLexicalPlainText,
   bindMonacoPlainText,
   bindProseMirrorPlainText,
   bindQuillPlainText,
   bindRGAPlainText,
   bindSlatePlainText,
+  bindTiptapPlainText,
+  CodeMirrorPlainTextBinding,
   RGAPlainTextBinding,
 } from "./bindings.js";
 export type {
   BindRGAPlainTextOptions,
+  CodeMirrorTextPort,
+  CodeMirrorViewUpdate,
+  LexicalTextPort,
   MonacoTextPort,
   PlainTextEditorPort,
   QuillTextPort,
   RGAFrameListener,
+  TiptapJSONNode,
+  TiptapTextPort,
 } from "./bindings.js";
 export {
   NativeNestedArray,

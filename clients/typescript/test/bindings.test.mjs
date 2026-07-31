@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { bindQuillPlainText, bindRGAPlainText } from "../dist/bindings.js";
+import {
+  bindCodeMirrorPlainText,
+  bindLexicalPlainText,
+  bindQuillPlainText,
+  bindRGAPlainText,
+  bindTiptapPlainText,
+} from "../dist/bindings.js";
 
 class FakeRGA {
   constructor(text = "", limits = {}) {
@@ -71,6 +77,99 @@ class TextPort {
 
   userWrite(value) {
     this.writeText(value);
+  }
+}
+
+class CodeMirrorPort {
+  constructor(value = "") {
+    this.value = value;
+  }
+
+  get state() {
+    return {
+      doc: {
+        length: this.value.length,
+        toString: () => this.value,
+      },
+    };
+  }
+
+  dispatch({ changes }) {
+    this.value = `${this.value.slice(0, changes.from)}${changes.insert}${this.value.slice(changes.to)}`;
+  }
+
+  userWrite(value) {
+    this.value = value;
+  }
+}
+
+class TiptapPort {
+  constructor(value = "") {
+    this.value = tiptapJSON(value);
+    this.listeners = new Set();
+    this.commands = {
+      setContent: (content, options) => {
+        this.value = content;
+        if (options.emitUpdate) this.#emit();
+        return true;
+      },
+    };
+  }
+
+  getJSON() {
+    return this.value;
+  }
+
+  on(_event, listener) {
+    this.listeners.add(listener);
+  }
+
+  off(_event, listener) {
+    this.listeners.delete(listener);
+  }
+
+  userWrite(value) {
+    this.value = tiptapJSON(value);
+    this.#emit();
+  }
+
+  userWriteJSON(value) {
+    this.value = value;
+    this.#emit();
+  }
+
+  #emit() {
+    for (const listener of [...this.listeners]) listener({});
+  }
+}
+
+class LexicalPort {
+  constructor(value = "") {
+    this.value = value;
+    this.listeners = new Set();
+  }
+
+  readText() {
+    return this.value;
+  }
+
+  replaceText(value) {
+    this.value = value;
+    this.#emit();
+  }
+
+  registerTextContentListener(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  userWrite(value) {
+    this.value = value;
+    this.#emit();
+  }
+
+  #emit() {
+    for (const listener of [...this.listeners]) listener(this.value);
   }
 }
 
@@ -157,3 +256,68 @@ test("Quill adapter accepts user text changes and ignores API writes used for re
   assert.equal(quill.getText(), "remote hello\n");
   assert.equal(frames.length, 1);
 });
+
+test("CodeMirror adapter sends user updates through its configured view listener without echo", () => {
+  const document = new FakeRGA("code");
+  const view = new CodeMirrorPort("code");
+  const frames = [];
+  const binding = bindCodeMirrorPlainText(document, view, { onLocalFrame: (frame) => frames.push(frame) });
+
+  view.userWrite("code\nreview");
+  binding.applyViewUpdate({ docChanged: true });
+  assert.equal(document.text(), "code\nreview");
+  assert.equal(frames.length, 1);
+
+  const remote = new FakeRGA("code\nreview");
+  binding.applyRemote(remote.replace(0, 0, "remote "));
+  assert.equal(view.state.doc.toString(), "remote code\nreview");
+  assert.equal(frames.length, 1);
+  assert.equal(binding.destroy(), true);
+});
+
+test("Tiptap adapter accepts only canonical plain-text documents and restores rejected rich input", () => {
+  const document = new FakeRGA("draft");
+  const editor = new TiptapPort("draft");
+  const frames = [];
+  const binding = bindTiptapPlainText(document, editor, { onLocalFrame: (frame) => frames.push(frame) });
+
+  editor.userWrite("draft\nreview");
+  assert.equal(document.text(), "draft\nreview");
+  assert.equal(frames.length, 1);
+
+  assert.throws(() => editor.userWriteJSON({
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text: "bold", marks: [{ type: "bold" }] }] }],
+  }), /unsupported_rich_text/);
+  assert.deepEqual(editor.getJSON(), tiptapJSON("draft\nreview"));
+  assert.equal(document.text(), "draft\nreview");
+  assert.equal(frames.length, 1);
+  assert.equal(binding.destroy(), true);
+});
+
+test("Lexical text leaf adapter sends local text and suppresses remote listener echoes", () => {
+  const document = new FakeRGA("hello");
+  const editor = new LexicalPort("hello");
+  const frames = [];
+  const binding = bindLexicalPlainText(document, editor, { onLocalFrame: (frame) => frames.push(frame) });
+
+  editor.userWrite("hello lexical");
+  assert.equal(document.text(), "hello lexical");
+  assert.equal(frames.length, 1);
+
+  const remote = new FakeRGA("hello lexical");
+  binding.applyRemote(remote.replace(0, 0, "remote "));
+  assert.equal(editor.readText(), "remote hello lexical");
+  assert.equal(frames.length, 1);
+  assert.equal(binding.destroy(), true);
+});
+
+function tiptapJSON(value) {
+  return {
+    type: "doc",
+    content: value.split("\n").map((paragraph) => ({
+      type: "paragraph",
+      content: paragraph === "" ? [] : [{ type: "text", text: paragraph }],
+    })),
+  };
+}
