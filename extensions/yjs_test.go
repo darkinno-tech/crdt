@@ -64,7 +64,7 @@ func TestYJSHandlerBootstrapsAndRelaysYProtocolUpdates(t *testing.T) {
 }
 
 func TestYJSHandlerAwarenessOwnershipAndDisconnect(t *testing.T) {
-	server, _ := newYJSTestServer(t)
+	server, room := newYJSTestServer(t)
 	owner := newYJSTestClient(t, server.URL, "owner")
 	defer func() { _ = owner.CloseNow() }()
 	_ = readYJSMessage(t, owner)
@@ -96,6 +96,7 @@ func TestYJSHandlerAwarenessOwnershipAndDisconnect(t *testing.T) {
 	if err := owner.Close(websocket.StatusNormalClosure, "done"); err != nil {
 		t.Fatal(err)
 	}
+	waitForYJSAwarenessRemoval(t, room, 42)
 	// The observer was intentionally closed by the forged message, so attach a
 	// fresh authorized receiver to verify that offline state is not replayed.
 	late := newYJSTestClient(t, server.URL, "late")
@@ -523,4 +524,21 @@ func readYJSMessage(t testing.TB, conn *websocket.Conn) []byte {
 		t.Fatalf("message type = %v", messageType)
 	}
 	return data
+}
+
+func waitForYJSAwarenessRemoval(t testing.TB, room *YJSRoom, clientID uint64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		room.mu.Lock()
+		_, exists := room.awareness[clientID]
+		room.mu.Unlock()
+		if !exists {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("awareness client %d remained after disconnect", clientID)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
