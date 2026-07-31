@@ -69,6 +69,8 @@ be committed.
 - [受控性能回归 CI](operations/performance-regression-ci.zh-CN.md)
 - [Yjs relay controlled validation — 2026-07-31](operations/yjs-relay-benchmark-2026-07-31.md)
 - [Native multilingual RGA controlled benchmark — 2026-07-31](operations/native-multilanguage-rga-benchmark-2026-07-31.md)
+- [DarkInno / Yjs text comparison](operations/crdt-library-comparison-2026-07-30.md)
+- [DarkInno / Yjs 文本对比](operations/crdt-library-comparison-2026-07-30.zh-CN.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 

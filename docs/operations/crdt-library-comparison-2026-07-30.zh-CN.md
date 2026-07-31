@@ -5,10 +5,10 @@ Yjs 使用 JavaScript，二者 wire format 不兼容，文本存储模型也刻�
 
 ## 工作负载契约
 
-每次操作新建两个副本，把预先构造的 ASCII 文本插入 source 的 offset 0，编码 source
-的初始 update，应用到 target，并验证 target 文本相同。fixture 创建和最终完整 state
-编码不计时；update/state 字节数单独记录。每个报告样本平均 20 次操作，每个文本长度
-先做 2 个不报告 warm-up batch，再做 5 个报告 batch。
+`initial` 场景每次操作新建两个副本，把预先构造的 ASCII 文本插入 source 的 offset 0，
+编码 source 的初始 update，应用到 target，并验证 target 文本相同。fixture 创建和最终
+完整 state 编码不计时；update/state 字节数单独记录。每个报告样本平均 20 次操作，每个
+文本长度先做 2 个不报告 warm-up batch，再做 5 个报告 batch。
 
 | 一侧 | 实现 | 协议 / API |
 | --- | --- | --- |
@@ -22,13 +22,13 @@ Yjs 使用 JavaScript，二者 wire format 不兼容，文本存储模型也刻�
 ## 本机受控结果
 
 主机：Apple M4 Pro（12 logical CPUs、24 GiB），Darwin arm64；Go `1.26.5`、Node
-`v26.5.0`；harness revision `eb137255cfb90e8e613511d11be7b87b631419b5`。Yjs 依赖由
+`v26.5.0`；harness revision `a0d0e82b939efd5e62414774440a06906e4be429`。Yjs 依赖由
 [`bench/competitors/package-lock.json`](../../bench/competitors/package-lock.json) 固定。
 
 | Runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
 | ---: | ---: | ---: | ---: | ---: |
-| 4,096 | 9.068 | 0.131 | 36,774 / 36,774 | 4,114 / 4,114 |
-| 16,384 | 40.036 | 0.092 | 147,111 / 147,111 | 16,403 / 16,403 |
+| 4,096 | 6.910 | 0.130 | 36,646 / 36,646 | 4,114 / 4,114 |
+| 16,384 | 28.225 | 0.085 | 147,239 / 147,239 | 16,403 / 16,403 |
 
 字节数只对这个“协议互不兼容但工作负载一致”的场景有效：DarkInno 稳定的每 Unicode
 scalar RGA identity，相比 Yjs 紧凑的单字符串初始 update，约多九倍字节。时间数据可
@@ -42,6 +42,25 @@ payload 中重复的字段，但仍保留每个 scalar 可独立寻址的 HLC ta
 `InsertRunFrameV2WithLimits`、`MarshalRunFrameV2` 和
 `SnapshotRunFrameV2CurrentStateWithLimits` 可直接写出该表示；如果压缩不能降低完整 envelope，
 小编辑仍可能使用 raw v2 payload。
+
+## 离线并发、重复和乱序投递
+
+`offline-concurrent` 在不改变任一稳定 wire 协议的前提下补齐首个计划对比单元。seed 写入
+相同的 ASCII base text；两个 writer 收到该 base 后，独立把中间同一 scalar 替换为 `A` 或
+`B`，随后各自重复接收对方 update 两次。第三个起始为空的 observer 先收到 right update
+两次、再收到 left update 两次，最后才收到 base update 两次。每个 replica 必须收敛，
+DarkInno observer 还必须没有 pending parent。报告的 update bytes 为一份 base update 加两份
+唯一 writer update；state bytes 为最终 left replica state。
+
+| Base runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
+| ---: | ---: | ---: | ---: | ---: |
+| 4,096 | 16.621 | 0.475 | 36,821 / 36,769 | 4,184 / 4,189 |
+| 16,384 | 68.818 | 0.535 | 147,414 / 147,362 | 16,473 / 16,477 |
+
+该场景验证的是两套实现各自在相同编辑与投递 trace 下的收敛，而不是两种独立 CRDT
+算法必然呈现相同的并发 tie-break 可见顺序；它也不证明浏览器/WAN 性能、retained heap
+或 provider 端到端恢复。耗时列仍只在各自 runtime 内有效；wire-byte 列展示表示法权衡，
+不能上升为通用容量结论。
 
 ## 提供测试机上的 DarkInno 确认
 
@@ -64,28 +83,36 @@ payload 中重复的字段，但仍保留每个 scalar 可独立寻址的 HLC ta
 ```sh
 npm --prefix bench/competitors ci --ignore-scripts
 revision="$(git rev-parse HEAD)"
+reports="$(mktemp -d)"
 go run ./cmd/crdt-compare \
-  -sizes=4096,16384 -samples=5 -warmups=2 -iterations=20 -revision="$revision"
+  -scenario=initial -sizes=4096,16384 -samples=5 -warmups=2 -iterations=20 \
+  -revision="$revision" -output="$reports/darkinno-initial.json"
 npm --prefix bench/competitors run yjs -- \
-  --sizes 4096,16384 --samples 5 --warmups 2 --iterations 20 --revision "$revision"
+  --scenario initial --sizes 4096,16384 --samples 5 --warmups 2 --iterations 20 \
+  --revision "$revision" --report "$reports/yjs-initial.json"
+go run ./cmd/crdt-compare \
+  -scenario=offline-concurrent -sizes=4096,16384 -samples=5 -warmups=2 -iterations=20 \
+  -revision="$revision" -output="$reports/darkinno-offline.json"
+npm --prefix bench/competitors run yjs -- \
+  --scenario offline-concurrent --sizes 4096,16384 --samples 5 --warmups 2 --iterations 20 \
+  --revision "$revision" --report "$reports/yjs-offline.json"
 ```
 
 两侧必须在同一台空闲主机运行，并保留两份 JSON、host、runtime、revision 和
-package-lock。runner 会拒绝非法文本长度、每次都校验收敛；`node
---no-experimental-webstorage --expose-gc` 会避免 Node localStorage warning，并在每个
-Yjs 样本前尝试 GC。
+package-lock。两个 runner 都会创建指定的报告父目录。runner 会拒绝非法文本长度、每次
+都校验收敛；`node --no-experimental-webstorage --expose-gc` 会避免 Node localStorage
+warning，并在每个 Yjs 样本前尝试 GC。
 
 ## 下一批对比单元
 
-初始同步只是第一格。任何产品结论前，至少为两库按同一 trace 新增：
+已经完成的两个单元仍不足以得出产品级速度结论。任何结论前，至少为两库按同一 trace
+补齐：
 
-1. 两/三个离线 editor 在一个 cursor 附近并发插入、删除：测收敛、增量 bytes、过期/乱序
-   replay。
-2. 长编辑会话加重连和 state-vector/snapshot catch-up：用独立 runtime profile 测 peak
+1. 长编辑会话加重连和 state-vector/snapshot catch-up：用独立 runtime profile 测 peak
    retained memory。
-3. 在提供的 Linux 主机上做带认证的 1/4/16 observer provider fan-out，拆开 loopback
+2. 在提供的 Linux 主机上做带认证的 1/4/16 observer provider fan-out，拆开 loopback
    relay 与 WAN/TLS/persistence。
-4. 富文本格式和相对 cursor：按功能覆盖和失败处理报告，不能只看 bytes。
+3. 富文本格式和相对 cursor：按功能覆盖和失败处理报告，不能只看 bytes。
 
 DarkInno 后续应据此决定协议演化。当前 stable run-v2 绝不能为了改善这一个无冲突数字，
 悄悄换成 Yjs framing 或新的 chunk 模型。
