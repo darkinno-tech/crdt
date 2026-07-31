@@ -106,9 +106,7 @@ func (d *Document) ApplyEditorDeltaWithLimits(operations []EditorOperation, limi
 			return Delta{}, err
 		}
 	}
-	if err := d.applyOperationsLocked(delta.operations); err != nil {
-		return Delta{}, err
-	}
+	d.applyOperationsLocked(delta.operations)
 	return delta, nil
 }
 
