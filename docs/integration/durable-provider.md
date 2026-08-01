@@ -88,6 +88,12 @@ the same transaction contract. `MaxEvents` and
 `MaxBytes` apply per configured replication group; put a fixed per-tenant
 group quota in front of a multi-tenant service.
 
+`durable.Config.MaxReplayEvents` and `MaxReplayBytes` default only when zero.
+Set explicit non-negative values when configuring them from a deployment
+source: a negative value is rejected by `NewHandler` with `ErrInvalidConfig`
+before it can cross the internal unsigned resource-budget boundary. Do not
+treat a rejected configuration as permission to run with an unbounded replay.
+
 ## Durable receive and reconnect
 
 `ReconnectClient` reconnects with exponential backoff and replays from the
