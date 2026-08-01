@@ -133,6 +133,9 @@ typescript-browser-benchmark:
 typescript-bindings-benchmark:
 	$(NPM) --prefix clients/typescript run bench:bindings
 
+typescript-blocknote-benchmark:
+	$(NPM) --prefix clients/typescript run bench:blocknote
+
 wasm-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm
