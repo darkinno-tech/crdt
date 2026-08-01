@@ -62,6 +62,71 @@ func TestManifestBindsSemanticVersionToFramePair(t *testing.T) {
 	}
 }
 
+func TestProtocolAndManifestFromCanonicalFrameType(t *testing.T) {
+	for _, profile := range crdt.ReplicationProfiles() {
+		profile := profile
+		t.Run(profile.ID, func(t *testing.T) {
+			codecID := ""
+			if profile.RequiresCodecID {
+				codecID = "example.com/value/v1"
+			}
+			protocol, err := ProtocolFromFrameType(profile.FrameType, codecID)
+			if err != nil {
+				t.Fatalf("ProtocolFromFrameType() = %v", err)
+			}
+			if protocol.StateID != profile.FrameType.StateID || protocol.DeltaID != profile.FrameType.DeltaID || protocol.SemanticsVersion != profile.FrameType.SemanticsVersion || protocol.CodecID != codecID {
+				t.Fatalf("protocol = %#v, profile = %#v", protocol, profile)
+			}
+			manifest, err := NewManifestForFrameType("profile-"+profile.ID, "example.com/profile/v1", 1, profile.FrameType, codecID, crdt.ProtocolPolicy{})
+			if err != nil {
+				t.Fatalf("NewManifestForFrameType() = %v", err)
+			}
+			if manifest.Protocol != protocol {
+				t.Fatalf("manifest protocol = %#v, want %#v", manifest.Protocol, protocol)
+			}
+			builder, err := NewSessionBuilderForFrameType("profile-"+profile.ID, "example.com/profile/v1", 1, profile.FrameType, codecID, crdt.ProtocolPolicy{})
+			if err != nil {
+				t.Fatalf("NewSessionBuilderForFrameType() = %v", err)
+			}
+			if builder.Manifest() != manifest {
+				t.Fatalf("builder manifest = %#v, want %#v", builder.Manifest(), manifest)
+			}
+		})
+	}
+}
+
+func TestProtocolFromFrameTypeRejectsNonCanonicalAndOversizedInputs(t *testing.T) {
+	canonical, ok := crdt.FrameTypeForState(crdt.TypeIDGCounterState)
+	if !ok {
+		t.Fatal("missing G-Counter frame type")
+	}
+	for _, frameType := range []crdt.FrameType{
+		{},
+		{StateID: canonical.StateID, DeltaID: canonical.DeltaID, SemanticsVersion: canonical.SemanticsVersion, UsesHLC: true},
+		{StateID: canonical.StateID, DeltaID: crdt.TypeIDORSetDelta, SemanticsVersion: canonical.SemanticsVersion},
+	} {
+		if _, err := ProtocolFromFrameType(frameType, ""); !errors.Is(err, ErrInvalidManifest) {
+			t.Fatalf("ProtocolFromFrameType(%#v) = %v, want ErrInvalidManifest", frameType, err)
+		}
+	}
+	tooLongCodec := string(make([]byte, frame.DefaultLimits().MaxCodecID+1))
+	if _, err := ProtocolFromFrameType(canonical, tooLongCodec); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("oversized codec error = %v, want ErrInvalidManifest", err)
+	}
+}
+
+func BenchmarkProtocolFromFrameType(b *testing.B) {
+	frameType := crdt.DefaultRGAFrameType()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		protocol, err := ProtocolFromFrameType(frameType, "")
+		if err != nil || protocol.StateID != frameType.StateID {
+			b.Fatal(protocol, err)
+		}
+	}
+}
+
 func TestManifestNegotiatesOuterFrameV2AtEveryReplicaBoundary(t *testing.T) {
 	manifest, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
 		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1, WireFormatVersion: frame.FormatVersionV2,
