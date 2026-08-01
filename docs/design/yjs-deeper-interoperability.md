@@ -35,7 +35,7 @@ it is not semantic validation or authorization.
 | Level | Contract | Status / safe next step |
 | --- | --- | --- |
 | 0 | y-websocket envelope, opaque v1 updates, awareness fan-out | Implemented by `YJSHandler`; bounded live compatibility. |
-| 1 | State-vector diff, update merge, V1/V2 handling, durable compaction | Requires a Yjs-aware engine/store. Add it behind a separate `YJSStore` capability, never in `YJSRoom`. |
+| 1 | State-vector diff, update merge, V1/V2 handling, durable compaction | Implemented as an opt-in `YJSStore` sidecar capability. A store-backed `YJSRoom` delegates semantic operations to it; an opaque room remains Level 0. |
 | 2 | Yjs `Y.Text` / Quill / ProseMirror semantics and renderer schema | Use Yjs shared types end-to-end, or rich-text v1 end-to-end. Do not bridge live mutations. |
 | 3 | Cross-CRDT migration | Offline, one-way export/import with a frozen source snapshot, explicit loss report, new replica identities, and cut-over epoch. |
 
@@ -62,11 +62,21 @@ authenticated Yjs room
   -> atomic durable update/snapshot + authorization audit/outbox
 ```
 
-`YJSStore` can be implemented by a maintained Yjs runtime in a dedicated
-service or sidecar. Its authenticated room identity, tenant, epoch, update
-format, schema policy, replay cursor, storage transaction, and backup/restore
-contract must be explicit. The Go relay may route to it but must not claim that
-it validates Yjs semantics itself.
+`YJSStore` is implemented by the pinned `yjsstore/runtime` Node sidecar using
+`yjs@13.6.31`. `extensions.NewYJSStore` is a bounded Go client, not a second
+Yjs parser. A configured store-backed `YJSRoom` starts sync with the durable
+state vector, obtains a semantic diff for a client Step 1, and submits every
+Step 2/update to `YJSStore.Apply` before live fan-out. The store materializes a
+fresh `Y.Doc` with Yjs GC enabled, writes the resulting merged snapshot and
+state vector through an fsync + rename transaction, and advances its recovery
+cursor only after that write succeeds.
+
+Tenant, room, epoch, schema label, and V1/V2 format form the immutable durable
+identity. The schema label is a fencing/version field, not a claim that the
+sidecar understands an application's ProseMirror, Quill, or custom schema.
+Application schema validation and authorization remain at the authenticated
+gateway. See the [store integration guide](../integration/yjs-store.md) for
+the concrete configuration and recovery contract.
 
 ## Performance, security, and correctness gates
 
