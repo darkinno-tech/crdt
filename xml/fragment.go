@@ -336,7 +336,12 @@ func renderNodes(nodes []Node) (string, error) {
 	var buffer bytes.Buffer
 	encoder := stdxml.NewEncoder(&buffer)
 	for _, node := range nodes {
-		if err := encodeNode(encoder, node, 1); err != nil {
+		// Each root is validated once before encoding. Recursively validating
+		// inside encodeNode would revalidate every descendant subtree.
+		if err := validateNode(node, 1, new(nodeBudget)); err != nil {
+			return "", err
+		}
+		if err := encodeNode(encoder, node); err != nil {
 			return "", err
 		}
 	}
@@ -346,10 +351,7 @@ func renderNodes(nodes []Node) (string, error) {
 	return buffer.String(), nil
 }
 
-func encodeNode(encoder *stdxml.Encoder, node Node, depth int) error {
-	if err := validateNode(node, depth, new(nodeBudget)); err != nil {
-		return err
-	}
+func encodeNode(encoder *stdxml.Encoder, node Node) error {
 	switch node.Kind {
 	case TextNode:
 		return encoder.EncodeToken(stdxml.CharData(node.Text))
@@ -362,7 +364,7 @@ func encodeNode(encoder *stdxml.Encoder, node Node, depth int) error {
 			return err
 		}
 		for _, child := range node.Children {
-			if err := encodeNode(encoder, child, depth+1); err != nil {
+			if err := encodeNode(encoder, child); err != nil {
 				return err
 			}
 		}
