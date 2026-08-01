@@ -72,6 +72,7 @@ go test ./...
 | 目标 | 阅读或运行 |
 | --- | --- |
 | 学习基础 API | [入门指南](docs/getting-started.zh-CN.md) 与[可运行示例](examples) |
+| 不手抄协议 ID 地选择 CRDT | [按业务意图配置](docs/integration/intent-first-setup.zh-CN.md) 和 `go run ./cmd/crdt-profile -format json` |
 | 构建完整客户端流程 | [端到端集成](docs/integration/overview.zh-CN.md) |
 | 安全跨越本地重启 | [本地 checkpoint Store](docs/integration/local-checkpoint.zh-CN.md) 与 `go run ./examples/persistent-replica` |
 | 增加重放与重连 | [durable relay 参考](docs/integration/durable-provider.zh-CN.md) |

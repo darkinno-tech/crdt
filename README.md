@@ -73,6 +73,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Goal | Read or run |
 | --- | --- |
 | Learn the basic APIs | [Getting started](docs/getting-started.md) and [runnable examples](examples) |
+| Choose a CRDT without hand-copying protocol IDs | [Intent-first setup](docs/integration/intent-first-setup.md) and `go run ./cmd/crdt-profile -format json` |
 | Build a complete client flow | [End-to-end integration](docs/integration/overview.md) |
 | Survive local restarts safely | [Local checkpoint Store references](docs/integration/local-checkpoint.md) and `go run ./examples/persistent-replica` |
 | Add replay and reconnect | [Durable relay reference](docs/integration/durable-provider.md) |
