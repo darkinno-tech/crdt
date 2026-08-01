@@ -62,7 +62,7 @@ go test ./...
 - A local, bounded multi-type undo/redo command stack plus a content-addressed snapshot version DAG for browser history and branches; both remain outside replication frames and are host-persisted metadata.
 - RGA collaborative text with stable run-v2 frames by default, plus explicitly negotiated packed-v3 frames for dense HLC runs; stable bounded rich-text, observed-remove tree, and nested document-tree protocols; plus list and XML-fragment layers.
 - Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
-- A bounded live WebSocket provider, a separate bbolt-backed durable relay, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
+- A bounded live WebSocket provider, a separate bbolt-backed durable relay with cursor replay and optional state-vector catch-up, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
 - [RGA diagnostic obfuscation](docs/integration/debug-obfuscation.md) that replaces text content while retaining an isolated debug timeline structure.
 

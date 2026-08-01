@@ -124,13 +124,48 @@ If replay exceeds the configured window, the client receives
 `ErrReplayUnavailable`. It must bootstrap from a validated checkpoint instead
 of resetting the cursor or accepting a partial event stream.
 
+## State-vector catch-up and long sessions
+
+The stable `crdt-durable-v1` subprotocol uses the cursor flow above. When the
+configured log implements `durable.StateVectorLog` (the bundled bbolt Store
+does), a client that supplies `StateVector` and `OnCatchUp` negotiates
+`crdt-durable-v2`. It sends the persisted `replica.Frontier`, receives only
+events whose Dot is not covered by that contiguous frontier, then receives a
+`synced(high-water)` boundary before live traffic.
+
+```go
+client, err := durable.NewReconnectClient(endpoint, manifest, durable.ClientConfig{
+	StateVector: loadPersistedFrontier,
+	OnEvent: func(event durable.Event) error {
+		// Persist each concrete state/frontier installation. Do not claim a
+		// buffered out-of-order Dot in the Frontier.
+		return installEvent(event)
+	},
+	OnCatchUp: func(highWater uint64) error {
+		// Atomically persist concrete state, contiguous Frontier, and H.
+		return checkpointStateFrontierAndCursor(highWater)
+	},
+})
+```
+
+The Frontier is a missing-update selector, not a peer receipt, authorization
+token, membership proof, or tombstone-GC acknowledgement. A v2 client falls
+back to v1 cursor replay when the server's log does not implement complete
+state-vector recovery. Read the [state-vector session design](../design/durable-state-vector-sessions.md)
+for wire, resource, and restart details.
+
+The relay and reconnecting client also use bounded Ping/Pong heartbeats. Set
+`Config.RevalidateSubscription` when the host must revoke or expire an already
+connected subscriber; it runs before each server heartbeat. Token refresh,
+TLS, ingress controls, and product authorization remain host responsibilities.
+
 ## Validation
 
 ```sh
 go test ./durable
 go test -race ./durable
 go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x ./durable
-go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect)' -benchmem ./durable
+go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect|DurableSameHostFanout)' -benchmem ./durable
 ```
 
 These checks include real loopback WebSockets, restart/replay, connection-drop
