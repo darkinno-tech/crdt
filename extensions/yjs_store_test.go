@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,7 +134,198 @@ func TestYJSStoreDocumentIdentifiersAreStrict(t *testing.T) {
 	}
 }
 
+func TestYJSStoreResponseBoundariesAndClose(t *testing.T) {
+	closeCalls := 0
+	client := &http.Client{Transport: yjsStoreRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: yjsStoreReadCloser{
+				Reader: strings.NewReader(`{"stateVector":"` + base64.StdEncoding.EncodeToString([]byte{1}) + `"}`),
+				close:  func() { closeCalls++ },
+			},
+		}, nil
+	})}
+	store := testYJSStoreWithClient(t, "http://127.0.0.1:8080", strings.Repeat("q", 32), client)
+	if vector, err := store.StateVector(context.Background(), testYJSDocument()); err != nil || string(vector) != string([]byte{1}) {
+		t.Fatalf("StateVector() = %x, %v", vector, err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("response body Close calls = %d, want 1", closeCalls)
+	}
+
+	if _, err := readYJSStoreResponse(strings.NewReader("x"), 0); !errors.Is(err, ErrYJSStoreUnavailable) {
+		t.Fatalf("non-positive response limit error = %v", err)
+	}
+	if _, err := readYJSStoreResponse(strings.NewReader("too-large"), 3); !errors.Is(err, ErrYJSStoreLimit) {
+		t.Fatalf("oversized response error = %v", err)
+	}
+	if _, err := readYJSStoreResponse(yjsStoreErrorReader{}, 3); !errors.Is(err, ErrYJSStoreUnavailable) {
+		t.Fatalf("response read failure error = %v", err)
+	}
+	if _, err := decodeYJSStoreBytes("", 1); !errors.Is(err, ErrYJSStoreLimit) {
+		t.Fatalf("empty encoded bytes error = %v", err)
+	}
+	if _, err := decodeYJSStoreBytes(base64.StdEncoding.EncodeToString([]byte{1, 2}), 1); !errors.Is(err, ErrYJSStoreRejected) {
+		t.Fatalf("oversized encoded bytes error = %v", err)
+	}
+
+	for _, fixture := range []struct {
+		status int
+		body   string
+		want   error
+	}{
+		{http.StatusBadRequest, "not-json", ErrYJSStoreUnavailable},
+		{http.StatusBadRequest, `{"code":"unexpected"}`, ErrYJSStoreRejected},
+		{http.StatusServiceUnavailable, `{"code":"unexpected"}`, ErrYJSStoreUnavailable},
+	} {
+		if err := yjsStoreHTTPError("snapshot", fixture.status, []byte(fixture.body)); !errors.Is(err, fixture.want) {
+			t.Fatalf("status=%d body=%q error = %v, want %v", fixture.status, fixture.body, err, fixture.want)
+		}
+	}
+}
+
+func TestYJSStoreRejectsMalformedSuccessResponsesAndLocalBounds(t *testing.T) {
+	document := testYJSDocument()
+	token := strings.Repeat("r", 32)
+	for _, fixture := range []struct {
+		name string
+		path string
+		body string
+		call func(YJSStore) error
+		want error
+	}{
+		{
+			name: "apply-empty-vector",
+			path: "/v1/yjs/apply",
+			body: `{"applied":true,"cursor":1,"stateVector":""}`,
+			call: func(store YJSStore) error {
+				_, err := store.Apply(context.Background(), document, []byte{1})
+				return err
+			},
+			want: ErrYJSStoreLimit,
+		},
+		{
+			name: "diff-invalid-update",
+			path: "/v1/yjs/diff",
+			body: `{"update":"not-base64"}`,
+			call: func(store YJSStore) error {
+				_, err := store.Diff(context.Background(), document, []byte{1})
+				return err
+			},
+			want: ErrYJSStoreRejected,
+		},
+		{
+			name: "snapshot-empty-vector",
+			path: "/v1/yjs/snapshot",
+			body: `{"update":"AQ==","stateVector":"","cursor":1}`,
+			call: func(store YJSStore) error {
+				_, err := store.Snapshot(context.Background(), document)
+				return err
+			},
+			want: ErrYJSStoreLimit,
+		},
+		{
+			name: "snapshot-empty-update",
+			path: "/v1/yjs/snapshot",
+			body: `{"update":"","stateVector":"AQ==","cursor":1}`,
+			call: func(store YJSStore) error {
+				_, err := store.Snapshot(context.Background(), document)
+				return err
+			},
+			want: ErrYJSStoreLimit,
+		},
+		{
+			name: "merge-empty-update",
+			path: "/v1/yjs/merge",
+			body: `{"update":""}`,
+			call: func(store YJSStore) error {
+				_, err := store.Merge(context.Background(), document, [][]byte{{1}})
+				return err
+			},
+			want: ErrYJSStoreLimit,
+		},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != fixture.path {
+					t.Fatalf("request path = %q, want %q", request.URL.Path, fixture.path)
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(writer, fixture.body)
+			}))
+			defer server.Close()
+			if err := fixture.call(testYJSStore(t, server.URL, token)); !errors.Is(err, fixture.want) {
+				t.Fatalf("error = %v, want %v", err, fixture.want)
+			}
+		})
+	}
+
+	client := testYJSStore(t, "http://127.0.0.1:1", token).(*yjsStoreClient)
+	if err := client.validateDocumentAndBytes(document, nil, 1, false); !errors.Is(err, ErrYJSStoreLimit) {
+		t.Fatalf("empty document bytes error = %v", err)
+	}
+	if err := client.validateDocumentAndBytes(document, nil, 1, true); err != nil {
+		t.Fatalf("allowed empty document bytes error = %v", err)
+	}
+	if err := client.validateUpdate(make([]byte, client.maxUpdateBytes+1)); !errors.Is(err, ErrYJSStoreLimit) {
+		t.Fatalf("oversized update error = %v", err)
+	}
+	if err := client.validateUpdate([]byte{1}); err != nil {
+		t.Fatalf("valid update error = %v", err)
+	}
+	if validYJSStoreToken("x" + string([]byte{0x7f}) + strings.Repeat("x", 30)) {
+		t.Fatal("control-byte token was accepted")
+	}
+	if encodedYJSStoreBytes(0) != 0 {
+		t.Fatal("zero byte count has a non-zero base64 size")
+	}
+}
+
+func TestYJSStoreTransportFailuresAndMergeCapacityAreContained(t *testing.T) {
+	document := testYJSDocument()
+	store := testYJSStore(t, "http://127.0.0.1:1", strings.Repeat("s", 32))
+	for _, operation := range []struct {
+		name string
+		call func() error
+	}{
+		{"apply", func() error { _, err := store.Apply(context.Background(), document, []byte{1}); return err }},
+		{"diff", func() error { _, err := store.Diff(context.Background(), document, []byte{1}); return err }},
+		{"snapshot", func() error { _, err := store.Snapshot(context.Background(), document); return err }},
+		{"merge", func() error { _, err := store.Merge(context.Background(), document, [][]byte{{1}}); return err }},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			if err := operation.call(); !errors.Is(err, ErrYJSStoreUnavailable) {
+				t.Fatalf("transport error = %v, want %v", err, ErrYJSStoreUnavailable)
+			}
+		})
+	}
+
+	bounded, err := NewYJSStore(YJSStoreConfig{
+		Endpoint:            "http://127.0.0.1:1",
+		Token:               strings.Repeat("t", 32),
+		MaxUpdateBytes:      128,
+		MaxStateVectorBytes: 64,
+		MaxSnapshotBytes:    128,
+		MaxMergeUpdates:     4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bounded.Merge(context.Background(), document, [][]byte{make([]byte, 80), make([]byte, 80)}); !errors.Is(err, ErrYJSStoreLimit) {
+		t.Fatalf("aggregate merge limit error = %v", err)
+	}
+	if _, err := bounded.Merge(context.Background(), document, [][]byte{nil}); !errors.Is(err, ErrYJSStoreLimit) {
+		t.Fatalf("empty merge update error = %v", err)
+	}
+}
+
 func testYJSStore(t testing.TB, endpoint, token string) YJSStore {
+	t.Helper()
+	return testYJSStoreWithClient(t, endpoint, token, nil)
+}
+
+func testYJSStoreWithClient(t testing.TB, endpoint, token string, client *http.Client) YJSStore {
 	t.Helper()
 	store, err := NewYJSStore(YJSStoreConfig{
 		Endpoint:            endpoint,
@@ -142,6 +334,7 @@ func testYJSStore(t testing.TB, endpoint, token string) YJSStore {
 		MaxStateVectorBytes: 64,
 		MaxSnapshotBytes:    1024,
 		MaxMergeUpdates:     4,
+		HTTPClient:          client,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -167,8 +360,32 @@ func FuzzDecodeYJSStoreBytes(f *testing.F) {
 	f.Add("", 1)
 	f.Fuzz(func(t *testing.T, encoded string, maximum int) {
 		maximum %= 1024
-		_, _ = decodeYJSStoreBytes(encoded, maximum, false)
+		_, _ = decodeYJSStoreBytes(encoded, maximum)
 		_ = validYJSStoreIdentifier(encoded)
 		_ = validYJSStoreToken(encoded)
 	})
+}
+
+type yjsStoreRoundTripper func(*http.Request) (*http.Response, error)
+
+func (roundTrip yjsStoreRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTrip(request)
+}
+
+type yjsStoreReadCloser struct {
+	io.Reader
+	close func()
+}
+
+func (body yjsStoreReadCloser) Close() error {
+	if body.close != nil {
+		body.close()
+	}
+	return errors.New("close failed")
+}
+
+type yjsStoreErrorReader struct{}
+
+func (yjsStoreErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
 }

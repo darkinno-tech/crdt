@@ -159,7 +159,7 @@ func (client *yjsStoreClient) Apply(ctx context.Context, document YJSDocument, u
 	if err != nil {
 		return YJSApplyResult{}, err
 	}
-	vector, err := decodeYJSStoreBytes(response.StateVector, client.maxStateVectorBytes, false)
+	vector, err := decodeYJSStoreBytes(response.StateVector, client.maxStateVectorBytes)
 	if err != nil {
 		return YJSApplyResult{}, err
 	}
@@ -174,7 +174,7 @@ func (client *yjsStoreClient) StateVector(ctx context.Context, document YJSDocum
 	if err := client.do(ctx, "state-vector", yjsDocumentRequest{Document: document.yjsJSON()}, &response, encodedYJSStoreBytes(client.maxStateVectorBytes)+4096); err != nil {
 		return nil, err
 	}
-	return decodeYJSStoreBytes(response.StateVector, client.maxStateVectorBytes, false)
+	return decodeYJSStoreBytes(response.StateVector, client.maxStateVectorBytes)
 }
 
 func (client *yjsStoreClient) Diff(ctx context.Context, document YJSDocument, remoteVector []byte) ([]byte, error) {
@@ -185,7 +185,7 @@ func (client *yjsStoreClient) Diff(ctx context.Context, document YJSDocument, re
 	if err := client.do(ctx, "diff", yjsDiffRequest{Document: document.yjsJSON(), StateVector: base64.StdEncoding.EncodeToString(remoteVector)}, &response, encodedYJSStoreBytes(client.maxSnapshotBytes)+4096); err != nil {
 		return nil, err
 	}
-	return decodeYJSStoreBytes(response.Update, client.maxSnapshotBytes, false)
+	return decodeYJSStoreBytes(response.Update, client.maxSnapshotBytes)
 }
 
 func (client *yjsStoreClient) Snapshot(ctx context.Context, document YJSDocument) (YJSSnapshot, error) {
@@ -197,11 +197,11 @@ func (client *yjsStoreClient) Snapshot(ctx context.Context, document YJSDocument
 	if err := client.do(ctx, "snapshot", yjsDocumentRequest{Document: document.yjsJSON()}, &response, maximum); err != nil {
 		return YJSSnapshot{}, err
 	}
-	update, err := decodeYJSStoreBytes(response.Update, client.maxSnapshotBytes, false)
+	update, err := decodeYJSStoreBytes(response.Update, client.maxSnapshotBytes)
 	if err != nil {
 		return YJSSnapshot{}, err
 	}
-	vector, err := decodeYJSStoreBytes(response.StateVector, client.maxStateVectorBytes, false)
+	vector, err := decodeYJSStoreBytes(response.StateVector, client.maxStateVectorBytes)
 	if err != nil {
 		return YJSSnapshot{}, err
 	}
@@ -231,7 +231,7 @@ func (client *yjsStoreClient) Merge(ctx context.Context, document YJSDocument, u
 	if err := client.do(ctx, "merge", yjsMergeRequest{Document: document.yjsJSON(), Updates: encoded}, &response, encodedYJSStoreBytes(client.maxSnapshotBytes)+4096); err != nil {
 		return nil, err
 	}
-	return decodeYJSStoreBytes(response.Update, client.maxSnapshotBytes, false)
+	return decodeYJSStoreBytes(response.Update, client.maxSnapshotBytes)
 }
 
 func (client *yjsStoreClient) validateDocumentAndBytes(document YJSDocument, data []byte, maximum int, allowEmpty bool) error {
@@ -280,7 +280,7 @@ func (client *yjsStoreClient) do(ctx context.Context, operation string, payload 
 	if err != nil {
 		return fmt.Errorf("call Yjs store: %w", ErrYJSStoreUnavailable)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 	maximum := maximumResponse
 	if result.StatusCode < http.StatusOK || result.StatusCode >= http.StatusMultipleChoices {
 		maximum = 4096
@@ -373,12 +373,12 @@ func encodedYJSStoreBytes(length int) int {
 	return base64.StdEncoding.EncodedLen(length)
 }
 
-func decodeYJSStoreBytes(encoded string, maximum int, allowEmpty bool) ([]byte, error) {
-	if maximum <= 0 || len(encoded) > encodedYJSStoreBytes(maximum) || (!allowEmpty && encoded == "") {
+func decodeYJSStoreBytes(encoded string, maximum int) ([]byte, error) {
+	if maximum <= 0 || len(encoded) > encodedYJSStoreBytes(maximum) || encoded == "" {
 		return nil, ErrYJSStoreLimit
 	}
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || len(decoded) > maximum || (!allowEmpty && len(decoded) == 0) {
+	if err != nil || len(decoded) > maximum || len(decoded) == 0 {
 		return nil, ErrYJSStoreRejected
 	}
 	return decoded, nil
@@ -389,22 +389,22 @@ func yjsStoreHTTPError(operation string, status int, body []byte) error {
 		Code string `json:"code"`
 	}
 	if json.Unmarshal(body, &response) != nil {
-		return fmt.Errorf("Yjs store %s failed: %w", operation, ErrYJSStoreUnavailable)
+		return fmt.Errorf("yjs store %s failed: %w", operation, ErrYJSStoreUnavailable)
 	}
 	switch response.Code {
 	case "unauthorized":
-		return fmt.Errorf("Yjs store %s failed: %w", operation, ErrUnauthorized)
+		return fmt.Errorf("yjs store %s failed: %w", operation, ErrUnauthorized)
 	case "limit_exceeded":
-		return fmt.Errorf("Yjs store %s failed: %w", operation, ErrYJSStoreLimit)
+		return fmt.Errorf("yjs store %s failed: %w", operation, ErrYJSStoreLimit)
 	case "invalid_request", "invalid_update", "wrong_format":
-		return fmt.Errorf("Yjs store %s failed: %w", operation, ErrYJSStoreRejected)
+		return fmt.Errorf("yjs store %s failed: %w", operation, ErrYJSStoreRejected)
 	case "corrupt_store", "unavailable":
-		return fmt.Errorf("Yjs store %s failed: %w", operation, ErrYJSStoreUnavailable)
+		return fmt.Errorf("yjs store %s failed: %w", operation, ErrYJSStoreUnavailable)
 	default:
 		if status >= http.StatusInternalServerError {
-			return fmt.Errorf("Yjs store %s failed: %w", operation, ErrYJSStoreUnavailable)
+			return fmt.Errorf("yjs store %s failed: %w", operation, ErrYJSStoreUnavailable)
 		}
-		return fmt.Errorf("Yjs store %s failed: %w", operation, ErrYJSStoreRejected)
+		return fmt.Errorf("yjs store %s failed: %w", operation, ErrYJSStoreRejected)
 	}
 }
 
