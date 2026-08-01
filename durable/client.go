@@ -17,9 +17,12 @@ import (
 )
 
 const (
-	defaultClientQueuedChanges = 64
-	defaultMinBackoff          = 100 * time.Millisecond
-	defaultMaxBackoff          = 5 * time.Second
+	defaultClientQueuedChanges      = 64
+	defaultMinBackoff               = 100 * time.Millisecond
+	defaultMaxBackoff               = 5 * time.Second
+	defaultClientStateVectorEntries = 256
+	defaultClientPingInterval       = 30 * time.Second
+	defaultClientPingTimeout        = 10 * time.Second
 )
 
 // ClientConfig configures a reconnecting durable WebSocket client. OnEvent
@@ -27,28 +30,43 @@ const (
 // returns nil. Its transaction must also record event.Sequence as the resume
 // cursor and settle any matching application outbox row.
 type ClientConfig struct {
-	Header              http.Header
-	HTTPClient          *http.Client
-	Policy              crdt.ProtocolPolicy
-	MaxMessageBytes     int
-	MaxActorBytes       int
-	MaxQueuedChanges    int
-	HandshakeTimeout    time.Duration
-	WriteTimeout        time.Duration
-	MinReconnectBackoff time.Duration
-	MaxReconnectBackoff time.Duration
-	Cursor              uint64
-	OnEvent             func(Event) error
+	Header                http.Header
+	HTTPClient            *http.Client
+	Policy                crdt.ProtocolPolicy
+	MaxMessageBytes       int
+	MaxActorBytes         int
+	MaxQueuedChanges      int
+	MaxStateVectorEntries int
+	HandshakeTimeout      time.Duration
+	WriteTimeout          time.Duration
+	PingInterval          time.Duration
+	PingTimeout           time.Duration
+	MinReconnectBackoff   time.Duration
+	MaxReconnectBackoff   time.Duration
+	Cursor                uint64
+	// StateVector returns the contiguous frontier from the same durable
+	// application checkpoint as the CRDT state. When set, the client requests
+	// the v2 bounded missing-Dot catch-up protocol on every reconnect.
+	StateVector func() replica.Frontier
+	// OnCatchUp persists the state/frontier after all v2 catch-up events and
+	// records highWater as the durable cursor in the same transaction. It is
+	// required with StateVector because a skipped log event is never proof that
+	// its payload was installed.
+	OnCatchUp func(highWater uint64) error
+	OnEvent   func(Event) error
 }
 
 type clientLimits struct {
-	maxMessageBytes int
-	maxActorBytes   int
-	maxQueued       int
-	handshake       time.Duration
-	write           time.Duration
-	minBackoff      time.Duration
-	maxBackoff      time.Duration
+	maxMessageBytes       int
+	maxActorBytes         int
+	maxQueued             int
+	maxStateVectorEntries int
+	handshake             time.Duration
+	write                 time.Duration
+	pingInterval          time.Duration
+	pingTimeout           time.Duration
+	minBackoff            time.Duration
+	maxBackoff            time.Duration
 }
 
 // ReconnectClient reconnects with an application-provided durable cursor. Its
@@ -73,6 +91,9 @@ type ReconnectClient struct {
 // NewReconnectClient validates configuration without making a network call.
 func NewReconnectClient(endpoint string, manifest replica.Manifest, config ClientConfig) (*ReconnectClient, error) {
 	if config.OnEvent == nil {
+		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
+	}
+	if config.StateVector != nil && config.OnCatchUp == nil {
 		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
 	}
 	parsed, err := url.Parse(endpoint)
@@ -166,7 +187,7 @@ func (client *ReconnectClient) Run(ctx context.Context) error {
 			client.setErr(err)
 			return err
 		}
-		if errors.Is(err, errInvalidWire) || errors.Is(err, ErrInvalidConfig) {
+		if errors.Is(err, errInvalidWire) || errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrStateVectorUnavailable) {
 			client.setErr(err)
 			return err
 		}
@@ -183,23 +204,35 @@ func (client *ReconnectClient) Run(ctx context.Context) error {
 }
 
 func (client *ReconnectClient) runSession(parent context.Context) error {
+	vector := replica.Frontier{}
+	useStateVector := client.config.StateVector != nil
+	if useStateVector {
+		vector = client.config.StateVector()
+		if _, err := stateVectorEntries(vector, client.limits.maxStateVectorEntries, client.limits.maxActorBytes); err != nil {
+			return invalidConfig("durable.reconnect_state_vector", err)
+		}
+	}
+	protocols := []string{Subprotocol}
+	if useStateVector {
+		protocols = []string{StateVectorSubprotocol, Subprotocol}
+	}
 	handshakeContext, cancelHandshake := context.WithTimeout(parent, client.limits.handshake)
 	defer cancelHandshake()
 	connection, _, err := websocket.Dial(handshakeContext, client.endpoint, &websocket.DialOptions{
 		HTTPClient:      client.config.HTTPClient,
 		HTTPHeader:      cloneHeader(client.config.Header),
-		Subprotocols:    []string{Subprotocol},
+		Subprotocols:    protocols,
 		CompressionMode: websocket.CompressionDisabled,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = connection.CloseNow() }()
-	if connection.Subprotocol() != Subprotocol {
+	if connection.Subprotocol() != Subprotocol && connection.Subprotocol() != StateVectorSubprotocol {
 		return errInvalidWire
 	}
 	connection.SetReadLimit(int64(controlLimit(client.limits.maxMessageBytes)))
-	hello, err := marshalHello(client.manifest, client.Cursor())
+	hello, err := client.marshalHello(connection.Subprotocol(), vector)
 	if err != nil || len(hello) > controlLimit(client.limits.maxMessageBytes) {
 		return errInvalidWire
 	}
@@ -210,7 +243,7 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 	if err != nil || messageType != websocket.MessageText {
 		return errInvalidWire
 	}
-	remote, highWater, welcomeErr := unmarshalWelcome(data)
+	remote, highWater, welcomeErr := unmarshalWelcomeForSubprotocol(connection.Subprotocol(), data)
 	if welcomeErr != nil {
 		return unmarshalError(data)
 	}
@@ -223,6 +256,11 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 	connection.SetReadLimit(int64(client.limits.maxMessageBytes))
 	sessionContext, cancelSession := context.WithCancel(parent)
 	defer cancelSession()
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		client.heartbeat(sessionContext, connection)
+	}()
 	writerDone := make(chan error, 1)
 	writerStarted := false
 	startWriter := func() {
@@ -238,15 +276,30 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 	defer func() {
 		cancelSession()
 		_ = connection.CloseNow()
+		<-heartbeatDone
 		if writerStarted {
 			<-writerDone
 		}
 	}()
 	client.setErr(nil)
+	catchUpComplete := connection.Subprotocol() != StateVectorSubprotocol
 	for {
 		messageType, data, err := connection.Read(sessionContext)
 		if err != nil {
 			return err
+		}
+		if messageType == websocket.MessageText && connection.Subprotocol() == StateVectorSubprotocol && !catchUpComplete {
+			completedHighWater, err := unmarshalCatchUpComplete(data)
+			if err != nil || completedHighWater != highWater {
+				return errInvalidWire
+			}
+			if err := client.config.OnCatchUp(highWater); err != nil {
+				return fmt.Errorf("durably checkpoint state-vector catch-up at %d: %w", highWater, err)
+			}
+			client.setCursor(highWater)
+			catchUpComplete = true
+			startWriter()
+			continue
 		}
 		if messageType != websocket.MessageBinary {
 			return errInvalidWire
@@ -259,15 +312,58 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 		if err != nil {
 			return errInvalidWire
 		}
-		if want := client.Cursor() + 1; sequence != want {
-			return ErrReplayUnavailable
+		if catchUpComplete {
+			if want := client.Cursor() + 1; sequence != want {
+				return ErrReplayUnavailable
+			}
 		}
 		if err := client.config.OnEvent(event); err != nil {
 			return fmt.Errorf("durably install event %d: %w", sequence, err)
 		}
-		client.setCursor(sequence)
-		if sequence == highWater {
-			startWriter()
+		if catchUpComplete {
+			client.setCursor(sequence)
+			if connection.Subprotocol() == Subprotocol && sequence == highWater {
+				startWriter()
+			}
+		}
+	}
+}
+
+func (client *ReconnectClient) marshalHello(subprotocol string, vector replica.Frontier) ([]byte, error) {
+	if subprotocol == StateVectorSubprotocol {
+		return marshalStateVectorHello(client.manifest, vector, client.limits.maxStateVectorEntries, client.limits.maxActorBytes)
+	}
+	if subprotocol == Subprotocol {
+		return marshalHello(client.manifest, client.Cursor())
+	}
+	return nil, errInvalidWire
+}
+
+func unmarshalWelcomeForSubprotocol(subprotocol string, data []byte) (replica.Manifest, uint64, error) {
+	if subprotocol == StateVectorSubprotocol {
+		return unmarshalStateVectorWelcome(data)
+	}
+	if subprotocol == Subprotocol {
+		return unmarshalWelcome(data)
+	}
+	return replica.Manifest{}, 0, errInvalidWire
+}
+
+func (client *ReconnectClient) heartbeat(ctx context.Context, connection *websocket.Conn) {
+	ticker := time.NewTicker(client.limits.pingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingContext, cancel := context.WithTimeout(ctx, client.limits.pingTimeout)
+			err := connection.Ping(pingContext)
+			cancel()
+			if err != nil {
+				_ = connection.CloseNow()
+				return
+			}
 		}
 	}
 }
@@ -330,13 +426,16 @@ func (client *ReconnectClient) setErr(err error) {
 
 func normalizeClientLimits(config ClientConfig) (clientLimits, error) {
 	result := clientLimits{
-		maxMessageBytes: config.MaxMessageBytes,
-		maxActorBytes:   config.MaxActorBytes,
-		maxQueued:       config.MaxQueuedChanges,
-		handshake:       config.HandshakeTimeout,
-		write:           config.WriteTimeout,
-		minBackoff:      config.MinReconnectBackoff,
-		maxBackoff:      config.MaxReconnectBackoff,
+		maxMessageBytes:       config.MaxMessageBytes,
+		maxActorBytes:         config.MaxActorBytes,
+		maxQueued:             config.MaxQueuedChanges,
+		maxStateVectorEntries: config.MaxStateVectorEntries,
+		handshake:             config.HandshakeTimeout,
+		write:                 config.WriteTimeout,
+		pingInterval:          config.PingInterval,
+		pingTimeout:           config.PingTimeout,
+		minBackoff:            config.MinReconnectBackoff,
+		maxBackoff:            config.MaxReconnectBackoff,
 	}
 	if result.maxMessageBytes == 0 {
 		result.maxMessageBytes = defaultMaxMessageBytes
@@ -347,11 +446,20 @@ func normalizeClientLimits(config ClientConfig) (clientLimits, error) {
 	if result.maxQueued == 0 {
 		result.maxQueued = defaultClientQueuedChanges
 	}
+	if result.maxStateVectorEntries == 0 {
+		result.maxStateVectorEntries = defaultClientStateVectorEntries
+	}
 	if result.handshake == 0 {
 		result.handshake = defaultHandshakeTimeout
 	}
 	if result.write == 0 {
 		result.write = defaultWriteTimeout
+	}
+	if result.pingInterval == 0 {
+		result.pingInterval = defaultClientPingInterval
+	}
+	if result.pingTimeout == 0 {
+		result.pingTimeout = defaultClientPingTimeout
 	}
 	if result.minBackoff == 0 {
 		result.minBackoff = defaultMinBackoff
@@ -359,7 +467,7 @@ func normalizeClientLimits(config ClientConfig) (clientLimits, error) {
 	if result.maxBackoff == 0 {
 		result.maxBackoff = defaultMaxBackoff
 	}
-	if result.maxMessageBytes < 1024 || result.maxActorBytes <= 0 || result.maxActorBytes > frame.DefaultLimits().MaxStringBytes || result.maxQueued <= 0 || result.handshake <= 0 || result.write <= 0 || result.minBackoff <= 0 || result.maxBackoff < result.minBackoff {
+	if result.maxMessageBytes < 1024 || result.maxActorBytes <= 0 || result.maxActorBytes > frame.DefaultLimits().MaxStringBytes || result.maxQueued <= 0 || result.maxStateVectorEntries <= 0 || result.handshake <= 0 || result.write <= 0 || result.pingInterval <= 0 || result.pingTimeout <= 0 || result.minBackoff <= 0 || result.maxBackoff < result.minBackoff {
 		return clientLimits{}, ErrInvalidConfig
 	}
 	return result, nil
