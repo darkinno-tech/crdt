@@ -7,6 +7,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- Rejected shared-document local mutations atomically before state or HLC
+  changes when their canonical update exceeds the configured output-frame
+  budget, preventing local-only writes without an outbox frame.
+
 ### Added
 
 - Added disabled-by-default, manifest-bound WebSocket and HTTP/SSE live relay
