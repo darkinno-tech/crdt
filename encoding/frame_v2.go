@@ -17,6 +17,12 @@ const (
 	minV2DeflatePayloadBytes = 128
 )
 
+// deflateWriterCache retains at most one reusable writer. A sync.Pool would
+// improve more concurrent callers at the cost of retaining compressor state
+// per active P; outer-frame compression must keep that memory trade-off
+// bounded because its input can originate from application text.
+var deflateWriterCache = make(chan *flate.Writer, 1)
+
 // MarshalFrameV2 returns a compression-aware v2 frame. The encoder chooses
 // raw payload bytes for small or incompressible inputs and DEFLATE only when
 // it makes the complete v2 envelope smaller. V2 changes representation, not
@@ -121,10 +127,12 @@ func unmarshalFrameV2(body []byte, typeID uint64, codecID string, position int, 
 
 func deflatePayload(payload []byte) ([]byte, error) {
 	var output bytes.Buffer
-	writer, err := flate.NewWriter(&output, flate.BestSpeed)
+	writer, err := acquireDeflateWriter()
 	if err != nil {
 		return nil, err
 	}
+	defer releaseDeflateWriter(writer)
+	writer.Reset(&output)
 	if _, err := writer.Write(payload); err != nil {
 		return nil, err
 	}
@@ -132,6 +140,23 @@ func deflatePayload(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+func acquireDeflateWriter() (*flate.Writer, error) {
+	select {
+	case writer := <-deflateWriterCache:
+		return writer, nil
+	default:
+		return flate.NewWriter(io.Discard, flate.BestSpeed)
+	}
+}
+
+func releaseDeflateWriter(writer *flate.Writer) {
+	writer.Reset(io.Discard)
+	select {
+	case deflateWriterCache <- writer:
+	default:
+	}
 }
 
 func inflatePayload(encoded []byte, rawLength int) (payload []byte, err error) {

@@ -19,7 +19,7 @@ DEFLATE would not make the complete envelope smaller. Measure on the target
 workload before enabling it.
 
 The library continues to emit v1 from existing `MarshalBinary` methods. A
-provider or store opts in explicitly:
+provider or store can opt in explicitly at its boundary:
 
 ```go
 v1, err := delta.MarshalRunBinary()
@@ -28,6 +28,26 @@ if err != nil { /* handle */ }
 v2, err := frame.ConvertFrameV1ToV2(v1, receiveLimits)
 if err != nil { /* handle */ }
 ```
+
+For a run-v2 RGA group that has already negotiated outer v2, prefer the direct
+RGA APIs. They preflight the final v2 frame rather than constructing and then
+validating an intermediate v1 envelope:
+
+```go
+update, err := document.InsertRunFrameV2WithLimits(0, pastedText, receiveLimits)
+if err != nil { /* reject the local edit before mutation */ }
+
+checkpoint, err := document.SnapshotRunFrameV2CurrentStateWithLimits(receiveLimits)
+if err != nil { /* handle */ }
+```
+
+`Delta.MarshalRunFrameV2`, `RGA.MarshalRunFrameV2`, and the matching
+anti-entropy methods emit the same canonical run-v2 payload as their v1
+counterparts. This is an outer-representation optimization only: it does not
+combine scalar identities, change RGA ordering, or make an outer-v2 group
+compatible with a v1 peer. The direct path can use a compressed final-frame
+budget smaller than the equivalent v1 envelope, but its decoded payload still
+must fit `MaxPayload`.
 
 For a v2 group, bind `WireFormatVersion: frame.FormatVersionV2` in its
 `replica.Protocol`. `NewChange`, `Inbox`, snapshots, recovery plans, and
@@ -90,6 +110,11 @@ encoder uses `flate.BestSpeed` to favor interactive CPU cost; it chooses mode
    outer frame version all match. Conversion APIs are explicit
    (`ConvertFrameV1ToV2` and `ConvertFrameV2ToV1`); decoding never downgrades.
 
+Run-v2 canonicality checks rebuild and compare the decoded payload, never a
+temporary v1 envelope. This keeps canonical validation independent from the
+compressed transport budget while preserving the same per-scalar HLC tags and
+parent links.
+
 The payload limit bounds memory amplification, but compression is not
 confidentiality. Use TLS and application-layer authorization for live traffic;
 avoid accepting an Internet-sized compressed body merely because it can expand
@@ -106,9 +131,9 @@ or a browser's ability to pass bytes to Wasm is a complete provider
 negotiation.
 
 The Go tests cover conversion, corrupt or over-expanding inputs, fuzzed outer
-frames, manifest/checkpoint/recovery version binding, and a three-editor RGA
-simulation with duplicate and shuffled v2 frames. Run controlled measurements
-with:
+frames, final-frame versus decoded-payload bounds, manifest/checkpoint/recovery
+version binding, and a three-editor RGA simulation with duplicate and shuffled
+v2 frames. Run controlled measurements with:
 
 ```sh
 go test -run='^$' -bench='BenchmarkFrameUpdateFormats|BenchmarkRGADeltaWireProtocols' -benchmem ./encoding ./text

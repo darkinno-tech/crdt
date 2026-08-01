@@ -419,6 +419,15 @@ func (r *RGA) InsertRunBinaryWithLimits(offset int, value string, limits frame.D
 	return encoded, err
 }
 
+// InsertRunFrameV2WithLimits inserts text and returns the same preflighted
+// run-v2 delta in a separately negotiated outer frame v2. The RGA payload is
+// unchanged; the outer representation may use DEFLATE only when it reduces
+// the complete bounded frame.
+func (r *RGA) InsertRunFrameV2WithLimits(offset int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.insert(offset, value, &limits, Delta.MarshalRunFrameV2WithLimits)
+	return encoded, err
+}
+
 // PrepareInsertRunBinaryWithLimits returns a canonical run-v2 insertion delta
 // without adding its nodes to r. It reserves HLC tags, so a failed enclosing
 // transaction may leave safely skipped tags in ClockState. Callers that need
@@ -426,6 +435,12 @@ func (r *RGA) InsertRunBinaryWithLimits(offset int, value string, limits frame.D
 // before applying the returned delta with ApplyDelta.
 func (r *RGA) PrepareInsertRunBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareInsert(offset, value, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
+// PrepareInsertRunFrameV2WithLimits returns a preflighted run-v2 insertion
+// delta in a separately negotiated outer frame v2 without applying it.
+func (r *RGA) PrepareInsertRunFrameV2WithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareInsert(offset, value, &limits, Delta.MarshalRunFrameV2WithLimits)
 }
 
 func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
@@ -523,6 +538,14 @@ func (r *RGA) DeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderL
 	return encoded, err
 }
 
+// DeleteRunFrameV2WithLimits deletes visible text and returns the same
+// preflighted run-v2 tombstone delta in a separately negotiated outer frame
+// v2. Callers must bind frame.FormatVersionV2 in their manifest.
+func (r *RGA) DeleteRunFrameV2WithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.delete(offset, count, &limits, Delta.MarshalRunFrameV2WithLimits)
+	return encoded, err
+}
+
 // ReplaceBinaryWithLimits atomically replaces count visible runes at offset
 // with value and returns one preflighted scalar-v1 delta. A rejected frame or
 // state-limit check leaves both visible text and tombstones unchanged. The HLC
@@ -538,6 +561,13 @@ func (r *RGA) ReplaceBinaryWithLimits(offset, count int, value string, limits fr
 // when a local frame or retention bound rejects the replacement.
 func (r *RGA) ReplaceRunBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
 	_, encoded, err := r.replace(offset, count, value, limits, Delta.MarshalRunBinaryWithLimits)
+	return encoded, err
+}
+
+// ReplaceRunFrameV2WithLimits atomically replaces visible text and returns
+// one preflighted run-v2 delta in a separately negotiated outer frame v2.
+func (r *RGA) ReplaceRunFrameV2WithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.replace(offset, count, value, limits, Delta.MarshalRunFrameV2WithLimits)
 	return encoded, err
 }
 
@@ -572,6 +602,12 @@ func (r *RGA) replace(offset, count int, value string, limits frame.DecoderLimit
 // must preflight an enclosing frame before committing local text changes.
 func (r *RGA) PrepareDeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareDelete(offset, count, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
+// PrepareDeleteRunFrameV2WithLimits returns a preflighted run-v2 deletion
+// delta in a separately negotiated outer frame v2 without applying it.
+func (r *RGA) PrepareDeleteRunFrameV2WithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareDelete(offset, count, &limits, Delta.MarshalRunFrameV2WithLimits)
 }
 
 func (r *RGA) delete(offset, count int, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {

@@ -1,6 +1,7 @@
 package encoding
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -245,6 +246,37 @@ func TestFrameV2RawAndDeflateDecoderBoundaries(t *testing.T) {
 	}
 	if _, _, ok := ReadBytes([]byte{2, 'x'}, 0, 2); ok {
 		t.Fatal("ReadBytes accepted truncated bytes")
+	}
+}
+
+func TestFrameV2ConcurrentCompression(t *testing.T) {
+	payload := []byte(strings.Repeat("concurrent outer frame v2; ", 1_024))
+	results := make(chan error, 16)
+	for worker := 0; worker < cap(results); worker++ {
+		go func() {
+			for iteration := 0; iteration < 32; iteration++ {
+				encoded, err := MarshalFrameV2(Frame{TypeID: 1, Payload: payload})
+				if err != nil {
+					results <- err
+					return
+				}
+				decoded, err := UnmarshalFrame(encoded, DefaultLimits())
+				if err != nil || !bytes.Equal(decoded.Payload, payload) {
+					if err == nil {
+						results <- errors.New("concurrent outer v2 payload changed")
+					} else {
+						results <- err
+					}
+					return
+				}
+			}
+			results <- nil
+		}()
+	}
+	for worker := 0; worker < cap(results); worker++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

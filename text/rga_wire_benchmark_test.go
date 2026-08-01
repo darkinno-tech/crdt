@@ -45,13 +45,22 @@ func BenchmarkRGADeltaWireProtocols(b *testing.B) {
 			},
 		},
 		{
-			name: "run-v2-outer-v2",
+			name: "run-v2-outer-v2-convert",
 			marshal: func(value Delta) ([]byte, error) {
 				encoded, err := value.MarshalRunBinaryWithLimits(limits)
 				if err != nil {
 					return nil, err
 				}
 				return frame.ConvertFrameV1ToV2(encoded, limits)
+			},
+			unmarshal: func(data []byte) (Delta, error) {
+				return UnmarshalRGARunDeltaWithLimits(data, limits)
+			},
+		},
+		{
+			name: "run-v2-outer-v2-direct",
+			marshal: func(value Delta) ([]byte, error) {
+				return value.MarshalRunFrameV2WithLimits(limits)
 			},
 			unmarshal: func(data []byte) (Delta, error) {
 				return UnmarshalRGARunDeltaWithLimits(data, limits)
