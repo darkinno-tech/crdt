@@ -74,6 +74,31 @@ test("actual CodeMirror 6 view emits local RGA state and applies remote state wi
   view.destroy();
 });
 
+test("actual CodeMirror 6 multi-range transaction retains one atomic RGA frame", () => {
+  const document = new FakeRGA("abcd");
+  const frames = [];
+  let binding;
+  const view = new EditorView({
+    state: EditorState.create({
+      doc: document.text(),
+      extensions: [EditorView.updateListener.of((update) => binding?.applyViewUpdate(update))],
+    }),
+    parent: dom.window.document.body,
+  });
+  binding = bindCodeMirrorPlainText(document, view, { onLocalFrame: (frame) => frames.push(frame) });
+
+  view.dispatch({
+    changes: [
+      { from: 0, to: 1, insert: "X" },
+      { from: 2, to: 3, insert: "Y" },
+    ],
+  });
+  assert.equal(document.text(), "XbYd");
+  assert.equal(frames.length, 1);
+  assert.equal(binding.destroy(), true);
+  view.destroy();
+});
+
 test("actual Tiptap plain-text schema converges through RGA frames", () => {
   const document = new FakeRGA("draft");
   const editor = new Editor({
