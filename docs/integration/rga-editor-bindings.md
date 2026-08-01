@@ -149,4 +149,5 @@ browser/device SLA. Both print `native_incremental` and
 target isolates adapter work; the Wasm target includes a 12,288-rune
 CodeMirror-port document, real Go run-v2 replacement, and receiver application
 for each edit. Set `CRDT_BINDINGS_INITIAL_RUNES` for a larger simulated text
-fixture.
+fixture. The current two-host, five-sample evidence and its limits are in the
+[2026-08-01 cross-host benchmark](../operations/rga-incremental-editor-benchmark-2026-08-01.md).
