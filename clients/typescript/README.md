@@ -158,6 +158,9 @@ transport still do not authenticate a peer or authorize a mutation.
 
 The [collection and rich-text architecture assessment](../../docs/design/typescript-client-types-and-rich-text.md)
 records the wire boundary and the next rich-editor implementation gate.
+The runnable [structured-editor example](examples/collections-editor/) shows
+how to compose the four collection types around an editor without pretending
+that a rich-text body is a collection value.
 
 ### Native protocol, limits, and persistence
 
@@ -238,12 +241,28 @@ durable acknowledgement. Received bytes enter `applyEncodedUpdate()` and are
 still bounded and canonical-validated before state changes. Cap an HTTP or
 WebSocket message before constructing its `Uint8Array`.
 
-For a local same-origin multi-tab experience, use two independently created
-`BroadcastChannelNativeTransport` instances with the same document-specific
-channel name. It is intentionally volatile: BroadcastChannel supplies neither
-authentication, durable delivery, history/bootstrap, nor anti-entropy. It is
-useful only as an extra live path beside IndexedDB and an authenticated server
-transport.
+For a local same-origin multi-tab experience, pass a
+`BroadcastChannelNativeTransport` as `liveTransport`; attach an authenticated
+receipt transport separately with `connect()` when it is available:
+
+```ts
+const live = new BroadcastChannelNativeTransport(JSON.stringify([
+  "darkinno-crdt", "native-ts-v1", authenticatedGroupID,
+]));
+const board = await openNativeBrowserDocument({
+  documentID: authenticatedGroupID,
+  replicaID: createBrowserReplicaID(),
+  liveTransport: live,
+});
+await board.connect(authenticatedNativeTransport);
+```
+
+BroadcastChannel is intentionally volatile: it supplies neither authentication,
+durable delivery, history/bootstrap, nor anti-entropy, and its `publish()`
+cannot acknowledge the durable outbox. Use it only as an extra live path beside
+IndexedDB and an authenticated server transport. The runnable
+[multi-tab/offline example](examples/multitab-offline/) also includes a
+static-shell-only Service Worker; it never caches API responses or CRDT data.
 
 `flush()` proves that the browser completed the requested IndexedDB work, not
 that an operating-system crash, quota eviction, a closed browser process, or a
@@ -400,6 +419,7 @@ an IndexedDB log and outbox:
 
 ```ts
 import {
+  BroadcastChannelNativeTransport,
   createBrowserReplicaID,
   initRGAWasm,
   openRGAWasmBrowserDocument,
@@ -407,10 +427,14 @@ import {
 
 const runtime = await initRGAWasm({ wasmURL: "/assets/crdt-rga.wasm" });
 const replicaID = createBrowserReplicaID("tab"); // one concurrently active actor
+const live = new BroadcastChannelNativeTransport(JSON.stringify([
+  "darkinno-crdt", "rga-run-v2", authenticatedGroupID,
+]));
 const document = await openRGAWasmBrowserDocument({
   documentID: authenticatedGroupID,
   replicaID,
   runtime,
+  liveTransport: live,
   transport: authenticatedRGAReceiptTransport,
 });
 document.insert(0, "offline draft");
@@ -420,8 +444,10 @@ await document.flush();
 The facade uses separate `rga-documents` / `rga-updates` stores; it never mixes
 Go RGA frames with `native-ts-v1` records. Its key contains both document and
 replica IDs, so a live second tab must create a fresh actor rather than reuse
-the first tab's HLC. The transport resolves only at the application-defined
-durable receipt; a raw WebSocket enqueue is not sufficient.
+the first tab's HLC. `liveTransport` is only post-append local delivery and
+never acknowledges the outbox; `transport` resolves only at the
+application-defined durable receipt, and a raw WebSocket enqueue is not
+sufficient.
 
 `anchorAt(runeOffset)` and `resolveAnchor(anchor)` expose local cursor
 boundaries as RGA Position/Tags instead of emulating a Yjs relative position.
@@ -495,10 +521,12 @@ IndexedDB 事务中同时保存 update 与 metadata。因此不会每次编辑�
 receipt 到达后才应 resolve。浏览器层在此之前保留 outbox 并在 `connect()` 后重试；普通
 WebSocket `send()` 只代表浏览器已入队，并不是远端持久确认。
 
-同源多标签可额外使用相同通道名的 `BroadcastChannelNativeTransport`，但它只是易失的实时路径，
-没有认证、持久化、历史/bootstrap 或反熵能力，不能取代经过认证的服务端 transport。更多架构
-与实测数据见[浏览器原生客户端设计](../../docs/design/browser-native-client.md)和
-[受控性能报告](../../docs/operations/browser-native-client-2026-07-30.md)。
+同源多标签将 `BroadcastChannelNativeTransport` 作为 `liveTransport` 传入；认证服务端 receipt
+adapter 仍通过 `connect()` 单独连接。前者只是易失的实时路径：没有认证、持久化、
+历史/bootstrap 或反熵能力，`publish()` 也绝不会确认 outbox；不能取代经过认证的服务端
+transport。更多架构、示例和实测数据见[多标签与离线壳](../../docs/integration/browser-multitab-offline.md)、
+[浏览器原生客户端设计](../../docs/design/browser-native-client.md)和
+[受控性能报告](../../docs/operations/browser-multitab-offline-2026-08-01.md)。
 
 RGA 仍需要显式协商：先认证 `replica.Manifest`（group、schema、epoch、codec、语义
 版本和能力），再接收 frame；校验和不等于身份验证。默认 Wasm 产物只接收/发出

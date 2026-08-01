@@ -106,17 +106,20 @@
         const left = await openNativeBrowserDocument({
           documentID: `${documentID}-tabs`,
           replicaID: createBrowserReplicaID(),
-          transport: leftTransport,
+          liveTransport: leftTransport,
         });
         const right = await openNativeBrowserDocument({
           documentID: `${documentID}-tabs`,
           replicaID: createBrowserReplicaID(),
-          transport: rightTransport,
+          liveTransport: rightTransport,
         });
         left.getArray("cards").push(["shared across tabs"]);
         await left.flush();
         await waitFor(() => right.getArray("cards").get(0) === "shared across tabs");
         await right.flush();
+        if (left.pendingOutbox !== 1 || right.pendingOutbox !== 0) {
+          throw new Error("BroadcastChannel must not acknowledge the durable outbox");
+        }
         await left.close();
         await right.close();
         leftTransport.close();

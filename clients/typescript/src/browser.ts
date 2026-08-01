@@ -115,6 +115,17 @@ export interface NativeBrowserTransport {
   subscribe(receiver: (encoded: Uint8Array) => void): () => void;
 }
 
+/**
+ * An optional low-latency path beside a durable `NativeBrowserTransport`.
+ * Publishing here never acknowledges the persistent outbox: implementations
+ * may be volatile, unauthenticated, unordered, or partitioned. Received data
+ * still enters the normal bounded decoder before it changes document state.
+ */
+export interface NativeBrowserLiveTransport {
+  publish(encoded: Uint8Array): void;
+  subscribe(receiver: (encoded: Uint8Array) => void): () => void;
+}
+
 export interface NativeBrowserUpdateEvent extends NativeUpdateEvent {
   /** A defensive, canonical transport representation of `update`. */
   readonly encoded: Uint8Array;
@@ -132,6 +143,8 @@ export interface BrowserNativeDocumentOptions {
   readonly persistenceLimits?: Partial<BrowserPersistenceLimits>;
   /** Optional already-authenticated transport for automatic outbox draining. */
   readonly transport?: NativeBrowserTransport;
+  /** Optional best-effort local live path. It never clears the durable outbox. */
+  readonly liveTransport?: NativeBrowserLiveTransport;
 }
 
 /**
@@ -157,6 +170,9 @@ export async function openNativeBrowserDocument(options: BrowserNativeDocumentOp
   if (options.transport !== undefined) {
     await client.connect(options.transport);
   }
+  if (options.liveTransport !== undefined) {
+    client.connectLive(options.liveTransport);
+  }
   return client;
 }
 
@@ -171,7 +187,9 @@ export class NativeBrowserDocument {
   readonly #outbox = new Map<number, BrowserPersistedUpdate>();
   readonly #unsubscribeDocument: () => void;
   #unsubscribeTransport: (() => void) | undefined;
+  #unsubscribeLiveTransport: (() => void) | undefined;
   #transport: NativeBrowserTransport | undefined;
+  #liveTransport: NativeBrowserLiveTransport | undefined;
   #persistenceQueue: Promise<void> = Promise.resolve();
   #drainPromise: Promise<void> | undefined;
   #reportedPersistenceError: unknown;
@@ -280,6 +298,31 @@ export class NativeBrowserDocument {
   }
 
   /**
+   * Attaches a best-effort live path without changing the outbox receipt
+   * boundary. Use this for same-origin multi-tab delivery only alongside the
+   * application's authenticated replay/bootstrap path.
+   */
+  connectLive(transport: NativeBrowserLiveTransport): void {
+    this.assertOpen();
+    assertLiveTransport(transport);
+    this.disconnectLive();
+    this.#liveTransport = transport;
+    this.#unsubscribeLiveTransport = transport.subscribe((encoded) => {
+      try {
+        this.applyEncodedUpdate(encoded, "live_transport");
+      } catch (error) {
+        this.report(error);
+      }
+    });
+  }
+
+  disconnectLive(): void {
+    this.#unsubscribeLiveTransport?.();
+    this.#unsubscribeLiveTransport = undefined;
+    this.#liveTransport = undefined;
+  }
+
+  /**
    * Waits for IndexedDB commits and, when connected, drains the outbox. A
    * resolved call proves this browser accepted the recovery record; browsers
    * still cannot guarantee a transaction completes during process shutdown.
@@ -301,6 +344,7 @@ export class NativeBrowserDocument {
     await this.flush();
     this.#closed = true;
     this.disconnect();
+    this.disconnectLive();
     this.#unsubscribeDocument();
     this.document.close();
     this.#updateListeners.clear();
@@ -342,6 +386,7 @@ export class NativeBrowserDocument {
     }).then(
       () => {
         if (event.local === true) {
+          this.publishLive(encoded);
           void this.drainOutbox().catch((error) => this.report(error));
         }
       },
@@ -372,6 +417,18 @@ export class NativeBrowserDocument {
       return;
     }
     await this.persistence.compact(this.documentID, snapshot);
+  }
+
+  private publishLive(encoded: Uint8Array): void {
+    const transport = this.#liveTransport;
+    if (transport === undefined) {
+      return;
+    }
+    try {
+      transport.publish(encoded.slice());
+    } catch (error) {
+      this.report(error);
+    }
   }
 
   private async drainOutbox(): Promise<void> {
@@ -702,6 +759,8 @@ export interface RGAWasmBrowserDocumentOptions {
   readonly persistenceLimits?: Partial<BrowserPersistenceLimits>;
   /** Optional authenticated transport; resolution must mean the chosen durable receipt. */
   readonly transport?: NativeBrowserTransport;
+  /** Optional best-effort local live path. It never clears the durable outbox. */
+  readonly liveTransport?: NativeBrowserLiveTransport;
 }
 
 export interface RGAWasmBrowserUpdateEvent {
@@ -742,6 +801,9 @@ export async function openRGAWasmBrowserDocument(
   if (options.transport !== undefined) {
     await client.connect(options.transport);
   }
+  if (options.liveTransport !== undefined) {
+    client.connectLive(options.liveTransport);
+  }
   return client;
 }
 
@@ -755,7 +817,9 @@ export class RGAWasmBrowserDocument {
   readonly #errorListeners = new Set<(error: unknown) => void>();
   readonly #outbox = new Map<number, BrowserPersistedUpdate>();
   #unsubscribeTransport: (() => void) | undefined;
+  #unsubscribeLiveTransport: (() => void) | undefined;
   #transport: NativeBrowserTransport | undefined;
+  #liveTransport: NativeBrowserLiveTransport | undefined;
   #persistenceQueue: Promise<void> = Promise.resolve();
   #drainPromise: Promise<void> | undefined;
   #reportedPersistenceError: unknown;
@@ -887,6 +951,27 @@ export class RGAWasmBrowserDocument {
     this.#transport = undefined;
   }
 
+  /** Attaches an auxiliary live path without treating it as a durable receipt. */
+  connectLive(transport: NativeBrowserLiveTransport): void {
+    this.assertUsable();
+    assertLiveTransport(transport);
+    this.disconnectLive();
+    this.#liveTransport = transport;
+    this.#unsubscribeLiveTransport = transport.subscribe((encoded) => {
+      try {
+        this.applyDelta(encoded);
+      } catch (error) {
+        this.report(error);
+      }
+    });
+  }
+
+  disconnectLive(): void {
+    this.#unsubscribeLiveTransport?.();
+    this.#unsubscribeLiveTransport = undefined;
+    this.#liveTransport = undefined;
+  }
+
   /** Waits for IndexedDB commits and then drains the durable local outbox. */
   async flush(): Promise<void> {
     this.assertOpen();
@@ -904,6 +989,7 @@ export class RGAWasmBrowserDocument {
     await this.flush();
     this.#closed = true;
     this.disconnect();
+    this.disconnectLive();
     this.document.close();
     this.#updateListeners.clear();
     this.#errorListeners.clear();
@@ -937,6 +1023,7 @@ export class RGAWasmBrowserDocument {
     }).then(
       () => {
         if (local) {
+          this.publishLive(frame);
           void this.drainOutbox().catch((error) => this.report(error));
         }
       },
@@ -960,6 +1047,18 @@ export class RGAWasmBrowserDocument {
       return;
     }
     await this.persistence.compact(this.persistenceKey, snapshot);
+  }
+
+  private publishLive(encoded: Uint8Array): void {
+    const transport = this.#liveTransport;
+    if (transport === undefined) {
+      return;
+    }
+    try {
+      transport.publish(encoded.slice());
+    } catch (error) {
+      this.report(error);
+    }
   }
 
   private async drainOutbox(): Promise<void> {
@@ -1231,8 +1330,8 @@ export class IndexedDBRGAWasmPersistence implements RGAWasmBrowserPersistence {
   }
 }
 
-/** A same-origin, volatile multi-tab transport; it is not authentication or durable delivery. */
-export class BroadcastChannelNativeTransport implements NativeBrowserTransport {
+/** A same-origin, volatile multi-tab live path; it is not authentication or durable delivery. */
+export class BroadcastChannelNativeTransport implements NativeBrowserLiveTransport {
   readonly #channel: BroadcastChannel;
   readonly #source = createBrowserReplicaID("tab");
 
@@ -1244,7 +1343,7 @@ export class BroadcastChannelNativeTransport implements NativeBrowserTransport {
     this.#channel = new BroadcastChannel(channelName);
   }
 
-  send(encoded: Uint8Array): void {
+  publish(encoded: Uint8Array): void {
     this.#channel.postMessage({ version: 1, source: this.#source, encoded: encoded.slice() });
   }
 
@@ -1539,6 +1638,12 @@ function assertStorageKey(value: unknown): asserts value is string {
 
 function assertTransport(value: unknown): asserts value is NativeBrowserTransport {
   if (!isRecord(value) || typeof value.send !== "function" || typeof value.subscribe !== "function") {
+    throw new NativeBrowserError("invalid_argument");
+  }
+}
+
+function assertLiveTransport(value: unknown): asserts value is NativeBrowserLiveTransport {
+  if (!isRecord(value) || typeof value.publish !== "function" || typeof value.subscribe !== "function") {
     throw new NativeBrowserError("invalid_argument");
   }
 }

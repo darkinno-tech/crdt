@@ -4,5 +4,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/editor-adapters.typecheck.ts"]
+  "include": ["src/**/*.ts", "test/editor-adapters.typecheck.ts", "test/browser-live-transport.typecheck.ts"]
 }

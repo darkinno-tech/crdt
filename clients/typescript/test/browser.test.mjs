@@ -117,6 +117,57 @@ test("browser document leaves an outbox entry intact when a receipt transport fa
   await document.close();
 });
 
+test("a live multi-tab path delivers only after local persistence and never acknowledges the outbox", async () => {
+  const hub = new LiveHub();
+  const leftPersistence = new MemoryNativeBrowserPersistence();
+  const rightPersistence = new MemoryNativeBrowserPersistence();
+  const left = await openNativeBrowserDocument({
+    documentID: "live-tabs",
+    replicaID: "alice-tab",
+    persistence: leftPersistence,
+    liveTransport: hub.createTransport(),
+  });
+  const right = await openNativeBrowserDocument({
+    documentID: "live-tabs",
+    replicaID: "bob-tab",
+    persistence: rightPersistence,
+    liveTransport: hub.createTransport(),
+  });
+
+  left.getArray("cards").push(["visible in another tab"]);
+  await left.flush();
+  await waitFor(() => right.getArray("cards").get(0) === "visible in another tab");
+  await right.flush();
+
+  assert.equal(left.pendingOutbox, 1);
+  assert.equal(right.pendingOutbox, 0);
+  assert.equal((await leftPersistence.load("live-tabs"))?.updates[0]?.pending, true);
+  assert.equal((await rightPersistence.load("live-tabs"))?.updates[0]?.local, false);
+  await left.close().catch(() => left.disconnect());
+  await right.close();
+});
+
+test("a failed local persistence write is never published to a live path", async () => {
+  const hub = new LiveHub();
+  let delivered = 0;
+  const receiver = hub.createTransport();
+  receiver.subscribe(() => { delivered += 1; });
+  const document = await openNativeBrowserDocument({
+    documentID: "live-persistence-failure",
+    replicaID: "writer",
+    persistence: new FailFirstAppendPersistence(),
+    liveTransport: hub.createTransport(),
+  });
+  document.getMap("metadata").set("title", "must stay local");
+  await assert.rejects(
+    () => document.flush(),
+    (error) => error instanceof NativeBrowserError && error.code === "persistence_failed",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(delivered, 0);
+  document.disconnectLive();
+});
+
 test("three offline browser editors converge after reverse, duplicate delivery and recovery", async () => {
   const clients = await Promise.all(
     ["alice", "bob", "carol"].map((replicaID) =>
@@ -340,5 +391,42 @@ class FailSecondAppendPersistence {
 
   async compact(_key, snapshot) {
     this.compactedSnapshot = snapshot;
+  }
+}
+
+class FailFirstAppendPersistence extends FailSecondAppendPersistence {
+  async append() {
+    throw new NativeBrowserError("persistence_failed");
+  }
+}
+
+class LiveHub {
+  #receivers = new Map();
+
+  createTransport() {
+    const hub = this;
+    const source = Symbol("live-tab");
+    return {
+      publish(encoded) {
+        const copy = encoded.slice();
+        queueMicrotask(() => {
+          for (const [target, receiver] of hub.#receivers) {
+            if (target !== source) receiver(copy.slice());
+          }
+        });
+      },
+      subscribe(receiver) {
+        hub.#receivers.set(source, receiver);
+        return () => hub.#receivers.delete(source);
+      },
+    };
+  }
+}
+
+async function waitFor(predicate) {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("live multi-tab delivery timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
