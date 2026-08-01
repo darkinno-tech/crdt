@@ -1,0 +1,30 @@
+{
+  "protocol": "rga-packed-v3",
+  "semantics_version": 3,
+  "frame_types": {
+    "state": 29,
+    "delta": 30
+  },
+  "vectors": [
+    {
+      "name": "dense_hlc_state_with_wall_transition_and_tombstone",
+      "frame_type": 29,
+      "complete_state": true,
+      "hex": "43524454011d00190102080141000a050108020861626364656667680101410a06a541fd72",
+      "nodes": [
+        { "id": { "replica_id": "A", "wall_time": "10", "logical": "5" }, "parent": null, "rune": "a" },
+        { "id": { "replica_id": "A", "wall_time": "10", "logical": "6" }, "parent": { "replica_id": "A", "wall_time": "10", "logical": "5" }, "rune": "b" },
+        { "id": { "replica_id": "A", "wall_time": "10", "logical": "7" }, "parent": { "replica_id": "A", "wall_time": "10", "logical": "6" }, "rune": "c" },
+        { "id": { "replica_id": "A", "wall_time": "10", "logical": "8" }, "parent": { "replica_id": "A", "wall_time": "10", "logical": "7" }, "rune": "d" },
+        { "id": { "replica_id": "A", "wall_time": "12", "logical": "0" }, "parent": { "replica_id": "A", "wall_time": "10", "logical": "8" }, "rune": "e" },
+        { "id": { "replica_id": "A", "wall_time": "12", "logical": "1" }, "parent": { "replica_id": "A", "wall_time": "12", "logical": "0" }, "rune": "f" },
+        { "id": { "replica_id": "A", "wall_time": "12", "logical": "2" }, "parent": { "replica_id": "A", "wall_time": "12", "logical": "1" }, "rune": "g" },
+        { "id": { "replica_id": "A", "wall_time": "12", "logical": "3" }, "parent": { "replica_id": "A", "wall_time": "12", "logical": "2" }, "rune": "h" }
+      ],
+      "tombstones": [
+        { "replica_id": "A", "wall_time": "10", "logical": "6" }
+      ],
+      "visible_text_after_apply_to_empty": "acdefgh"
+    }
+  ]
+}

@@ -95,6 +95,44 @@ func TestRGARunV2CrossLanguageVectors(t *testing.T) {
 	}
 }
 
+func TestRGAPackedV3CrossLanguageVectors(t *testing.T) {
+	vectors := loadRGAPackedV3Vectors(t)
+	if vectors.Protocol != "rga-packed-v3" || vectors.SemanticsVersion != PackedV3SemanticsVersion ||
+		vectors.FrameTypes.State != crdt.TypeIDRGAPackedState || vectors.FrameTypes.Delta != crdt.TypeIDRGAPackedDelta {
+		t.Fatalf("invalid packed-v3 vector metadata: %#v", vectors)
+	}
+	for _, vector := range vectors.Vectors {
+		t.Run(vector.Name, func(t *testing.T) {
+			nodes, tombstones := vector.delta(t)
+			want, err := hex.DecodeString(vector.Hex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := marshalRGAPacked(vector.FrameType, nodes, tombstones, frame.DefaultLimits())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("canonical packed vector differs\n got: %x\nwant: %x", got, want)
+			}
+			decodedNodes, decodedTombstones, err := unmarshalRGAPacked(want, vector.FrameType, frame.DefaultLimits(), vector.CompleteState)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameRGADelta(nodes, tombstones, decodedNodes, decodedTombstones) {
+				t.Fatalf("decoded packed vector differs: nodes=%#v tombstones=%#v", decodedNodes, decodedTombstones)
+			}
+			document := mustRGA(t, "packed-vector-receiver")
+			if err := document.UnmarshalPackedBinary(want); err != nil {
+				t.Fatal(err)
+			}
+			if got := document.String(); got != vector.VisibleTextAfterEmptyUse {
+				t.Fatalf("visible packed text = %q, want %q", got, vector.VisibleTextAfterEmptyUse)
+			}
+		})
+	}
+}
+
 func loadRGARunV2Vectors(t *testing.T) rgaWireVectorFile {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -111,6 +149,26 @@ func loadRGARunV2Vectors(t *testing.T) rgaWireVectorFile {
 	}
 	if len(vectors.Vectors) == 0 {
 		t.Fatal("no run-v2 vectors")
+	}
+	return vectors
+}
+
+func loadRGAPackedV3Vectors(t *testing.T) rgaWireVectorFile {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot find vector test path")
+	}
+	encoded, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "docs", "protocol", "testdata", "rga-packed-v3-vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors rgaWireVectorFile
+	if err := json.Unmarshal(encoded, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors.Vectors) == 0 {
+		t.Fatal("no packed-v3 vectors")
 	}
 	return vectors
 }

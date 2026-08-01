@@ -23,6 +23,7 @@ import (
 
 type report struct {
 	Implementation string    `json:"implementation"`
+	Protocol       string    `json:"protocol"`
 	Runtime        string    `json:"runtime"`
 	Scenario       string    `json:"scenario"`
 	Runes          int       `json:"runes"`
@@ -34,10 +35,13 @@ type report struct {
 }
 
 type comparisonScenario string
+type comparisonProtocol string
 
 const (
 	scenarioInitial           comparisonScenario = "initial"
 	scenarioOfflineConcurrent comparisonScenario = "offline-concurrent"
+	protocolRunV2             comparisonProtocol = "run-v2"
+	protocolPackedV3          comparisonProtocol = "packed-v3"
 )
 
 func parseScenario(value string) (comparisonScenario, error) {
@@ -47,6 +51,27 @@ func parseScenario(value string) (comparisonScenario, error) {
 		return scenario, nil
 	default:
 		return "", fmt.Errorf("%q is not a supported scenario", value)
+	}
+}
+
+func parseProtocol(value string) (comparisonProtocol, error) {
+	protocol := comparisonProtocol(value)
+	switch protocol {
+	case protocolRunV2, protocolPackedV3:
+		return protocol, nil
+	default:
+		return "", fmt.Errorf("%q is not a supported protocol", value)
+	}
+}
+
+func (protocol comparisonProtocol) implementation() string {
+	switch protocol {
+	case protocolRunV2:
+		return "DarkInno RGA run-v2"
+	case protocolPackedV3:
+		return "DarkInno RGA packed-v3"
+	default:
+		return "unknown"
 	}
 }
 
@@ -72,6 +97,7 @@ func run(args []string, writer io.Writer) (err error) {
 	flags.SetOutput(io.Discard)
 	var (
 		scenarioText = flags.String("scenario", string(scenarioInitial), "comparison scenario: initial or offline-concurrent")
+		protocolText = flags.String("protocol", string(protocolRunV2), "RGA protocol: run-v2 or packed-v3")
 		sizesText    = flags.String("sizes", "4096,16384", "comma-separated UTF-8 rune counts")
 		samples      = flags.Int("samples", 5, "measured samples per size")
 		warmups      = flags.Int("warmups", 2, "unreported warmups per size")
@@ -89,13 +115,17 @@ func run(args []string, writer io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
+	protocol, err := parseProtocol(*protocolText)
+	if err != nil {
+		return err
+	}
 	sizes, err := parseSizes(*sizesText)
 	if err != nil {
 		return fmt.Errorf("parse sizes: %w", err)
 	}
 	reports := make([]report, 0, len(sizes))
 	for _, size := range sizes {
-		item, err := measure(scenario, size, *samples, *warmups, *iterations, *revision)
+		item, err := measureProtocol(scenario, protocol, size, *samples, *warmups, *iterations, *revision)
 		if err != nil {
 			return fmt.Errorf("measure %d runes: %w", size, err)
 		}
@@ -123,9 +153,13 @@ func run(args []string, writer io.Writer) (err error) {
 }
 
 func measure(scenario comparisonScenario, runes, samples, warmups, iterations int, revision string) (report, error) {
+	return measureProtocol(scenario, protocolRunV2, runes, samples, warmups, iterations, revision)
+}
+
+func measureProtocol(scenario comparisonScenario, protocol comparisonProtocol, runes, samples, warmups, iterations int, revision string) (report, error) {
 	payload := strings.Repeat("x", runes)
 	for index := 0; index < warmups; index++ {
-		if _, _, _, err := runBatch(scenario, payload, iterations); err != nil {
+		if _, _, _, err := runBatchProtocol(scenario, protocol, payload, iterations); err != nil {
 			return report{}, err
 		}
 	}
@@ -133,7 +167,7 @@ func measure(scenario comparisonScenario, runes, samples, warmups, iterations in
 	updateBytes, stateBytes := 0, 0
 	for index := 0; index < samples; index++ {
 		runtime.GC()
-		duration, updateSize, stateSize, err := runBatch(scenario, payload, iterations)
+		duration, updateSize, stateSize, err := runBatchProtocol(scenario, protocol, payload, iterations)
 		if err != nil {
 			return report{}, err
 		}
@@ -143,7 +177,8 @@ func measure(scenario comparisonScenario, runes, samples, warmups, iterations in
 	sorted := append([]float64(nil), durations...)
 	sort.Float64s(sorted)
 	return report{
-		Implementation: "DarkInno RGA run-v2",
+		Implementation: protocol.implementation(),
+		Protocol:       string(protocol),
 		Runtime:        runtime.Version(),
 		Scenario:       scenario.description(),
 		Runes:          runes,
@@ -156,10 +191,14 @@ func measure(scenario comparisonScenario, runes, samples, warmups, iterations in
 }
 
 func runBatch(scenario comparisonScenario, payload string, iterations int) (time.Duration, int, int, error) {
+	return runBatchProtocol(scenario, protocolRunV2, payload, iterations)
+}
+
+func runBatchProtocol(scenario comparisonScenario, protocol comparisonProtocol, payload string, iterations int) (time.Duration, int, int, error) {
 	started := time.Now()
 	updateBytes, stateBytes := 0, 0
 	for index := 0; index < iterations; index++ {
-		updateSize, stateSize, err := runOnce(scenario, payload)
+		updateSize, stateSize, err := runOnceProtocol(scenario, protocol, payload)
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -168,18 +207,18 @@ func runBatch(scenario comparisonScenario, payload string, iterations int) (time
 	return time.Since(started), updateBytes, stateBytes, nil
 }
 
-func runOnce(scenario comparisonScenario, payload string) (int, int, error) {
+func runOnceProtocol(scenario comparisonScenario, protocol comparisonProtocol, payload string) (int, int, error) {
 	switch scenario {
 	case scenarioInitial:
-		return runInitialOnce(payload)
+		return runInitialOnceProtocol(protocol, payload)
 	case scenarioOfflineConcurrent:
-		return runOfflineConcurrentOnce(payload)
+		return runOfflineConcurrentOnceProtocol(protocol, payload)
 	default:
 		return 0, 0, fmt.Errorf("unsupported scenario %q", scenario)
 	}
 }
 
-func runInitialOnce(payload string) (int, int, error) {
+func runInitialOnceProtocol(protocol comparisonProtocol, payload string) (int, int, error) {
 	source, err := text.New("comparison-source")
 	if err != nil {
 		return 0, 0, err
@@ -188,28 +227,24 @@ func runInitialOnce(payload string) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	encoded, err := source.InsertRunBinaryWithLimits(0, payload, frame.DefaultLimits())
+	encoded, err := insertComparisonFrame(source, protocol, 0, payload)
 	if err != nil {
 		return 0, 0, err
 	}
-	delta, err := text.UnmarshalRGARunDelta(encoded)
-	if err != nil {
-		return 0, 0, err
-	}
-	if err := target.ApplyDelta(delta); err != nil {
+	if err := applyComparisonFrame(target, protocol, encoded); err != nil {
 		return 0, 0, err
 	}
 	if target.String() != payload {
 		return 0, 0, fmt.Errorf("target did not converge")
 	}
-	state, err := source.MarshalRunBinary()
+	state, err := marshalComparisonState(source, protocol)
 	if err != nil {
 		return 0, 0, err
 	}
 	return len(encoded), len(state), nil
 }
 
-func runOfflineConcurrentOnce(payload string) (int, int, error) {
+func runOfflineConcurrentOnceProtocol(protocol comparisonProtocol, payload string) (int, int, error) {
 	seed, err := text.New("comparison-seed")
 	if err != nil {
 		return 0, 0, err
@@ -226,22 +261,22 @@ func runOfflineConcurrentOnce(payload string) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	base, err := seed.InsertRunBinaryWithLimits(0, payload, frame.DefaultLimits())
+	base, err := insertComparisonFrame(seed, protocol, 0, payload)
 	if err != nil {
 		return 0, 0, err
 	}
 	for _, replica := range []*text.RGA{left, right} {
-		if err := applyRunFrame(replica, base); err != nil {
+		if err := applyComparisonFrame(replica, protocol, base); err != nil {
 			return 0, 0, err
 		}
 	}
 
 	offset := len(payload) / 2 // The comparison payload is ASCII, so byte and rune offsets match.
-	leftUpdate, err := left.ReplaceRunBinaryWithLimits(offset, 1, "A", frame.DefaultLimits())
+	leftUpdate, err := replaceComparisonFrame(left, protocol, offset, 1, "A")
 	if err != nil {
 		return 0, 0, err
 	}
-	rightUpdate, err := right.ReplaceRunBinaryWithLimits(offset, 1, "B", frame.DefaultLimits())
+	rightUpdate, err := replaceComparisonFrame(right, protocol, offset, 1, "B")
 	if err != nil {
 		return 0, 0, err
 	}
@@ -256,7 +291,7 @@ func runOfflineConcurrentOnce(payload string) (int, int, error) {
 		{observer, leftUpdate}, {observer, leftUpdate},
 		{observer, base}, {observer, base},
 	} {
-		if err := applyRunFrame(delivery.target, delivery.frame); err != nil {
+		if err := applyComparisonFrame(delivery.target, protocol, delivery.frame); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -266,15 +301,59 @@ func runOfflineConcurrentOnce(payload string) (int, int, error) {
 			return 0, 0, fmt.Errorf("replicas did not converge: got %q, want %q, pending=%d", got, want, replica.PendingCount())
 		}
 	}
-	state, err := left.MarshalRunBinary()
+	state, err := marshalComparisonState(left, protocol)
 	if err != nil {
 		return 0, 0, err
 	}
 	return len(base) + len(leftUpdate) + len(rightUpdate), len(state), nil
 }
 
-func applyRunFrame(target *text.RGA, encoded []byte) error {
-	delta, err := text.UnmarshalRGARunDelta(encoded)
+func insertComparisonFrame(target *text.RGA, protocol comparisonProtocol, offset int, value string) ([]byte, error) {
+	switch protocol {
+	case protocolRunV2:
+		return target.InsertRunBinaryWithLimits(offset, value, frame.DefaultLimits())
+	case protocolPackedV3:
+		return target.InsertPackedBinaryWithLimits(offset, value, frame.DefaultLimits())
+	default:
+		return nil, fmt.Errorf("unsupported protocol %q", protocol)
+	}
+}
+
+func replaceComparisonFrame(target *text.RGA, protocol comparisonProtocol, offset, count int, value string) ([]byte, error) {
+	switch protocol {
+	case protocolRunV2:
+		return target.ReplaceRunBinaryWithLimits(offset, count, value, frame.DefaultLimits())
+	case protocolPackedV3:
+		return target.ReplacePackedBinaryWithLimits(offset, count, value, frame.DefaultLimits())
+	default:
+		return nil, fmt.Errorf("unsupported protocol %q", protocol)
+	}
+}
+
+func marshalComparisonState(target *text.RGA, protocol comparisonProtocol) ([]byte, error) {
+	switch protocol {
+	case protocolRunV2:
+		return target.MarshalRunBinary()
+	case protocolPackedV3:
+		return target.MarshalPackedBinary()
+	default:
+		return nil, fmt.Errorf("unsupported protocol %q", protocol)
+	}
+}
+
+func applyComparisonFrame(target *text.RGA, protocol comparisonProtocol, encoded []byte) error {
+	var (
+		delta text.Delta
+		err   error
+	)
+	switch protocol {
+	case protocolRunV2:
+		delta, err = text.UnmarshalRGARunDelta(encoded)
+	case protocolPackedV3:
+		delta, err = text.UnmarshalRGAPackedDelta(encoded)
+	default:
+		return fmt.Errorf("unsupported protocol %q", protocol)
+	}
 	if err != nil {
 		return err
 	}
