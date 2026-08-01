@@ -2,10 +2,10 @@
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
-# A single fuzz worker avoids scheduler starvation in shared CI. Give it enough
-# time to finish corpus minimization and a bounded large-frame decode before
-# the fuzz context expires; 10s intermittently ended as context deadline.
-FUZZ_TIME ?= 20s
+# A single fuzz worker avoids scheduler starvation in shared CI. A bounded 25s
+# window leaves time for corpus minimization and clean coordinator shutdown;
+# 20s intermittently ended as context deadline.
+FUZZ_TIME ?= 25s
 FUZZ_PARALLEL ?= 1
 # XML and document-tree fuzzers start from larger valid-state corpora and can
 # need extra time for Go's fuzz coordinator to quiesce after the requested
@@ -13,6 +13,7 @@ FUZZ_PARALLEL ?= 1
 # remains fast.
 FUZZ_XML_TIME ?= 45s
 FUZZ_DOCUMENTTREE_TIME ?= 30s
+FUZZ_ENCODING_TIME ?= 30s
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
 NPM ?= npm
@@ -62,7 +63,7 @@ vet:
 	go vet ./...
 
 fuzz:
-	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_XML_TIME="$(FUZZ_XML_TIME)" FUZZ_DOCUMENTTREE_TIME="$(FUZZ_DOCUMENTTREE_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
+	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_XML_TIME="$(FUZZ_XML_TIME)" FUZZ_DOCUMENTTREE_TIME="$(FUZZ_DOCUMENTTREE_TIME)" FUZZ_ENCODING_TIME="$(FUZZ_ENCODING_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
 
 # List the release fuzz coverage derived from the current package graph. It is
 # intentionally separate from fuzz-smoke, whose small curated list documents

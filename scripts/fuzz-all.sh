@@ -7,9 +7,10 @@
 # accidentally become fuzz targets.
 set -eu
 
-fuzz_time=${FUZZ_TIME:-20s}
+fuzz_time=${FUZZ_TIME:-25s}
 fuzz_xml_time=${FUZZ_XML_TIME:-45s}
 fuzz_documenttree_time=${FUZZ_DOCUMENTTREE_TIME:-30s}
+fuzz_encoding_time=${FUZZ_ENCODING_TIME:-30s}
 fuzz_parallel=${FUZZ_PARALLEL:-1}
 found=0
 
@@ -38,6 +39,9 @@ while IFS='|' read -r package directory test_files xtest_files; do
 		fi
 		if [ "$package" = "github.com/DarkInno/crdt/documenttree" ] && [ "$target" = "FuzzDocumentTreeWire" ]; then
 			target_time=$fuzz_documenttree_time
+		fi
+		if [ "$package" = "github.com/DarkInno/crdt/encoding" ] && [ "$target" = "FuzzUnmarshalFrame" ]; then
+			target_time=$fuzz_encoding_time
 		fi
 		go test -run='^$' -fuzz="^${target}$" -fuzztime="$target_time" -parallel="$fuzz_parallel" "$package"
 	done

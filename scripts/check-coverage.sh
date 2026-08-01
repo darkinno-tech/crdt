@@ -16,7 +16,10 @@ for package in $(go list ./...); do
 	case "$package" in
 		*/examples/*|*/cmd/crdt-compare|*/internal/cmd/*) continue ;;
 	esac
-	output=$(go test -coverprofile="$profile" "$package")
+	if ! output=$(go test -coverprofile="$profile" "$package"); then
+		printf '%s\n' "$output"
+		exit 1
+	fi
 	printf '%s\n' "$output"
 	# Protobuf and gRPC stubs are generated directly from checked-in schemas;
 	# exercising their every accessor is not evidence about our relay code. Keep
