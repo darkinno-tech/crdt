@@ -1,9 +1,10 @@
 # Rich-text editor bindings
 
-`@darkinno/crdt-client/bindings` can bind a Quill Delta surface to the
-manifest-bound `richtext` v1 protocol. This is not an upgrade of a plain-text
-RGA binding: rich-text uses state/delta TypeIDs `23/24`, semantic version `1`,
-its own renderer `SchemaID`, and an atomic state/frontier/HLC persistence unit.
+`@darkinno/crdt-client/bindings` can bind schema-specific Quill, BlockNote,
+and Tiptap/ProseMirror surfaces to the manifest-bound `richtext` v1 protocol.
+This is not an upgrade of a plain-text RGA binding: rich-text uses state/delta
+TypeIDs `23/24`, semantic version `1`, its own renderer `SchemaID`, and an
+atomic state/frontier/HLC persistence unit.
 
 ## Architecture and scope
 
@@ -95,6 +96,13 @@ For BlockNote's default text-block document rather than a Quill Delta, use
 `darkinno:blocknote-text-v1` SchemaID, preserves a bounded default text-block
 subset, and rejects tables, media, links, custom blocks, and unknown props
 instead of flattening them into this rich-text group.
+
+For Tiptap 3 and an application-owned ProseMirror port, use
+[`bindTiptapRichText` / `bindProseMirrorRichText`](tiptap-richtext-bindings.md).
+Its `darkinno:tiptap-core-richtext-v1` profile preserves approved blocks,
+marks, hard breaks, and codec-validated inline atoms. It rejects lists,
+tables, media, custom attrs/marks, block embeds, and NodeViews rather than
+flattening them into the rich-text group.
 
 ## Safety and deployment boundary
 
