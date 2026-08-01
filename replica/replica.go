@@ -89,6 +89,38 @@ func NewManifest(groupID, schemaID string, epoch uint64, protocol Protocol, poli
 	return manifest, nil
 }
 
+// ProtocolFromFrameType converts one canonical registered frame type into the
+// protocol fields required by a manifest. It exists to keep applications from
+// copying state IDs, delta IDs, and semantics versions by hand.
+//
+// frameType must exactly match a type returned by crdt.FrameTypeForState,
+// crdt.RegisteredFrameTypes, or a ReplicationProfile. This helper does not
+// choose a codec, authenticate a manifest, authorize a peer, or select input
+// limits.
+func ProtocolFromFrameType(frameType crdt.FrameType, codecID string) (Protocol, error) {
+	registered, ok := crdt.FrameTypeForState(frameType.StateID)
+	if !ok || registered != frameType || len(codecID) > frame.DefaultLimits().MaxCodecID {
+		return Protocol{}, ErrInvalidManifest
+	}
+	return Protocol{
+		StateID:          frameType.StateID,
+		DeltaID:          frameType.DeltaID,
+		CodecID:          codecID,
+		SemanticsVersion: frameType.SemanticsVersion,
+	}, nil
+}
+
+// NewManifestForFrameType builds a manifest for one canonical registered
+// frame type. It is equivalent to ProtocolFromFrameType followed by
+// NewManifest, and retains all manifest validation and policy checks.
+func NewManifestForFrameType(groupID, schemaID string, epoch uint64, frameType crdt.FrameType, codecID string, policy crdt.ProtocolPolicy) (Manifest, error) {
+	protocol, err := ProtocolFromFrameType(frameType, codecID)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return NewManifest(groupID, schemaID, epoch, protocol, policy)
+}
+
 // Compatible reports whether local and remote describe the same replication
 // group and exact CRDT semantics. It intentionally rejects a semantic-version
 // mismatch rather than guessing that two versions can read one another.

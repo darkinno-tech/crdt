@@ -217,7 +217,7 @@ go test ./extensions ./examples/extensions-provider
 go test -race ./extensions
 
 # 有界解析器健壮性。
-go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=10s ./extensions
+go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=250000x ./extensions
 
 # 当前机器上的 loopback 传输成本；不能将其当作 SLA。
 go test -run='^$' \

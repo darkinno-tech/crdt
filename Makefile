@@ -1,19 +1,16 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify formal-rga wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
-# A single fuzz worker avoids scheduler starvation in shared CI. A bounded 25s
-# window leaves time for corpus minimization and clean coordinator shutdown;
-# 20s intermittently ended as context deadline.
-FUZZ_TIME ?= 25s
+# A single fuzz worker avoids scheduler starvation in shared CI. Bound each
+# target by executions, not wall time: Go 1.26 can report a normal timed fuzz
+# shutdown as context deadline exceeded at the exact duration boundary.
+FUZZ_RUNS ?= 150000
+# This model executes each operation on three replicas, delivers every delta
+# repeatedly, and serializes the final states. Keep its scenario budget lower
+# than byte-decoder fuzzers while still exploring 10k adversarial schedules.
+FUZZ_MODEL_RUNS ?= 10000
 FUZZ_PARALLEL ?= 1
-# XML and document-tree fuzzers start from larger valid-state corpora and can
-# need extra time for Go's fuzz coordinator to quiesce after the requested
-# window. Keep this targeted grace period separate so ordinary decoder fuzzing
-# remains fast.
-FUZZ_XML_TIME ?= 45s
-FUZZ_DOCUMENTTREE_TIME ?= 30s
-FUZZ_ENCODING_TIME ?= 30s
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
 NPM ?= npm
@@ -63,7 +60,7 @@ vet:
 	go vet ./...
 
 fuzz:
-	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_XML_TIME="$(FUZZ_XML_TIME)" FUZZ_DOCUMENTTREE_TIME="$(FUZZ_DOCUMENTTREE_TIME)" FUZZ_ENCODING_TIME="$(FUZZ_ENCODING_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
+	FUZZ_RUNS="$(FUZZ_RUNS)" FUZZ_MODEL_RUNS="$(FUZZ_MODEL_RUNS)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
 
 # List the release fuzz coverage derived from the current package graph. It is
 # intentionally separate from fuzz-smoke, whose small curated list documents
@@ -75,12 +72,12 @@ fuzz-list:
 # bytes in a pull request. Release candidates still run the complete fuzz target
 # above, keeping the faster PR feedback path distinct from release validation.
 fuzz-smoke:
-	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
-	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
-	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./awareness
-	go test -run=^$$ -fuzz=FuzzDocumentTreeWire -fuzztime=$(FUZZ_DOCUMENTTREE_TIME) -parallel=$(FUZZ_PARALLEL) ./documenttree
-	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
-	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./replica
+	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./attachment
+	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./attachment
+	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./awareness
+	go test -run=^$$ -fuzz=FuzzDocumentTreeWire -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./documenttree
+	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./durable
+	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./replica
 
 coverage:
 	COVERAGE_THRESHOLD=90 ./scripts/check-coverage.sh
@@ -204,6 +201,11 @@ staticcheck:
 
 lint:
 	$(GOLANGCI_LINT) run ./...
+
+# The formal model is an explicitly invoked, pinned Lean check. It remains
+# outside `verify` until the repository adopts a pinned Lean CI bootstrap.
+formal-rga:
+	cd formal/rga && lake build
 
 verify: fmt-check generate-check test-unit test-integration test-extreme race vet fuzz coverage staticcheck lint
 

@@ -133,7 +133,7 @@ go test ./config ./telemetry ./durable ./extensions
 go test -race ./config ./telemetry ./durable ./extensions
 
 # Parser robustness and hot-path allocation evidence.
-go test -run='^$' -fuzz=FuzzLoaderTypedAccessors -fuzztime=20s ./config
+go test -run='^$' -fuzz=FuzzLoaderTypedAccessors -fuzztime=250000x ./config
 go test -run='^$' -bench='Benchmark(ReporterRecord|HandlerRecord)' -benchmem ./telemetry ./durable
 ```
 

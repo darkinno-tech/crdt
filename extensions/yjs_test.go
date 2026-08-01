@@ -243,6 +243,43 @@ func TestYJSHandlerConfigurationAndRoutingBoundaries(t *testing.T) {
 	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("duplicate room error = %v", err)
 	}
+
+	store := &testSemanticYJSStore{vector: []byte{0}, delta: yjsHelloUpdate}
+	document := testYJSDocument()
+	firstStoreRoom, err := NewYJSRoom(YJSRoomConfig{
+		Name:                "notes-a",
+		MaxUpdateBytes:      512,
+		MaxStateVectorBytes: 64,
+		MaxSyncBytes:        512,
+		Store:               store,
+		Document:            document,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondStoreRoom, err := NewYJSRoom(YJSRoomConfig{
+		Name:                "notes-b",
+		MaxUpdateBytes:      512,
+		MaxStateVectorBytes: 64,
+		MaxSyncBytes:        512,
+		Store:               store,
+		Document:            document,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewYJSHandler(YJSConfig{
+		Rooms:                 []*YJSRoom{firstStoreRoom, secondStoreRoom},
+		Authenticate:          func(*http.Request) (Peer, error) { return Peer{ID: "peer"}, nil },
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		MaxMessageBytes:       512 + maxYJSWireOverhead,
+		MaxQueuedMessages:     1,
+		MaxQueuedBytes:        512 + maxYJSWireOverhead,
+		MaxAwarenessClients:   1,
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("duplicate durable document error = %v", err)
+	}
 }
 
 func TestYJSRoomCapacityAndSubscriberBackpressure(t *testing.T) {

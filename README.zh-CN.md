@@ -72,6 +72,8 @@ go test ./...
 | 目标 | 阅读或运行 |
 | --- | --- |
 | 学习基础 API | [入门指南](docs/getting-started.zh-CN.md) 与[可运行示例](examples) |
+| 不接触 CRDT 底层细节地使用命名 Map/Array | [共享文档指南](docs/integration/shared-document.zh-CN.md) 与 `go run ./examples/shared-document` |
+| 不手抄协议 ID 地选择 CRDT | [按业务意图配置](docs/integration/intent-first-setup.zh-CN.md) 和 `go run ./cmd/crdt-profile -format json` |
 | 构建完整客户端流程 | [端到端集成](docs/integration/overview.zh-CN.md) |
 | 安全跨越本地重启 | [本地 checkpoint Store](docs/integration/local-checkpoint.zh-CN.md) 与 `go run ./examples/persistent-replica` |
 | 增加重放与重连 | [durable relay 参考](docs/integration/durable-provider.zh-CN.md) |
@@ -104,6 +106,7 @@ go run ./examples/persistent-replica
 | 包 | 职责 |
 | --- | --- |
 | `counter`、`set`、`register` | Counter、Set、Register CRDT。 |
+| `shared` | 稳定 document-tree-v1 帧之上的高层命名 Map/Array facade。 |
 | `lww`、`tree`、`text`、`list`、`xml`、`richtext` | 基于 HLC 的有序协作结构。 |
 | `encoding`、`delta`、`snapshot`、`clock` | 帧、受限批次、snapshot 与 HLC 状态。 |
 | `replica`、`membership`、`tombstonegc`、`merkle` | 投递连续性、成员关系、安全 GC 协调与反熵。 |
@@ -118,8 +121,8 @@ go run ./examples/persistent-replica
 ```sh
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 ./persistence
 go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
 ```
 
@@ -144,7 +147,7 @@ make verify
 
 ## 贡献与发布
 
-贡献应包含聚焦测试、保持规范化编码、在分配或变异前限制不可信输入，并更新最贴近的文档。请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；beta 变更应走经过评审的 beta-to-main 发布路径，不能手动移动已发布 tag。
+贡献应包含聚焦测试、保持规范化编码、在分配或变异前限制不可信输入，并更新最贴近的文档。请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；beta 变更应走经过评审的 beta-to-preprod-to-main 发布路径，不能手动移动已发布 tag。
 
 ## 许可证
 

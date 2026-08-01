@@ -266,7 +266,7 @@ go test ./extensions ./examples/extensions-provider
 go test -race ./extensions
 
 # Bounded parser robustness.
-go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=10s ./extensions
+go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=250000x ./extensions
 
 # Loopback transport cost on the current machine; do not treat it as an SLA.
 go test -run='^$' \

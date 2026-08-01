@@ -135,10 +135,7 @@ func NewYJSStore(config YJSStoreConfig) (YJSStore, error) {
 		config.MaxMergeUpdates <= 0 || config.MaxMergeUpdates > maxYJSStoreMergeUpdates {
 		return nil, invalidConfig("extensions.new_yjs_store", ErrInvalidConfig)
 	}
-	client := config.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
+	client := newYJSStoreHTTPClient(config.HTTPClient)
 	return &yjsStoreClient{
 		endpoint:            endpoint,
 		token:               config.Token,
@@ -148,6 +145,20 @@ func NewYJSStore(config YJSStoreConfig) (YJSStore, error) {
 		maxMergeUpdates:     config.MaxMergeUpdates,
 		httpClient:          client,
 	}, nil
+}
+
+// newYJSStoreHTTPClient copies the caller's transport and timeout settings but
+// never allows a bearer-authenticated request to follow a sidecar redirect.
+// A YJSStore endpoint is a configured trust boundary, not a discovery URL.
+func newYJSStoreHTTPClient(source *http.Client) *http.Client {
+	if source == nil {
+		source = &http.Client{Timeout: 10 * time.Second}
+	}
+	client := *source
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &client
 }
 
 func (client *yjsStoreClient) Apply(ctx context.Context, document YJSDocument, update []byte) (YJSApplyResult, error) {
@@ -281,6 +292,9 @@ func (client *yjsStoreClient) do(ctx context.Context, operation string, payload 
 		return fmt.Errorf("call Yjs store: %w", ErrYJSStoreUnavailable)
 	}
 	defer func() { _ = result.Body.Close() }()
+	if result.StatusCode >= http.StatusMultipleChoices && result.StatusCode < http.StatusBadRequest {
+		return fmt.Errorf("yjs store redirected request: %w", ErrYJSStoreUnavailable)
+	}
 	maximum := maximumResponse
 	if result.StatusCode < http.StatusOK || result.StatusCode >= http.StatusMultipleChoices {
 		maximum = 4096

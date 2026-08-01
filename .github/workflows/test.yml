@@ -1,27 +1,83 @@
 name: Test
 
 on:
-  push:
-    branches:
-      - beta
-      - main
+  # The complete release-candidate suite runs exactly once: for the merge
+  # candidate of the repository's beta -> preprod pull request. Daily beta
+  # pushes deliberately do not start this workflow.
   pull_request:
+    branches:
+      - preprod
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  # Use this only to rerun an individual failed check. Select preprod as the
+  # workflow ref so the retry examines the release-candidate source.
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Check to run (all is for an exceptional full revalidation)
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - test
+          - wasm
+          - race
+          - vet
+          - fuzz
+          - staticcheck
+          - coverage
+          - performance
+          - docker
+          - golangci
+      performance_baseline:
+        description: "Baseline ref or SHA for a manual performance retry (default: preprod)"
+        required: false
+        default: preprod
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   test:
-    # A beta-to-main PR already has a full push validation for the exact same
-    # SHA. Do not spend a second runner on an identical workflow.
-    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
+    name: test
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'test'))
     runs-on: ubuntu-latest
-    # The complete fuzz suite is intentionally bounded but can still take
-    # several minutes. Leave headroom for corpus minimization without allowing
-    # a stalled runner to consume the default six-hour allowance.
-    timeout-minutes: 20
+    timeout-minutes: 10
     concurrency:
       group: test-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
+      - name: Verify generated protocol registry
+        run: go generate ./... && git diff --exit-code -- type_ids_generated.go clients/typescript/src/type_ids.generated.ts
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Run tests
+        run: go test ./...
+
+  wasm:
+    name: wasm
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'wasm'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: wasm-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,30 +89,85 @@ jobs:
           node-version: "24.x"
           cache: npm
           cache-dependency-path: clients/typescript/package-lock.json
-      - name: Verify generated protocol registry
-        run: go generate ./... && git diff --exit-code -- type_ids_generated.go clients/typescript/src/type_ids.generated.ts
-      - name: Check formatting
-        run: test -z "$(gofmt -l .)"
-      - name: Run tests
-        run: go test ./...
       - name: Run TypeScript and Go Wasm compatibility tests
         run: make wasm-test
+
+  race:
+    name: race
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'race'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: race-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
       - name: Run race detector
         run: go test -race ./...
+
+  vet:
+    name: vet
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'vet'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: vet-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
       - name: Run vet
         run: go vet ./...
-      - name: Fuzz decoders (PR smoke)
-        if: github.event_name == 'pull_request'
-        run: make fuzz-smoke
-      - name: Fuzz decoders (release candidate)
-        # main is a beta-only release branch. Its merge commit has already
-        # received this complete suite on beta; rerunning it would spend a
-        # second long-lived runner without exercising new source.
-        if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
+
+  fuzz:
+    name: fuzz
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'fuzz'))
+    runs-on: ubuntu-latest
+    # The suite is bounded but still needs headroom for corpus minimization.
+    timeout-minutes: 20
+    concurrency:
+      group: fuzz-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.x"
+      - name: Fuzz decoders
         run: make fuzz
 
   staticcheck:
-    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
+    name: staticcheck
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'staticcheck'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
@@ -75,7 +186,14 @@ jobs:
           use-cache: false
 
   coverage:
-    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
+    name: coverage
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'coverage'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -90,11 +208,14 @@ jobs:
         run: make coverage
 
   performance:
-    # Compare source revisions on one runner. Absolute benchmark values vary
-    # across GitHub hosts and must not be treated as capacity guarantees.
-    # beta is the release candidate; main is a beta-only merge whose source
-    # has already been compared before promotion.
-    if: github.ref == 'refs/heads/beta' || (github.event_name == 'pull_request' && github.head_ref != 'beta')
+    name: performance
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'performance'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -102,6 +223,8 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
@@ -110,17 +233,15 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PUSH_BEFORE: ${{ github.event.before }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PERFORMANCE_BASELINE: ${{ inputs.performance_baseline }}
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             baseline="${PR_BASE_SHA}"
           else
-            baseline="${PUSH_BEFORE}"
-          fi
-          if [[ -z "${baseline}" || "${baseline}" =~ ^0+$ ]]; then
-            baseline="$(git rev-parse HEAD^)"
+            git fetch --force origin "${PERFORMANCE_BASELINE}"
+            baseline="$(git rev-parse FETCH_HEAD)"
           fi
           echo "sha=${baseline}" >> "${GITHUB_OUTPUT}"
       - name: Check out comparison baseline
@@ -163,9 +284,14 @@ jobs:
             -require BenchmarkProviderEndToEndRelayFanout/receivers_16
 
   docker:
-    # Keep the container contract on every feature PR and beta candidate. The
-    # beta-only main train makes a second identical image/coverage run wasteful.
-    if: github.ref == 'refs/heads/beta' || (github.event_name == 'pull_request' && github.head_ref != 'beta')
+    name: docker
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'docker'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -179,7 +305,14 @@ jobs:
           docker run --rm --env COVERAGE_THRESHOLD=90 crdt-ci:ci
 
   golangci:
-    if: github.event_name != 'pull_request' || github.head_ref != 'beta'
+    name: golangci
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'golangci'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -188,8 +321,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The beta lint policy compares against origin/main. Fetching all
-          # branches keeps that base available for push and PR validation.
+          # The candidate lint policy compares against origin/main.
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -200,11 +332,18 @@ jobs:
           version: v2.11
 
   prerelease-tag:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
-    needs: [test, staticcheck, coverage, docker, golangci]
+    # Full checks are required by preprod branch protection. Tag only the
+    # freshly merged and still-current preprod candidate; no duplicate test
+    # run is needed after its source tree has already been validated.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'beta'
     runs-on: ubuntu-latest
     concurrency:
-      group: beta-prerelease-tag
+      group: preprod-prerelease-tag
       cancel-in-progress: false
     permissions:
       contents: write
@@ -212,15 +351,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
       - name: Create pre-release tag
         id: tag
         shell: bash
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin
-          git fetch --force origin refs/heads/beta:refs/remotes/origin/beta
-          if [[ "$(git rev-parse origin/beta)" != "${GITHUB_SHA}" ]]; then
-            echo "Skipping stale beta run for ${GITHUB_SHA}; beta now points to $(git rev-parse origin/beta)"
+          git fetch --force origin refs/heads/preprod:refs/remotes/origin/preprod
+          if [[ "$(git rev-parse origin/preprod)" != "${CANDIDATE_SHA}" ]]; then
+            echo "Skipping stale preprod merge ${CANDIDATE_SHA}; preprod now points to $(git rev-parse origin/preprod)"
             echo "tag=skipped-stale" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
@@ -240,7 +382,7 @@ jobs:
           prefix="v${major}.${minor}.$((10#${patch} + 1))-beta."
 
           while IFS= read -r existing_tag; do
-            if [[ "$(git rev-list -n 1 "${existing_tag}")" == "${GITHUB_SHA}" ]]; then
+            if [[ "$(git rev-list -n 1 "${existing_tag}")" == "${CANDIDATE_SHA}" ]]; then
               echo "tag=${existing_tag}" >> "${GITHUB_OUTPUT}"
               echo "Pre-release tag already exists: ${existing_tag}"
               exit 0
@@ -258,81 +400,8 @@ jobs:
           tag="${prefix}$((max + 1))"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag --annotate "${tag}" --message "Pre-release ${tag}"
+          git tag --annotate "${tag}" "${CANDIDATE_SHA}" --message "Pre-release ${tag}"
           git push origin "${tag}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report pre-release tag
         run: 'echo "Pre-release tag result: ${{ steps.tag.outputs.tag }}"'
-
-  release-tag:
-    # This one bootstrap PR installs the beta-only main gate directly, so it
-    # must not consume a stable release version before the gate is active.
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      !contains(github.event.head_commit.message, 'ci: bootstrap beta-only main release train')
-    # Docker validation is complete on the promoted beta source. Keep the
-    # main release fence on the checks that still run for its merge commit.
-    needs: [test, staticcheck, coverage, golangci]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: main-release-tag
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Create release tag
-        id: tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --force --tags origin
-          git fetch --force origin refs/heads/main:refs/remotes/origin/main
-          if [[ "$(git rev-parse origin/main)" != "${GITHUB_SHA}" ]]; then
-            echo "Skipping stale main run for ${GITHUB_SHA}; main now points to $(git rev-parse origin/main)"
-            echo "tag=skipped-stale" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
-          if [[ -z "${stable_tag}" ]]; then
-            echo "No stable vMAJOR.MINOR.PATCH tag found" >&2
-            exit 1
-          fi
-
-          version="${stable_tag#v}"
-          IFS=. read -r major minor patch <<< "${version}"
-          if [[ ! "${patch}" =~ ^[0-9]+$ ]]; then
-            echo "Invalid stable tag: ${stable_tag}" >&2
-            exit 1
-          fi
-          tag="v${major}.${minor}.$((10#${patch} + 1))"
-
-          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
-            tagged_commit="$(git rev-list -n 1 "${tag}")"
-            if [[ "${tagged_commit}" == "${GITHUB_SHA}" ]]; then
-              echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-              echo "Release tag already exists for this commit: ${tag}"
-              exit 0
-            fi
-            echo "Refusing to replace ${tag}, which points to ${tagged_commit}" >&2
-            exit 1
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag --annotate "${tag}" --message "Release ${tag}"
-          git push origin "${tag}"
-          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "GitHub Release already exists for ${tag}"
-          else
-            gh release create "${tag}" --repo "${GITHUB_REPOSITORY}" --verify-tag --generate-notes --title "${tag}"
-          fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-      - name: Report release tag
-        run: 'echo "Release tag result: ${{ steps.tag.outputs.tag }}"'

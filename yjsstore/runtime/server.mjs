@@ -43,6 +43,9 @@ export async function loadConfig(environment = process.env) {
     maxSnapshotBytes: boundedEnvironmentInteger(environment.YJS_STORE_MAX_SNAPSHOT_BYTES ?? `${16 << 20}`, 1, maximumSnapshotBytes, "YJS_STORE_MAX_SNAPSHOT_BYTES"),
     maxMergeUpdates: boundedEnvironmentInteger(environment.YJS_STORE_MAX_MERGE_UPDATES ?? "256", 1, maximumMergeUpdates, "YJS_STORE_MAX_MERGE_UPDATES"),
   };
+  if (!isLoopbackHost(config.host)) {
+    throw new Error("YJS_STORE_HOST must be the literal loopback address 127.0.0.1 or ::1");
+  }
   if (config.maxSnapshotBytes < config.maxUpdateBytes) {
     throw new Error("YJS_STORE_MAX_SNAPSHOT_BYTES must cover one update");
   }
@@ -361,6 +364,10 @@ function validToken(value) {
   return typeof value === "string" && /^[\x21-\x7e]{32,}$/.test(value);
 }
 
+function isLoopbackHost(value) {
+  return value === "127.0.0.1" || value === "::1";
+}
+
 function documentKey(document) {
   return createHash("sha256").update(`${document.tenant}\u0000${document.room}\u0000${document.epoch}\u0000${document.schema}\u0000${document.format}`).digest("hex");
 }
@@ -505,7 +512,7 @@ function validateConfig(config) {
     !Number.isInteger(config.maxSnapshotBytes) || config.maxSnapshotBytes < config.maxUpdateBytes || config.maxSnapshotBytes > maximumSnapshotBytes ||
     !Number.isInteger(config.maxMergeUpdates) || config.maxMergeUpdates < 1 || config.maxMergeUpdates > maximumMergeUpdates ||
     !Number.isInteger(config.maxRequestBytes) || config.maxRequestBytes < config.maxUpdateBytes || config.maxRequestBytes > maximumRequestBytes ||
-    typeof config.host !== "string" || !Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
+    !isLoopbackHost(config.host) || !Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error("invalid Yjs store configuration");
   }
 }

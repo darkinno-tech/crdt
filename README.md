@@ -73,6 +73,8 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Goal | Read or run |
 | --- | --- |
 | Learn the basic APIs | [Getting started](docs/getting-started.md) and [runnable examples](examples) |
+| Use named shared Map/Array objects without CRDT plumbing | [Shared-document guide](docs/integration/shared-document.md) and `go run ./examples/shared-document` |
+| Choose a CRDT without hand-copying protocol IDs | [Intent-first setup](docs/integration/intent-first-setup.md) and `go run ./cmd/crdt-profile -format json` |
 | Build a complete client flow | [End-to-end integration](docs/integration/overview.md) |
 | Survive local restarts safely | [Local checkpoint Store references](docs/integration/local-checkpoint.md) and `go run ./examples/persistent-replica` |
 | Add replay and reconnect | [Durable relay reference](docs/integration/durable-provider.md) |
@@ -106,6 +108,7 @@ The `durable` package intentionally persists a relay operation log and replay cu
 | Package | Purpose |
 | --- | --- |
 | `counter`, `set`, `register` | Counter, set, and register CRDTs. |
+| `shared` | High-level named Map/Array facade over stable document-tree-v1 frames. |
 | `lww`, `tree`, `text`, `list`, `xml`, `richtext`, `documenttree` | HLC-backed and ordered collaborative structures. |
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
@@ -122,8 +125,8 @@ Run focused checks while changing one package:
 ```sh
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 ./persistence
 go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
 ```
 
@@ -150,7 +153,7 @@ For host wiring of layered configuration, structured error codes, and bounded du
 
 ## Contributing and releases
 
-Contributions should include focused tests, preserve canonical encoding, bound untrusted input before allocation or mutation, and update the closest relevant documentation. Review [CONTRIBUTING.md](CONTRIBUTING.md); keep beta changes on the reviewed beta-to-main release path and do not manually move published tags.
+Contributions should include focused tests, preserve canonical encoding, bound untrusted input before allocation or mutation, and update the closest relevant documentation. Review [CONTRIBUTING.md](CONTRIBUTING.md); keep beta changes on the reviewed beta-to-preprod-to-main release path and do not manually move published tags.
 
 ## License
 

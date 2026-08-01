@@ -138,7 +138,7 @@ Run the focused checks:
 ```sh
 go test ./list ./xml ./text -count=1
 go test -race ./list ./xml ./text -count=1
-go test -run=^$ -fuzz=FuzzRGAUnmarshal -fuzztime=10s -parallel=1 ./list
-go test -run=^$ -fuzz=FuzzParseDocument -fuzztime=10s -parallel=1 ./xml
+go test -run=^$ -fuzz=FuzzRGAUnmarshal -fuzztime=250000x -parallel=1 ./list
+go test -run=^$ -fuzz=FuzzParseDocument -fuzztime=250000x -parallel=1 ./xml
 go test -run='^$' -bench='BenchmarkRGAAppendIndexedList|BenchmarkRGAValuesTenThousand' -benchmem ./list
 ```

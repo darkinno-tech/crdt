@@ -1,6 +1,10 @@
 name: Release
 
 on:
+  pull_request:
+    branches:
+      - main
+    types: [closed]
   push:
     tags:
       - "v*"
@@ -15,6 +19,76 @@ permissions:
   contents: read
 
 jobs:
+  create-stable-tag:
+    # main can only accept the protected preprod branch. Its source tree has
+    # already passed the full beta -> preprod gate, so promotion tags without
+    # launching another test suite.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'preprod'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: main-release-tag
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - name: Create stable tag
+        id: tag
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          git fetch --force origin refs/heads/main:refs/remotes/origin/main
+          if [[ "$(git rev-parse origin/main)" != "${CANDIDATE_SHA}" ]]; then
+            echo "Skipping stale main merge ${CANDIDATE_SHA}; main now points to $(git rev-parse origin/main)"
+            echo "tag=skipped-stale" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
+          if [[ -z "${stable_tag}" ]]; then
+            echo "No stable vMAJOR.MINOR.PATCH tag found" >&2
+            exit 1
+          fi
+
+          version="${stable_tag#v}"
+          IFS=. read -r major minor patch <<< "${version}"
+          if [[ ! "${patch}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid stable tag: ${stable_tag}" >&2
+            exit 1
+          fi
+          tag="v${major}.${minor}.$((10#${patch} + 1))"
+
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "${tag}")"
+            if [[ "${tagged_commit}" == "${CANDIDATE_SHA}" ]]; then
+              echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+              echo "Release tag already exists for this commit: ${tag}"
+              exit 0
+            fi
+            echo "Refusing to replace ${tag}, which points to ${tagged_commit}" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "${tag}" "${CANDIDATE_SHA}" --message "Release ${tag}"
+          git push origin "${tag}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+      - name: Report stable tag
+        run: 'echo "Stable tag result: ${{ steps.tag.outputs.tag }}"'
+
   publish-notes:
     if: >-
       github.event_name == 'workflow_dispatch' ||

@@ -3,6 +3,7 @@ name: Release Train
 on:
   pull_request:
     branches:
+      - preprod
       - main
 
 permissions:
@@ -11,11 +12,11 @@ permissions:
 jobs:
   beta-only:
     name: beta-only
+    if: github.event.pull_request.base.ref == 'preprod'
     runs-on: ubuntu-latest
     steps:
       - name: Require the repository beta branch
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
@@ -25,13 +26,24 @@ jobs:
           if [[ "${HEAD_REPOSITORY}" == "${REPOSITORY}" && "${HEAD_REF}" == "beta" ]]; then
             exit 0
           fi
+          echo "preprod accepts release-candidate PRs from ${REPOSITORY}:beta only; received ${HEAD_REPOSITORY}:${HEAD_REF}" >&2
+          exit 1
 
-          # PR #22 installs this gate. It must run green once so that the
-          # status can become required immediately after that PR merges.
-          if [[ "${PR_NUMBER}" == "22" && "${HEAD_REPOSITORY}" == "${REPOSITORY}" ]]; then
-            echo "Allowing the one-time release-train bootstrap PR #22"
+  preprod-only:
+    name: preprod-only
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the repository preprod branch
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${HEAD_REPOSITORY}" == "${REPOSITORY}" && "${HEAD_REF}" == "preprod" ]]; then
             exit 0
           fi
-
-          echo "main accepts release PRs from ${REPOSITORY}:beta only; received ${HEAD_REPOSITORY}:${HEAD_REF}" >&2
+          echo "main accepts release PRs from ${REPOSITORY}:preprod only; received ${HEAD_REPOSITORY}:${HEAD_REF}" >&2
           exit 1

@@ -60,10 +60,21 @@ encryption or a defense against an attacker that can already write the data
 directory. Use encrypted storage and OS/container isolation when that threat
 exists.
 
-The sidecar is deliberately not a public service: it has one bearer token,
-adds no CORS policy, and should bind to loopback. A non-loopback deployment
-requires TLS/mTLS, network authorization, rate controls, secret rotation, and
-an application-owned service boundary. Do not expose its token to browsers.
+The bundled Node runtime is deliberately not a public service: it has one
+bearer token, adds no CORS policy, and accepts only the literal loopback
+listeners `127.0.0.1` and `::1`. A remote deployment needs a separately
+maintained `YJSStore` implementation with TLS/mTLS, network authorization,
+rate controls, secret rotation, and an application-owned service boundary. Do
+not expose its token to browsers. The Go client also rejects every HTTP
+redirect: its configured endpoint is a bearer-token trust boundary, not a
+service-discovery URL.
+
+Run exactly one bundled runtime process for each data directory. Its keyed
+lock serializes requests within that process; independent processes sharing a
+directory can otherwise each materialize a valid but stale snapshot and lose a
+concurrent writer through last-rename-wins replacement. For high availability,
+partition each document to one writer or supply a durable store implementation
+with cross-process serialization.
 
 ## Mount a store-backed room
 
@@ -120,6 +131,11 @@ the sidecar. It sends the durable state vector as sync Step 1 when that
 connection starts; on a client Step 1 it sends the sidecar's diff as Step 2.
 A client Step 2 or update is durably applied before being fanned out. Awareness
 stays in the Go room and remains ephemeral.
+
+One store-backed `YJSDocument` maps to exactly one configured `YJSRoom` in a
+handler. Construction rejects a second room with the same tenant, room, epoch,
+schema, and format because two live peer sets could otherwise persist to one
+document while failing to fan out each other's updates in real time.
 
 `YJSStoreFormatV1` is the compatible choice for the standard y-websocket
 provider. V2 needs an explicitly negotiated provider/adapter that emits V2

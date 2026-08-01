@@ -27,6 +27,18 @@ func NewSessionBuilder(groupID, schemaID string, epoch uint64, protocol Protocol
 	return NewSessionBuilderFromManifest(manifest, policy)
 }
 
+// NewSessionBuilderForFrameType creates a builder from one canonical
+// registered frame type, without making callers repeat its state ID, delta ID,
+// and semantics version. Applications must still authenticate the resulting
+// exact manifest before a transport accepts frames.
+func NewSessionBuilderForFrameType(groupID, schemaID string, epoch uint64, frameType crdt.FrameType, codecID string, policy crdt.ProtocolPolicy) (SessionBuilder, error) {
+	manifest, err := NewManifestForFrameType(groupID, schemaID, epoch, frameType, codecID, policy)
+	if err != nil {
+		return SessionBuilder{}, err
+	}
+	return NewSessionBuilderFromManifest(manifest, policy)
+}
+
 // NewSessionBuilderFromManifest binds an already authenticated manifest to
 // policy. It rejects a manifest that is structurally invalid or names an
 // unknown protocol pair.
