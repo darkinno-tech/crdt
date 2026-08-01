@@ -180,7 +180,14 @@ func TestXMLValidationAndParsingBoundaries(t *testing.T) {
 			t.Fatalf("validName(%q) = %t, want %t", name, got, valid)
 		}
 	}
-	for value, valid := range map[string]bool{"text\tline": true, "bad\x00": false, string([]byte{0xff}): false} {
+	for value, valid := range map[string]bool{
+		"text\tline":                     true,
+		"bad\x00":                        false,
+		string([]byte{0xff}):             false,
+		string(rune(0xfffe)):             false,
+		string(rune(0xffff)):             false,
+		string([]byte{0xed, 0xa0, 0x80}): false,
+	} {
 		if got := validXMLString(value); got != valid {
 			t.Fatalf("validXMLString(%q) = %t, want %t", value, got, valid)
 		}
@@ -255,7 +262,13 @@ func TestXMLValidationAndParsingBoundaries(t *testing.T) {
 	if _, err := ParseDocument([]byte(tooDeep)); !errors.Is(err, ErrInvalidDocument) {
 		t.Fatalf("deep document = %v", err)
 	}
-	for _, document := range []string{" <root/>", "<root/><!-- trailing -->", "<?xml version=\"1.0\"?>"} {
+	for _, document := range []string{
+		" <root/>",
+		"<root/><!-- trailing -->",
+		"<root/>\u00a0",
+		"<root/>\u2003",
+		"<?xml version=\"1.0\"?>",
+	} {
 		if _, err := ParseDocument([]byte(document)); !errors.Is(err, ErrInvalidDocument) {
 			t.Fatalf("ParseDocument(%q) = %v", document, err)
 		}

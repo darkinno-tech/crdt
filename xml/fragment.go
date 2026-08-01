@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/DarkInno/crdt"
@@ -246,7 +245,7 @@ func ParseDocument(data []byte) (Node, error) {
 			if err != nil {
 				return Node{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
 			}
-			if text, ok := token.(stdxml.CharData); ok && strings.TrimSpace(string(text)) == "" {
+			if text, ok := token.(stdxml.CharData); ok && xmlWhitespace(text) {
 				continue
 			}
 			return Node{}, ErrInvalidDocument
@@ -417,7 +416,23 @@ func validXMLString(value string) bool {
 		return false
 	}
 	for _, runeValue := range value {
-		if runeValue == 0 || (runeValue < 0x20 && runeValue != '\t' && runeValue != '\n' && runeValue != '\r') {
+		if !validXMLRune(runeValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func validXMLRune(value rune) bool {
+	return value == '\t' || value == '\n' || value == '\r' ||
+		(value >= 0x20 && value <= 0xd7ff) ||
+		(value >= 0xe000 && value <= 0xfffd) ||
+		(value >= 0x10000 && value <= 0x10ffff)
+}
+
+func xmlWhitespace(value []byte) bool {
+	for _, byteValue := range value {
+		if byteValue != ' ' && byteValue != '\t' && byteValue != '\n' && byteValue != '\r' {
 			return false
 		}
 	}
