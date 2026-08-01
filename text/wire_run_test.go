@@ -157,6 +157,26 @@ func TestRGARunFrameV2EncodersPreserveCanonicalPayloadAndBounds(t *testing.T) {
 	}
 }
 
+func TestRGARunOuterFrameV2SmallDeltaMatchesConversion(t *testing.T) {
+	source := mustRGA(t, "source")
+	delta := mustInsertRGA(t, source, 0, "x")
+	v1, err := delta.MarshalRunBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := frame.ConvertFrameV1ToV2(v1, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := delta.MarshalRunFrameV2()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("direct small outer-v2 delta changed the canonical frame")
+	}
+}
+
 func TestRGAOuterFrameV2MutatorsPreflightBeforeMutation(t *testing.T) {
 	value := mustRGA(t, "source")
 	tooSmall := frame.DefaultLimits()

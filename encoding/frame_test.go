@@ -106,6 +106,53 @@ func TestMarshalFrameWithPayloadAndLimitsHonorsWholeFrameBudget(t *testing.T) {
 	}
 }
 
+func TestMarshalFrameV2WithPayloadMatchesFrameAndPreflightsRawBudget(t *testing.T) {
+	t.Parallel()
+	for _, payload := range [][]byte{
+		[]byte("state"),
+		[]byte(strings.Repeat("same author and same value; ", 64)),
+	} {
+		want, err := MarshalFrameV2(Frame{TypeID: 1, CodecID: "example.com/string/v1", Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := MarshalFrameV2WithPayload(1, "example.com/string/v1", len(payload), func(destination []byte) error {
+			copy(destination, payload)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("MarshalFrameV2WithPayload() error = %v", err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("MarshalFrameV2WithPayload() = %x, want %x", got, want)
+		}
+	}
+
+	writerErr := errors.New("writer failed")
+	if _, err := MarshalFrameV2WithPayload(1, "", 1, func([]byte) error { return writerErr }); !errors.Is(err, writerErr) {
+		t.Fatalf("writer error = %v, want %v", err, writerErr)
+	}
+	if _, err := MarshalFrameV2WithPayload(1, "", 1, nil); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("nil writer error = %v, want %v", err, ErrInvalidFrame)
+	}
+
+	called := false
+	limits := DefaultLimits()
+	limits.MaxFrameBytes = 1
+	if _, err := MarshalFrameV2WithPayloadAndLimits(1, "", len("state"), limits, func([]byte) error {
+		called = true
+		return nil
+	}); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("whole-frame limit error = %v, want %v", err, ErrFrameLimit)
+	}
+	if called {
+		t.Fatal("raw v2 writer was called before the final-frame budget was rejected")
+	}
+	if _, err := marshalFrameV2RawWithPayload(1, "", -1, DefaultLimits(), func([]byte) error { return nil }); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("negative raw payload length error = %v, want %v", err, ErrFrameLimit)
+	}
+}
+
 func TestFrameRejectsLimitsAndMalformedBytes(t *testing.T) {
 	t.Parallel()
 	encoded, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("x")})
