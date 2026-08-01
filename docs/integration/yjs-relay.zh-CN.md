@@ -25,7 +25,10 @@ handler 接受标准 `y-websocket` 二进制消息：
 ## 浏览器原生路径：不需要 Go/Wasm 或 manifest 协商
 
 当一个文档明确选择 Yjs 作为协作契约时，浏览器直接使用标准 Yjs client 和对应编辑器绑定即可，
-无需导入本仓库的 TypeScript client、Go/Wasm runtime、frame decoder 或 `replica.Manifest`。
+不需要 Go/Wasm runtime、frame decoder 或 `replica.Manifest`。可以直接使用维护中的上游
+binding，也可以使用可选的原生
+[`@darkinno/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md)；后者仍直接处理
+Yjs update 与 y-protocols awareness，并不混入本仓库的 Go 或 `native-ts-v1` 协议。
 
 ```ts
 import * as Y from "yjs";
@@ -42,6 +45,10 @@ const text = document.getText("shared");
 // 按编辑器选择维护中的 adapter，例如 y-prosemirror、y-quill，
 // 或产品自有的 schema-preserving binding。
 ```
+
+若需要带资源上限的 CodeMirror plain-text 增量表面，可将可选原生 binding 绑定到同一个
+`document` 与 `Y.Text`，但不能为同一文档配置第二个传输 owner。其 limit、cursor 模型和富文本
+边界见 [原生编辑器 binding 指南](yjs-native-editor-bindings.md)。
 
 将 `YJSHandler` 挂到 `/yjs/` 后，该 client 即连接 `/yjs/notes`，无需额外 adapter
 协议。浏览器鉴权应使用同源（或正确 scope）的 Secure、HttpOnly session cookie。浏览器

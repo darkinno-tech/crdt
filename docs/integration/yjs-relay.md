@@ -31,9 +31,12 @@ valid.
 ## Native browser path: no Go/Wasm or manifest negotiation
 
 For a document that chooses Yjs as its collaboration contract, use the
-standard Yjs client and editor binding directly. The browser does not import
-this module's TypeScript client, Go/Wasm runtime, frame decoder, or
-`replica.Manifest`.
+standard Yjs client and an editor binding that works on that same `Y.Doc`.
+The browser does not need a Go/Wasm runtime, frame decoder, or
+`replica.Manifest`. It may use a maintained upstream binding directly, or the
+optional native [`@darkinno/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md),
+which still operates on Yjs updates and y-protocols awareness rather than the
+repository's Go or `native-ts-v1` protocols.
 
 ```ts
 import * as Y from "yjs";
@@ -50,6 +53,11 @@ const text = document.getText("shared");
 // Bind `text` with the maintained adapter for the selected editor, for example
 // y-prosemirror, y-quill, or a product-owned schema-preserving binding.
 ```
+
+For a bounded incremental CodeMirror plain-text surface, use the optional
+native binding with this same `document` and `Y.Text`; do not attach a second
+transport owner to the document. Its limits, cursor model, and rich-text
+boundary are documented in the [native editor binding guide](yjs-native-editor-bindings.md).
 
 Mounting `YJSHandler` below `/yjs/` makes this connect to `/yjs/notes`; no
 adapter protocol is required. Use a same-origin (or appropriately scoped)

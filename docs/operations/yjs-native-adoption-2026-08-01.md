@@ -51,7 +51,10 @@ const document = new Y.Doc();
 const provider = new WebsocketProvider("wss://collab.example/yjs", "notes", document);
 ```
 
-This is intentionally not wrapped in the repository's TypeScript CRDT client.
+This remains a native Yjs document. For CodeMirror plain text, the optional
+[`@darkinno/crdt-client/yjs` binding](../integration/yjs-native-editor-bindings.md)
+adds bounded incremental projection without introducing Go frames, Go/Wasm, or
+`native-ts-v1`; other editors can use their maintained Yjs binding directly.
 The first production requirement is a same-origin Secure, HttpOnly session
 cookie. Browser WebSocket APIs do not allow arbitrary authorization headers;
 do not put a long-lived bearer credential in the provider query string. The

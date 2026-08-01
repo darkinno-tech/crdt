@@ -33,10 +33,12 @@ const document = new Y.Doc();
 const provider = new WebsocketProvider("wss://collab.example/yjs", "notes", document);
 ```
 
-这个对象不应再套本仓库 TypeScript CRDT client。生产第一要求是同源的 Secure、HttpOnly session
-cookie：浏览器 WebSocket API 不支持任意 `Authorization` header，不要把长期 bearer token 放入
-provider query string。应用仍必须预配置 room，在网关绑定 user/tenant/document 权限，并在撤权时
-关闭已有连接。
+这仍是原生 Yjs document。CodeMirror plain-text 可选用
+[`@darkinno/crdt-client/yjs` binding](../integration/yjs-native-editor-bindings.md) 获得有界增量投影，
+但不会引入 Go frame、Go/Wasm 或 `native-ts-v1`；其他编辑器直接使用其维护中的 Yjs binding。
+生产第一要求是同源的 Secure、HttpOnly session cookie：浏览器 WebSocket API 不支持任意
+`Authorization` header，不要把长期 bearer token 放入 provider query string。应用仍必须预配置
+room，在网关绑定 user/tenant/document 权限，并在撤权时关闭已有连接。
 
 `YJSStore` 不面向浏览器；其 bearer token 只能用于受信 Go 到 loopback sidecar。V1/V2 必须按
 耐久文档固定；schema label 只用于 identity fencing，不能声称已校验任意 ProseMirror、Quill 或
