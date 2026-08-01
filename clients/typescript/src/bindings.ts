@@ -690,6 +690,18 @@ export function bindQuillRichText(
   return new QuillRichTextBinding(document, quill, options);
 }
 
+// Kept on the editor-binding entrypoint so consumers do not need BlockNote as
+// a production dependency merely to import the structural adapter contract.
+export {
+  bindBlockNoteRichText,
+  BlockNoteRichTextBinding,
+  BLOCKNOTE_RICH_TEXT_SCHEMA_ID,
+} from "./blocknote.js";
+export type {
+  BindBlockNoteRichTextOptions,
+  BlockNoteRichTextPort,
+} from "./blocknote.js";
+
 function quillDeltaToDocumentOperations(delta: QuillRichTextDelta, codec: RichTextAttributeCodec): RichTextEditorOperation[] {
   if (!isRecord(delta) || (delta.ops !== undefined && !Array.isArray(delta.ops))) {
     throw new CRDTRuntimeError("unsupported_rich_text");

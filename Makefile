@@ -1,16 +1,19 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
-# A single fuzz worker avoids scheduler starvation in shared CI. Give it enough
-# time to finish corpus minimization and a bounded large-frame decode before
-# the fuzz context expires; 10s intermittently ended as context deadline.
-FUZZ_TIME ?= 20s
+# A single fuzz worker avoids scheduler starvation in shared CI. A bounded 25s
+# window leaves time for corpus minimization and clean coordinator shutdown;
+# 20s intermittently ended as context deadline.
+FUZZ_TIME ?= 25s
 FUZZ_PARALLEL ?= 1
-# XML starts from a much larger parser corpus and can need extra time for Go's
-# fuzz coordinator to quiesce after the requested window. Keep this targeted
-# grace period separate so ordinary decoder fuzzing remains fast.
+# XML and document-tree fuzzers start from larger valid-state corpora and can
+# need extra time for Go's fuzz coordinator to quiesce after the requested
+# window. Keep this targeted grace period separate so ordinary decoder fuzzing
+# remains fast.
 FUZZ_XML_TIME ?= 45s
+FUZZ_DOCUMENTTREE_TIME ?= 30s
+FUZZ_ENCODING_TIME ?= 30s
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
 NPM ?= npm
@@ -60,7 +63,7 @@ vet:
 	go vet ./...
 
 fuzz:
-	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_XML_TIME="$(FUZZ_XML_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
+	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_XML_TIME="$(FUZZ_XML_TIME)" FUZZ_DOCUMENTTREE_TIME="$(FUZZ_DOCUMENTTREE_TIME)" FUZZ_ENCODING_TIME="$(FUZZ_ENCODING_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
 
 # List the release fuzz coverage derived from the current package graph. It is
 # intentionally separate from fuzz-smoke, whose small curated list documents
@@ -75,7 +78,7 @@ fuzz-smoke:
 	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./awareness
-	go test -run=^$$ -fuzz=FuzzDocumentTreeWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./documenttree
+	go test -run=^$$ -fuzz=FuzzDocumentTreeWire -fuzztime=$(FUZZ_DOCUMENTTREE_TIME) -parallel=$(FUZZ_PARALLEL) ./documenttree
 	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
 	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./replica
 
@@ -84,6 +87,19 @@ coverage:
 
 benchmark:
 	go test -run='^$$' -bench=. -benchmem ./...
+
+# Level 1 interoperability needs the maintained Yjs engine. These targets are
+# separate from Go-only checks so library consumers do not need Node merely to
+# compile this module. They install the lockfile exactly, then exercise both
+# direct real-Yjs scenarios and the Go-to-sidecar HTTP contract.
+yjs-store-test:
+	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
+	$(NPM) --prefix yjsstore/runtime test
+	CRDT_YJS_STORE_NODE_INTEGRATION=1 go test -count=1 ./extensions -run '^TestYJSStoreNodeSidecarIntegration$$'
+
+yjs-store-benchmark:
+	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
+	$(NPM) --prefix yjsstore/runtime run bench
 
 # BENCHMARK_BASE must be a checkout of the commit to compare against. The
 # candidate and baseline run consecutively with one logical processor so their
@@ -129,6 +145,9 @@ typescript-browser-benchmark:
 
 typescript-bindings-benchmark:
 	$(NPM) --prefix clients/typescript run bench:bindings
+
+typescript-blocknote-benchmark:
+	$(NPM) --prefix clients/typescript run bench:blocknote
 
 wasm-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline

@@ -39,27 +39,44 @@ type YJSAuthorize func(Peer, string, YJSMessageKind) error
 // from publication.
 type YJSAuthorizeSubscription func(Peer, string) error
 
-// YJSRoomConfig configures one explicitly named, in-memory y-protocols room.
-// A room retains complete Yjs update messages only to bootstrap later live
-// peers. It cannot compact or validate Yjs document semantics; production
-// hosts must replace it with a Yjs-aware durable store before its bounded
-// history is exhausted.
+// YJSRoomConfig configures one explicitly named y-protocols room. Without
+// Store, a room retains complete opaque updates only to bootstrap later live
+// peers. With Store, it becomes a Level 1 Yjs room: the store owns semantic
+// update admission, state-vector recovery, and durable snapshots while this
+// handler remains responsible for client authentication and authorization.
 type YJSRoomConfig struct {
 	Name            string
 	MaxUpdateBytes  int
 	MaxHistoryBytes int
 	MaxUpdates      int
+	// MaxStateVectorBytes and MaxSyncBytes are required with Store. They bound
+	// the semantic handshake independently from one client-authored update.
+	MaxStateVectorBytes int
+	MaxSyncBytes        int
+	// Store is optional. When set, Document must be a valid immutable identity
+	// for this configured room, and MaxHistoryBytes/MaxUpdates are ignored: no
+	// opaque update history is retained in the Go process.
+	Store    YJSStore
+	Document YJSDocument
 }
 
 // YJSRoom is a bounded, opaque Yjs update cache and live subscriber set.
 // It is intentionally isolated from Group: y-protocols and this module's
 // framed CRDT protocols have incompatible state and recovery semantics.
 type YJSRoom struct {
-	name            string
-	maxUpdateBytes  int
-	maxHistoryBytes int
-	maxUpdates      int
+	name                string
+	maxUpdateBytes      int
+	maxHistoryBytes     int
+	maxUpdates          int
+	maxStateVectorBytes int
+	maxSyncBytes        int
+	store               YJSStore
+	document            YJSDocument
 
+	// storeMu makes a state-vector bootstrap atomic with respect to an Apply.
+	// It never holds mu while a sidecar call is in flight, except for the short
+	// peer-map mutation after the semantic state has been observed.
+	storeMu   sync.Mutex
 	mu        sync.Mutex
 	updates   [][]byte
 	hashes    map[[sha256.Size]byte]struct{}
@@ -78,18 +95,29 @@ type yjsAwarenessState struct {
 // room names and every retained-resource boundary must be selected by the
 // embedding application.
 func NewYJSRoom(config YJSRoomConfig) (*YJSRoom, error) {
-	if strings.TrimSpace(config.Name) != config.Name || config.Name == "" || strings.Contains(config.Name, "/") ||
-		config.MaxUpdateBytes <= 0 || config.MaxHistoryBytes < config.MaxUpdateBytes || config.MaxUpdates <= 0 {
+	if strings.TrimSpace(config.Name) != config.Name || config.Name == "" || strings.Contains(config.Name, "/") || config.MaxUpdateBytes <= 0 {
+		return nil, invalidConfig("extensions.new_yjs_room", ErrInvalidConfig)
+	}
+	if config.Store == nil && (config.MaxHistoryBytes < config.MaxUpdateBytes || config.MaxUpdates <= 0) {
+		return nil, invalidConfig("extensions.new_yjs_room", ErrInvalidConfig)
+	}
+	if config.Store != nil && (config.MaxStateVectorBytes <= 0 || config.MaxSyncBytes < config.MaxUpdateBytes ||
+		!validYJSStoreIdentifier(config.Document.Tenant) || !validYJSStoreIdentifier(config.Document.Room) || !validYJSStoreIdentifier(config.Document.Schema) ||
+		(config.Document.Format != YJSStoreFormatV1 && config.Document.Format != YJSStoreFormatV2)) {
 		return nil, invalidConfig("extensions.new_yjs_room", ErrInvalidConfig)
 	}
 	return &YJSRoom{
-		name:            config.Name,
-		maxUpdateBytes:  config.MaxUpdateBytes,
-		maxHistoryBytes: config.MaxHistoryBytes,
-		maxUpdates:      config.MaxUpdates,
-		peers:           make(map[*yjsSubscriber]Peer),
-		hashes:          make(map[[sha256.Size]byte]struct{}),
-		awareness:       make(map[uint64]yjsAwarenessState),
+		name:                config.Name,
+		maxUpdateBytes:      config.MaxUpdateBytes,
+		maxHistoryBytes:     config.MaxHistoryBytes,
+		maxUpdates:          config.MaxUpdates,
+		maxStateVectorBytes: config.MaxStateVectorBytes,
+		maxSyncBytes:        config.MaxSyncBytes,
+		store:               config.Store,
+		document:            config.Document,
+		peers:               make(map[*yjsSubscriber]Peer),
+		hashes:              make(map[[sha256.Size]byte]struct{}),
+		awareness:           make(map[uint64]yjsAwarenessState),
 	}, nil
 }
 
@@ -116,7 +144,10 @@ type YJSConfig struct {
 	MaxQueuedBytes        int
 	MaxAwarenessClients   int
 	HandshakeTimeout      time.Duration
-	WriteTimeout          time.Duration
+	// StoreTimeout bounds one sidecar Apply or Diff after a WebSocket is live.
+	// It is distinct from the initial WebSocket handshake timeout.
+	StoreTimeout time.Duration
+	WriteTimeout time.Duration
 }
 
 // YJSHandler serves y-websocket-compatible paths. Mount it below a prefix;
@@ -134,6 +165,7 @@ type YJSHandler struct {
 	maxQueuedBytes        int
 	maxAwarenessClients   int
 	handshakeTimeout      time.Duration
+	storeTimeout          time.Duration
 	writeTimeout          time.Duration
 }
 
@@ -147,13 +179,23 @@ func NewYJSHandler(config YJSConfig) (*YJSHandler, error) {
 	if err != nil || validateOriginPatterns(config.OriginPatterns) != nil {
 		return nil, invalidConfig("extensions.new_yjs_handler", ErrInvalidConfig)
 	}
+	storeTimeout := config.StoreTimeout
+	if storeTimeout == 0 {
+		storeTimeout = defaultHandshakeTimeout
+	}
+	if storeTimeout <= 0 {
+		return nil, invalidConfig("extensions.new_yjs_handler", ErrInvalidConfig)
+	}
 	maxAwarenessClients := config.MaxAwarenessClients
 	if maxAwarenessClients == 0 {
 		maxAwarenessClients = 256
 	}
 	rooms := make(map[string]*YJSRoom, len(config.Rooms))
 	for _, room := range config.Rooms {
-		if room == nil || room.name == "" || room.maxUpdateBytes > limits.maxMessageBytes || room.maxHistoryBytes < room.maxUpdateBytes || room.maxUpdates <= 0 {
+		if room == nil || room.name == "" ||
+			(room.store == nil && room.maxUpdateBytes > limits.maxMessageBytes) ||
+			(room.store != nil && (room.maxUpdateBytes > limits.maxMessageBytes-maxYJSWireOverhead || room.maxStateVectorBytes > limits.maxMessageBytes-maxYJSWireOverhead || room.maxSyncBytes > limits.maxMessageBytes-maxYJSWireOverhead)) ||
+			(room.store == nil && (room.maxHistoryBytes < room.maxUpdateBytes || room.maxUpdates <= 0)) {
 			return nil, invalidConfig("extensions.new_yjs_handler", ErrInvalidConfig)
 		}
 		if _, exists := rooms[room.name]; exists {
@@ -172,6 +214,7 @@ func NewYJSHandler(config YJSConfig) (*YJSHandler, error) {
 		maxQueuedBytes:        limits.maxQueuedBytes,
 		maxAwarenessClients:   maxAwarenessClients,
 		handshakeTimeout:      limits.handshakeTimeout,
+		storeTimeout:          storeTimeout,
 		writeTimeout:          limits.writeTimeout,
 	}, nil
 }
@@ -211,13 +254,17 @@ func (handler *YJSHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 	}
 	conn.SetReadLimit(int64(handler.maxMessageBytes))
 	subscriber := newYJSSubscriber(conn, handler.maxQueuedMessages, handler.maxQueuedBytes, handler.writeTimeout)
-	bootstrap := room.addAndBootstrap(subscriber, peer)
+	handshakeContext, cancel := context.WithTimeout(request.Context(), handler.handshakeTimeout)
+	defer cancel()
+	bootstrap, err := room.bootstrap(handshakeContext, subscriber, peer)
+	if err != nil {
+		subscriber.close()
+		return
+	}
 	defer func() {
 		room.remove(subscriber, peer)
 		subscriber.close()
 	}()
-	handshakeContext, cancel := context.WithTimeout(request.Context(), handler.handshakeTimeout)
-	defer cancel()
 	for _, message := range bootstrap {
 		if err := conn.Write(handshakeContext, websocket.MessageBinary, message); err != nil {
 			return
@@ -259,7 +306,10 @@ func (handler *YJSHandler) readLoop(subscriber *yjsSubscriber, room *YJSRoom, pe
 		for _, message := range incoming {
 			switch message.kind {
 			case YJSUpdate:
-				if !room.appendUpdate(message.payload) {
+				storeContext, cancel := context.WithTimeout(subscriber.context, handler.storeTimeout)
+				accepted := room.appendUpdateContext(storeContext, message.payload)
+				cancel()
+				if !accepted {
 					return
 				}
 			case YJSAwareness:
@@ -273,6 +323,15 @@ func (handler *YJSHandler) readLoop(subscriber *yjsSubscriber, room *YJSRoom, pe
 					}
 				}
 			case yjsSyncStep1:
+				if room.store != nil {
+					storeContext, cancel := context.WithTimeout(subscriber.context, handler.storeTimeout)
+					accepted := room.replyDiff(storeContext, subscriber, message.payload)
+					cancel()
+					if !accepted {
+						return
+					}
+					continue
+				}
 				// The room already sends every retained opaque update at connection
 				// time. An empty Step 2 completes y-websocket's sync handshake.
 				if !subscriber.enqueue(marshalYJSSync(yjsWireSyncStep2, yjsEmptyUpdate)) {
@@ -300,6 +359,30 @@ func (room *YJSRoom) addAndBootstrap(subscriber *yjsSubscriber, peer Peer) [][]b
 	return bootstrap
 }
 
+// bootstrap adds one peer and returns its first protocol messages. Store-backed
+// rooms start the standard sync handshake with the durable state vector rather
+// than replaying an in-process opaque history.
+func (room *YJSRoom) bootstrap(ctx context.Context, subscriber *yjsSubscriber, peer Peer) ([][]byte, error) {
+	if room.store == nil {
+		return room.addAndBootstrap(subscriber, peer), nil
+	}
+	room.storeMu.Lock()
+	defer room.storeMu.Unlock()
+	vector, err := room.store.StateVector(ctx, room.document)
+	if err != nil || len(vector) == 0 || len(vector) > room.maxStateVectorBytes {
+		return nil, ErrYJSStoreUnavailable
+	}
+	room.mu.Lock()
+	room.peers[subscriber] = peer
+	bootstrap := make([][]byte, 0, len(room.awareness)+1)
+	bootstrap = append(bootstrap, marshalYJSSync(yjsWireSyncStep1, vector))
+	for clientID, state := range room.awareness {
+		bootstrap = append(bootstrap, marshalYJSAwareness([]yjsAwarenessEntry{{clientID: clientID, clock: state.clock, state: state.state}}))
+	}
+	room.mu.Unlock()
+	return bootstrap, nil
+}
+
 func (room *YJSRoom) remove(subscriber *yjsSubscriber, peer Peer) {
 	room.mu.Lock()
 	delete(room.peers, subscriber)
@@ -318,8 +401,25 @@ func (room *YJSRoom) remove(subscriber *yjsSubscriber, peer Peer) {
 }
 
 func (room *YJSRoom) appendUpdate(update []byte) bool {
+	return room.appendUpdateContext(context.Background(), update)
+}
+
+func (room *YJSRoom) appendUpdateContext(ctx context.Context, update []byte) bool {
 	if len(update) == 0 || len(update) > room.maxUpdateBytes {
 		return false
+	}
+	if room.store != nil {
+		room.storeMu.Lock()
+		result, err := room.store.Apply(ctx, room.document, update)
+		if err != nil {
+			room.storeMu.Unlock()
+			return false
+		}
+		if result.Applied {
+			room.broadcast(marshalYJSSync(yjsWireUpdate, update))
+		}
+		room.storeMu.Unlock()
+		return true
 	}
 	digest := sha256.Sum256(update)
 	room.mu.Lock()
@@ -339,6 +439,19 @@ func (room *YJSRoom) appendUpdate(update []byte) bool {
 	room.mu.Unlock()
 	room.broadcast(marshalYJSSync(yjsWireUpdate, copied))
 	return true
+}
+
+func (room *YJSRoom) replyDiff(ctx context.Context, subscriber *yjsSubscriber, remoteVector []byte) bool {
+	if room.store == nil || len(remoteVector) == 0 || len(remoteVector) > room.maxStateVectorBytes {
+		return false
+	}
+	room.storeMu.Lock()
+	defer room.storeMu.Unlock()
+	delta, err := room.store.Diff(ctx, room.document, remoteVector)
+	if err != nil || len(delta) == 0 || len(delta) > room.maxSyncBytes {
+		return false
+	}
+	return subscriber.enqueue(marshalYJSSync(yjsWireSyncStep2, delta))
 }
 
 func (room *YJSRoom) applyAwareness(peer Peer, incoming []yjsAwarenessEntry, maxClients int) bool {
@@ -454,8 +567,12 @@ func (subscriber *yjsSubscriber) close() {
 const (
 	// maxYJSMessageBytes keeps decoder conversions and retained room state
 	// bounded even when an embedding application supplies custom limits.
-	maxYJSMessageBytes              = 64 << 20
-	maxYJSAwarenessClients          = 1 << 16
+	maxYJSMessageBytes     = 64 << 20
+	maxYJSAwarenessClients = 1 << 16
+	// A sync message has a top-level type, sync type, and byte length varuint.
+	// Reserve the worst-case header so a configured semantic payload can always
+	// be queued and emitted within MaxMessageBytes.
+	maxYJSWireOverhead              = 3 * binary.MaxVarintLen64
 	yjsMessageSync           uint64 = 0
 	yjsMessageAwareness      uint64 = 1
 	yjsMessageAwarenessQuery uint64 = 3
@@ -505,7 +622,7 @@ func unmarshalYJSMessages(data []byte, maxMessageBytes, maxAwarenessClients int)
 			position = next
 			switch syncType {
 			case yjsWireSyncStep1:
-				messages = append(messages, yjsIncoming{kind: yjsSyncStep1})
+				messages = append(messages, yjsIncoming{kind: yjsSyncStep1, payload: append([]byte(nil), payload...)})
 			case yjsWireSyncStep2, yjsWireUpdate:
 				if len(payload) == 0 {
 					return nil, errInvalidWireMessage

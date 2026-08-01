@@ -185,11 +185,13 @@ func marshalRunBlocks(typeID uint64, blocks [][]runNode, tombIDs []Position, lim
 // the outer-v2 encoder. This avoids allocating and validating an intermediate
 // v1 envelope before compression, while retaining exactly the same payload.
 func marshalRunFrameV2Blocks(typeID uint64, blocks [][]runNode, tombIDs []Position, limits frame.DecoderLimits) ([]byte, error) {
-	payload, err := marshalRunPayload(blocks, tombIDs, limits)
+	payloadSize, err := runPayloadSizeWithTombstoneIDs(blocks, tombIDs, limits)
 	if err != nil {
 		return nil, err
 	}
-	return frame.MarshalFrameV2WithLimits(frame.Frame{TypeID: typeID, Payload: payload}, limits)
+	return frame.MarshalFrameV2WithPayloadAndLimits(typeID, "", payloadSize, limits, func(payload []byte) error {
+		return writeRunPayload(payload, blocks, tombIDs)
+	})
 }
 
 func marshalRunPayload(blocks [][]runNode, tombIDs []Position, limits frame.DecoderLimits) ([]byte, error) {

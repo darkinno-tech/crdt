@@ -5,8 +5,10 @@ import { join } from "node:path";
 import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
+import { BlockNoteEditor } from "@blocknote/core";
+
 import { decodeFrame } from "../dist/frame.js";
-import { bindCodeMirrorPlainText, bindQuillRichText, bindRGAPlainText } from "../dist/bindings.js";
+import { bindBlockNoteRichText, bindCodeMirrorPlainText, bindQuillRichText, bindRGAPlainText } from "../dist/bindings.js";
 import {
   CRDTRuntimeError,
   RICH_TEXT_PROTOCOL,
@@ -190,6 +192,52 @@ test("Quill rich-text binding exchanges actual Go Wasm rich-text frames without 
 
   const snapshot = aliceDocument.snapshot();
   const recovered = richTextRuntime.restore(snapshot);
+  assert.deepEqual(recovered.spans(), aliceDocument.spans());
+  assert.equal(recovered.close(), true);
+  assert.equal(alice.destroy(), true);
+  assert.equal(bob.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
+});
+
+test("BlockNote default text blocks exchange actual Go Wasm rich-text frames without a remote echo", () => {
+  const aliceDocument = richTextRuntime.create("blocknote-binding-alice");
+  const bobDocument = richTextRuntime.create("blocknote-binding-bob");
+  const aliceEditor = BlockNoteEditor.create({
+    initialContent: [{
+      type: "heading",
+      props: { level: 2, isToggleable: true },
+      content: [{ type: "text", text: "Release", styles: { bold: true } }],
+      children: [{ type: "checkListItem", props: { checked: true }, content: "Validate" }],
+    }],
+  });
+  const bobEditor = BlockNoteEditor.create();
+  const aliceFrames = [];
+  const bobFrames = [];
+  const alice = bindBlockNoteRichText(aliceDocument, aliceEditor, {
+    initialContent: "editor",
+    onLocalFrame: (frame) => aliceFrames.push(frame),
+  });
+  bobDocument.applyDelta(aliceFrames[0]);
+  const bob = bindBlockNoteRichText(bobDocument, bobEditor, {
+    initialContent: "document",
+    onLocalFrame: (frame) => bobFrames.push(frame),
+  });
+  assert.equal(bobEditor.document[0].type, "heading");
+  assert.equal(bobEditor.document[0].children[0].type, "checkListItem");
+  assert.equal(bobFrames.length, 0);
+
+  aliceEditor.updateBlock(aliceEditor.document[0], { content: "Release candidate" });
+  const edit = aliceFrames.at(-1);
+  assert.ok(edit instanceof Uint8Array);
+  assert.equal(decodeFrame(edit).typeID, RICH_TEXT_PROTOCOL.deltaTypeID);
+  bob.applyRemote(edit);
+  bob.applyRemote(edit); // duplicate delivery must stay idempotent at the editor boundary.
+  assert.equal(bobEditor.document[0].content[0].text, "Release candidate");
+  assert.equal(bobEditor.document[0].children[0].props.checked, true);
+  assert.equal(bobFrames.length, 0);
+
+  const recovered = richTextRuntime.restore(aliceDocument.snapshot());
   assert.deepEqual(recovered.spans(), aliceDocument.spans());
   assert.equal(recovered.close(), true);
   assert.equal(alice.destroy(), true);

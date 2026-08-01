@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self'" />
+    <title>Native Collections structured editor</title>
+  </head>
+  <body>
+    <main>
+      <h1>Structured editor with Native Collections</h1>
+      <p>This sample models metadata, not a rich-text body. Use the manifest-bound Wasm RGA rich-text path for body text and formatting.</p>
+      <form id="title-form">
+        <label>Title <input id="title" autocomplete="off" /></label>
+        <button>Save title</button>
+      </form>
+      <form id="label-form">
+        <label>Label <input id="label" autocomplete="off" /></label>
+        <button>Add label</button>
+      </form>
+      <ul id="labels"></ul>
+      <form id="section-form">
+        <label>Section <input id="section" autocomplete="off" /></label>
+        <button>Add section</button>
+      </form>
+      <ul id="outline"></ul>
+      <p>Revision events: <output id="revisions">0</output></p>
+      <p id="error" role="alert"></p>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

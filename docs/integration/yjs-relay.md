@@ -77,11 +77,13 @@ authorize Yjs document internals. A full history is rejected rather than
 silently evicted: eviction would make a reconnecting client appear synced
 while missing causal data.
 
-For production, connect the same authenticated room boundary to a Yjs-aware
-durable store that can validate/apply updates, create a merged snapshot/update,
-and retain a recovery cursor. Persisted update bytes, document lifecycle,
-subdocuments, access revocation, rate limits, TLS, backup/restore, and abuse
-protection remain host responsibilities.
+For Level 1 recovery, configure a room with the shipped Yjs-aware
+[`YJSStore`](yjs-store.md) capability. A store-backed room uses a durable state
+vector and semantic diff instead of this opaque history; it validates/applies
+the selected V1/V2 update encoding, creates a merged snapshot/update, and
+retains a recovery cursor. Persisted document lifecycle, subdocuments, access
+revocation, rate limits, TLS, backup/restore, and abuse protection remain host
+responsibilities.
 
 The Go [`awareness`](../protocol/awareness-v1.md) package is a different,
 authenticated Go-provider protocol. Do not mix its updates with Yjs awareness

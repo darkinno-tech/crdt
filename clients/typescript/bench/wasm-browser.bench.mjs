@@ -61,6 +61,44 @@ for (let sample = 0; sample < SAMPLES; sample += 1) {
   console.log(
     `sample=${sample + 1} retained_bytes=${stored.logBytes} append_ms=${persistedMs.toFixed(3)} append_ms_per_mutation=${(persistedMs / MUTATIONS).toFixed(4)} restore_ms=${recoveredMs.toFixed(3)}`,
   );
+
+  const hub = createLiveHub();
+  const left = await openRGAWasmBrowserDocument({
+    documentID: `live-bench-${sample}`,
+    replicaID: `live-left-${sample}`,
+    runtime,
+    persistence: new MemoryRGAWasmBrowserPersistence(),
+    liveTransport: hub.createTransport(),
+    persistenceLimits: {
+      compactAfterUpdates: MUTATIONS + 1,
+      compactAfterBytes: 32 << 20,
+      maxUpdates: MUTATIONS + 1,
+      maxBytes: 32 << 20,
+    },
+  });
+  const right = await openRGAWasmBrowserDocument({
+    documentID: `live-bench-${sample}`,
+    replicaID: `live-right-${sample}`,
+    runtime,
+    persistence: new MemoryRGAWasmBrowserPersistence(),
+    liveTransport: hub.createTransport(),
+  });
+  const liveStarted = performance.now();
+  for (let index = 0; index < MUTATIONS; index += 1) {
+    left.insert(index, String.fromCharCode(65 + (index % 26)));
+    await left.flush();
+  }
+  await waitFor(() => Array.from(right.text()).length === MUTATIONS);
+  await right.flush();
+  const liveMs = performance.now() - liveStarted;
+  if (left.pendingOutbox !== MUTATIONS || right.pendingOutbox !== 0) {
+    throw new Error("Wasm RGA live benchmark crossed the durable receipt boundary");
+  }
+  console.log(
+    `workload=live_tab sample=${sample + 1} mutations=${MUTATIONS} append_live_ms=${liveMs.toFixed(3)} append_live_ms_per_mutation=${(liveMs / MUTATIONS).toFixed(4)} sender_outbox=${left.pendingOutbox}`,
+  );
+  await left.close();
+  await right.close();
 }
 
 async function waitForRuntime() {
@@ -106,4 +144,35 @@ function unwrap(result) {
     throw new Error(`Wasm operation failed: ${result.error}`);
   }
   return result.value;
+}
+
+function createLiveHub() {
+  const receivers = new Map();
+  return {
+    createTransport() {
+      const source = Symbol("live-benchmark-tab");
+      return {
+        publish(encoded) {
+          const copy = encoded.slice();
+          queueMicrotask(() => {
+            for (const [target, receiver] of receivers) {
+              if (target !== source) receiver(copy.slice());
+            }
+          });
+        },
+        subscribe(receiver) {
+          receivers.set(source, receiver);
+          return () => receivers.delete(source);
+        },
+      };
+    },
+  };
+}
+
+async function waitFor(predicate) {
+  const deadline = performance.now() + 5_000;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error("Wasm RGA live benchmark delivery timed out");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }

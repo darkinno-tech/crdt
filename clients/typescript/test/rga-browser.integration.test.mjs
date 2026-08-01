@@ -61,6 +61,34 @@ test("Wasm RGA browser persistence restores a durable outbox, retries after rece
   await receiver.close();
 });
 
+test("Wasm RGA live multi-tab delivery keeps the durable outbox pending", async () => {
+  const hub = new LiveHub();
+  const left = await openRGAWasmBrowserDocument({
+    documentID: "live-rga-tabs",
+    replicaID: "alice-tab",
+    runtime,
+    persistence: new MemoryRGAWasmBrowserPersistence(),
+    liveTransport: hub.createTransport(),
+  });
+  const right = await openRGAWasmBrowserDocument({
+    documentID: "live-rga-tabs",
+    replicaID: "bob-tab",
+    runtime,
+    persistence: new MemoryRGAWasmBrowserPersistence(),
+    liveTransport: hub.createTransport(),
+  });
+
+  left.insert(0, "live across tabs");
+  await left.flush();
+  await waitFor(() => right.text() === "live across tabs");
+  await right.flush();
+
+  assert.equal(left.pendingOutbox, 1);
+  assert.equal(right.pendingOutbox, 0);
+  await left.close();
+  await right.close();
+});
+
 test("three offline Wasm RGA browser actors converge after reverse duplicate delivery and recovery", async () => {
   const replicaIDs = ["alice", "bob", "carol"];
   const persistences = replicaIDs.map(() => new MemoryRGAWasmBrowserPersistence());
@@ -128,6 +156,37 @@ class FailSecondRGAAppendPersistence {
 
   async compact(_key, snapshot) {
     this.compactedSnapshot = snapshot;
+  }
+}
+
+class LiveHub {
+  #receivers = new Map();
+
+  createTransport() {
+    const hub = this;
+    const source = Symbol("live-tab");
+    return {
+      publish(encoded) {
+        const copy = encoded.slice();
+        queueMicrotask(() => {
+          for (const [target, receiver] of hub.#receivers) {
+            if (target !== source) receiver(copy.slice());
+          }
+        });
+      },
+      subscribe(receiver) {
+        hub.#receivers.set(source, receiver);
+        return () => hub.#receivers.delete(source);
+      },
+    };
+  }
+}
+
+async function waitFor(predicate) {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("live Wasm RGA multi-tab delivery timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 

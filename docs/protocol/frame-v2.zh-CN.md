@@ -35,6 +35,11 @@ if err != nil { /* handle */ }
 改变 RGA 排序，也不会让 outer-v2 组兼容 v1 peer。直接路径可以使用小于等价 v1 envelope 的
 压缩后最终帧预算，但解码出的 payload 仍必须满足 `MaxPayload`。
 
+对 raw 的交互 payload，直接 API 会先校验精确的最终 `MaxFrameBytes` 预算，再把规范 payload
+直接写入最终 v2 envelope，因此避免一次独立的 payload 分配与拷贝。达到压缩阈值的 payload
+仍会使用一个受 `MaxPayload` 限制的临时 buffer：编码器必须先检查完整 payload，才能选择 raw 或
+DEFLATE 模式。这只是本地分配优化，不会放宽输出上限或规范性校验。
+
 v2 组必须在 `replica.Protocol` 中绑定
 `WireFormatVersion: frame.FormatVersionV2`。`NewChange`、`Inbox`、快照、恢复计划和
 checkpoint 会拒绝本应有效但格式为 v1 的帧，绝不静默降级。字段为零仍表示 v1，以兼容已有
@@ -100,5 +105,5 @@ TypeScript `decodeFrame` 只验证 v1；纯 TypeScript consumer 在拥有同等�
 Manifest/checkpoint/recovery 版本绑定以及含重复和乱序 v2 帧的三编辑者 RGA 模拟。受控基准：
 
 ```sh
-go test -run='^$' -bench='BenchmarkFrameUpdateFormats|BenchmarkRGADeltaWireProtocols' -benchmem ./encoding ./text
+go test -run='^$' -bench='BenchmarkFrameUpdateFormats|BenchmarkRGADeltaWireProtocols|BenchmarkRGASmallDeltaFrameV2Encoders' -benchmem ./encoding ./text
 ```

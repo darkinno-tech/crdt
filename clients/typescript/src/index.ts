@@ -93,6 +93,7 @@ export type {
   RGAWasmStoredDocument,
 } from "./browser.js";
 export {
+  bindBlockNoteRichText,
   bindCodeMirrorPlainText,
   bindLexicalPlainText,
   bindMonacoPlainText,
@@ -102,13 +103,17 @@ export {
   bindRGAPlainText,
   bindSlatePlainText,
   bindTiptapPlainText,
+  BlockNoteRichTextBinding,
   CodeMirrorPlainTextBinding,
+  BLOCKNOTE_RICH_TEXT_SCHEMA_ID,
   QuillRichTextBinding,
   RGAPlainTextBinding,
 } from "./bindings.js";
 export type {
+  BindBlockNoteRichTextOptions,
   BindRGAPlainTextOptions,
   BindQuillRichTextOptions,
+  BlockNoteRichTextPort,
   CodeMirrorTextPort,
   CodeMirrorViewUpdate,
   EditorTextSelection,

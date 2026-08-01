@@ -90,6 +90,12 @@ one-time import of a new Quill document. A joining client must first receive
 the rich-text frame/snapshot and then bind with `initialContent: "document"`;
 creating an unrelated local newline would be a concurrent document edit.
 
+For BlockNote's default text-block document rather than a Quill Delta, use
+[`bindBlockNoteRichText`](blocknote-richtext-bindings.md). It has its own exact
+`darkinno:blocknote-text-v1` SchemaID, preserves a bounded default text-block
+subset, and rejects tables, media, links, custom blocks, and unknown props
+instead of flattening them into this rich-text group.
+
 ## Safety and deployment boundary
 
 - The browser runtime caps frames at 1 MiB, local inserted text at 64 KiB and

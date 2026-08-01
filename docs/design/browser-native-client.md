@@ -89,9 +89,11 @@ being silently translated into a state snapshot.
 - Limits default to compaction at 128 updates/1 MiB and rejection at
   10,000 updates/32 MiB. Rejection is surfaced as `persistence_limit` rather
   than dropping a successful in-memory mutation.
-- `BroadcastChannelNativeTransport` isolates its own message shape and copies
-  bytes, but same-origin messaging is not authentication and is intentionally
-  volatile. It cannot bootstrap a later tab or repair a partition.
+- `BroadcastChannelNativeTransport` is a `NativeBrowserLiveTransport`: it
+  copies bytes and publishes only after the local append, but can never
+  acknowledge an outbox entry. Same-origin messaging is not authentication and
+  is intentionally volatile; it cannot bootstrap a later tab or repair a
+  partition.
 - `documentID` is a storage/adapter routing key, not access control. A server
   adapter must authenticate identity and bind a permitted group, schema,
   semantic version, and selected limits before accepting a message.
@@ -102,7 +104,8 @@ being silently translated into a state snapshot.
   incomplete-parent logging, restore, and three offline editors with reverse
   and duplicate delivery.
 - A real browser harness runs Go/Wasm RGA merging, IndexedDB persistence and
-  restart, plus a same-origin two-transport BroadcastChannel delivery.
+  restart, plus same-origin BroadcastChannel delivery while asserting that the
+  sender's durable outbox remains pending.
 - Controlled benchmarks measure append/flush/recovery in a deterministic
   memory store and in an actual browser IndexedDB run. They are development
   measurements, not a storage latency or mobile SLA.

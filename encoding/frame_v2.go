@@ -37,21 +37,59 @@ func MarshalFrameV2(frame Frame) ([]byte, error) {
 // MarshalFrameV2WithLimits returns a bounded v2 frame. Callers must negotiate
 // FormatVersionV2 before sending it: older peers correctly reject this format.
 func MarshalFrameV2WithLimits(frame Frame, limits Limits) ([]byte, error) {
-	if !limits.valid() || frame.TypeID == 0 || len(frame.CodecID) > limits.MaxCodecID || len(frame.Payload) > limits.MaxPayload {
+	if !validFrameV2Input(frame.TypeID, frame.CodecID, len(frame.Payload), limits) {
 		return nil, ErrFrameLimit
 	}
+	return marshalFrameV2Payload(frame.TypeID, frame.CodecID, frame.Payload, limits)
+}
 
-	mode, encoded := v2PayloadRaw, frame.Payload
-	if len(frame.Payload) >= minV2DeflatePayloadBytes {
-		compressed, err := deflatePayload(frame.Payload)
+// MarshalFrameV2WithPayload writes a bounded v2 payload directly into its
+// final raw envelope when compression is not considered. For larger payloads,
+// it uses a bounded temporary buffer so it can choose the smaller raw or
+// DEFLATE representation. The writer has the same lifetime contract as
+// PayloadWriter: it must fill only the supplied payload and must not retain it.
+func MarshalFrameV2WithPayload(typeID uint64, codecID string, payloadLength int, writePayload PayloadWriter) ([]byte, error) {
+	return MarshalFrameV2WithPayloadAndLimits(typeID, codecID, payloadLength, DefaultLimits(), writePayload)
+}
+
+// MarshalFrameV2WithPayloadAndLimits is MarshalFrameV2WithPayload with
+// explicit output limits. For raw interactive payloads it validates the final
+// v2 frame budget before invoking writePayload, avoiding a temporary payload
+// allocation and copy. A payload at or above the compression threshold keeps a
+// bounded temporary buffer because mode selection depends on its bytes.
+func MarshalFrameV2WithPayloadAndLimits(typeID uint64, codecID string, payloadLength int, limits Limits, writePayload PayloadWriter) ([]byte, error) {
+	if !validFrameV2Input(typeID, codecID, payloadLength, limits) {
+		return nil, ErrFrameLimit
+	}
+	if writePayload == nil {
+		return nil, ErrInvalidFrame
+	}
+	if payloadLength < minV2DeflatePayloadBytes {
+		return marshalFrameV2RawWithPayload(typeID, codecID, payloadLength, limits, writePayload)
+	}
+	payload := make([]byte, payloadLength)
+	if err := writePayload(payload); err != nil {
+		return nil, err
+	}
+	return marshalFrameV2Payload(typeID, codecID, payload, limits)
+}
+
+func validFrameV2Input(typeID uint64, codecID string, payloadLength int, limits Limits) bool {
+	return limits.valid() && typeID != 0 && payloadLength >= 0 && len(codecID) <= limits.MaxCodecID && payloadLength <= limits.MaxPayload
+}
+
+func marshalFrameV2Payload(typeID uint64, codecID string, payload []byte, limits Limits) ([]byte, error) {
+	mode, encoded := v2PayloadRaw, payload
+	if len(payload) >= minV2DeflatePayloadBytes {
+		compressed, err := deflatePayload(payload)
 		if err != nil {
 			return nil, err
 		}
-		if v2FrameSize(frame.TypeID, frame.CodecID, len(frame.Payload), len(compressed)) < v2FrameSize(frame.TypeID, frame.CodecID, len(frame.Payload), len(frame.Payload)) {
+		if v2FrameSize(typeID, codecID, len(payload), len(compressed)) < v2FrameSize(typeID, codecID, len(payload), len(payload)) {
 			mode, encoded = v2PayloadDeflate, compressed
 		}
 	}
-	frameBytes := v2FrameSize(frame.TypeID, frame.CodecID, len(frame.Payload), len(encoded))
+	frameBytes := v2FrameSize(typeID, codecID, len(payload), len(encoded))
 	if frameBytes > limits.MaxFrameBytes {
 		return nil, ErrFrameLimit
 	}
@@ -59,13 +97,40 @@ func MarshalFrameV2WithLimits(frame Frame, limits Limits) ([]byte, error) {
 	output := make([]byte, 0, frameBytes)
 	output = append(output, 'C', 'R', 'D', 'T')
 	output = binary.AppendUvarint(output, FormatVersionV2)
-	output = binary.AppendUvarint(output, frame.TypeID)
-	output = binary.AppendUvarint(output, uint64(len(frame.CodecID)))
-	output = append(output, frame.CodecID...)
+	output = binary.AppendUvarint(output, typeID)
+	output = binary.AppendUvarint(output, uint64(len(codecID)))
+	output = append(output, codecID...)
 	output = binary.AppendUvarint(output, mode)
-	output = binary.AppendUvarint(output, uint64(len(frame.Payload)))
+	output = binary.AppendUvarint(output, uint64(len(payload)))
 	output = binary.AppendUvarint(output, uint64(len(encoded)))
 	output = append(output, encoded...)
+	checksum := crc32.Checksum(output[4:], castagnoliTable)
+	return binary.BigEndian.AppendUint32(output, checksum), nil
+}
+
+func marshalFrameV2RawWithPayload(typeID uint64, codecID string, payloadLength int, limits Limits, writePayload PayloadWriter) ([]byte, error) {
+	if payloadLength < 0 {
+		return nil, ErrFrameLimit
+	}
+	payloadSize := uint64(payloadLength)
+	frameBytes := v2FrameSize(typeID, codecID, payloadLength, payloadLength)
+	if frameBytes > limits.MaxFrameBytes {
+		return nil, ErrFrameLimit
+	}
+	output := make([]byte, 0, frameBytes)
+	output = append(output, 'C', 'R', 'D', 'T')
+	output = binary.AppendUvarint(output, FormatVersionV2)
+	output = binary.AppendUvarint(output, typeID)
+	output = binary.AppendUvarint(output, uint64(len(codecID)))
+	output = append(output, codecID...)
+	output = binary.AppendUvarint(output, v2PayloadRaw)
+	output = binary.AppendUvarint(output, payloadSize)
+	output = binary.AppendUvarint(output, payloadSize)
+	payloadStart := len(output)
+	output = output[:payloadStart+payloadLength]
+	if err := writePayload(output[payloadStart:]); err != nil {
+		return nil, err
+	}
 	checksum := crc32.Checksum(output[4:], castagnoliTable)
 	return binary.BigEndian.AppendUint32(output, checksum), nil
 }
