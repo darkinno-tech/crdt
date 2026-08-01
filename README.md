@@ -60,7 +60,7 @@ go test ./...
 - G-Counter, PN-Counter, G-Set, add-wins OR-Set, and causal MV-Register.
 - Bounded canonical state/delta frames, deterministic snapshots, recovery plans, and persisted HLC state for reusable replica identities.
 - A local, bounded multi-type undo/redo command stack plus a content-addressed snapshot version DAG for browser history and branches; both remain outside replication frames and are host-persisted metadata.
-- RGA collaborative text with stable run-v2 frames by default; stable bounded rich-text, observed-remove tree, and nested document-tree protocols; plus list and XML-fragment layers.
+- RGA collaborative text with stable run-v2 frames by default, plus explicitly negotiated packed-v3 frames for dense HLC runs; stable bounded rich-text, observed-remove tree, and nested document-tree protocols; plus list and XML-fragment layers.
 - Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
 - A bounded live WebSocket provider, a separate bbolt-backed durable relay, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
@@ -85,6 +85,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Plan durable, deeper Yjs support safely | [Yjs deeper interoperability decision](docs/design/yjs-deeper-interoperability.md) |
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
 | Implement run-v2 outside Go/Wasm | [RGA run-v2 protocol and vectors](docs/protocol/rga-run-v2.md) |
+| Reduce large Go/Wasm text-frame bytes without changing scalar RGA semantics | [Packed RGA v3 protocol](docs/protocol/rga-packed-v3.md) and `go run ./cmd/crdt-compare -protocol=packed-v3` |
 | Use the native Rust, Python, Swift, or C++ RGA runtime | [Multilanguage RGA decision](docs/design/native-multilanguage-rga.md) |
 | Implement stable formatting or trees | [Rich-text v1](docs/protocol/richtext-v1.md) and [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
 

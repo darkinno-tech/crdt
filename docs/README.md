@@ -47,6 +47,8 @@ be committed.
 - [Scalar RGA v1 wire protocol](protocol/rga-scalar-v1.md)
 - [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
+- [Packed RGA v3 wire protocol](protocol/rga-packed-v3.md)
+- [Packed RGA v3 线协议](protocol/rga-packed-v3.zh-CN.md)
 - [Compression-aware outer frame v2](protocol/frame-v2.md)
 - [压缩感知的 CRDT 外层帧 v2](protocol/frame-v2.zh-CN.md)
 - [Awareness / presence v1](protocol/awareness-v1.md)
@@ -85,6 +87,7 @@ be committed.
 - [Browser multi-tab/offline controlled validation — 2026-08-01](operations/browser-multitab-offline-2026-08-01.md)
 - [DarkInno / Yjs text comparison](operations/crdt-library-comparison-2026-07-30.md)
 - [DarkInno / Yjs 文本对比](operations/crdt-library-comparison-2026-07-30.zh-CN.md)
+- [Packed RGA v3 controlled byte and performance validation — 2026-08-01](operations/rga-packed-v3-benchmark-2026-08-01.md)
 - [System context architecture (SVG)](assets/architecture.svg)
 - [System context architecture (PNG)](assets/architecture.png)
 
