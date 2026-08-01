@@ -293,7 +293,7 @@ func (client *yjsStoreClient) do(ctx context.Context, operation string, payload 
 	}
 	defer func() { _ = result.Body.Close() }()
 	if result.StatusCode >= http.StatusMultipleChoices && result.StatusCode < http.StatusBadRequest {
-		return fmt.Errorf("Yjs store redirected request: %w", ErrYJSStoreUnavailable)
+		return fmt.Errorf("yjs store redirected request: %w", ErrYJSStoreUnavailable)
 	}
 	maximum := maximumResponse
 	if result.StatusCode < http.StatusOK || result.StatusCode >= http.StatusMultipleChoices {
