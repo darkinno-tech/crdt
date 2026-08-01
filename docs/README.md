@@ -30,6 +30,8 @@ be committed.
 - [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
 - [Yjs / y-protocols compatibility relay](integration/yjs-relay.md)
 - [Yjs / y-protocols 兼容 relay](integration/yjs-relay.zh-CN.md)
+- [Native Yjs incremental editor binding](integration/yjs-native-editor-bindings.md)
+- [原生 Yjs 增量编辑器绑定](integration/yjs-native-editor-bindings.zh-CN.md)
 - [Quill rich-text editor binding](integration/richtext-editor-bindings.md)
 - [Attachment reference integration](integration/attachment.md)
 - [附件引用集成](integration/attachment.zh-CN.md)
