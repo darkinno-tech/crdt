@@ -104,8 +104,8 @@ the five-sample 128-block / 32,896-rune workload measured these medians:
 
 | Scenario | Local 256 edits | Remote 128 merges |
 | --- | ---: | ---: |
-| In-memory BlockNote-shaped port | 2.323 ms/edit | 1.184 ms/merge |
-| Actual `@blocknote/core` editor API | 1.909 ms/edit | 4.914 ms/merge |
+| In-memory BlockNote-shaped port | 2.410 ms/edit | 1.258 ms/merge |
+| Actual `@blocknote/core` editor API | 2.000 ms/edit | 5.053 ms/merge |
 
 Both scenarios assert document convergence and exactly 256 local frames; remote
 merges must not echo into the outbox. Heap deltas are diagnostic because V8 GC
