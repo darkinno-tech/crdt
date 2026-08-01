@@ -588,11 +588,56 @@ func TestDocumentNilAndBoundaryHandles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before, err := limited.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := limited.Map("workspace"); !errors.Is(err, frame.ErrFrameLimit) {
 		t.Fatalf("root output budget = %v", err)
 	}
-	if _, err := limited.Checkpoint(); !errors.Is(err, frame.ErrFrameLimit) {
-		t.Fatalf("checkpoint output budget = %v", err)
+	after, err := limited.Checkpoint()
+	if err != nil {
+		t.Fatalf("checkpoint after rejected root = %v", err)
+	}
+	if !bytes.Equal(before.State, after.State) || before.ClockState != after.ClockState || limited.State().ElementCount != 0 {
+		t.Fatalf("rejected root changed document\n got=%#v\nwant=%#v", after, before)
+	}
+
+	childLimited := testOptions()
+	childLimited.FrameLimits.MaxTags = 4
+	child, err := NewWithOptions("child-limited", childLimited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err = child.Map("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := 0
+	stop, err := child.OnUpdate(func([]byte) { updates++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	before, err = child.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.CreateMap("nested"); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("child output budget = %v", err)
+	}
+	after, err = child.Checkpoint()
+	if err != nil {
+		t.Fatalf("checkpoint after rejected child = %v", err)
+	}
+	if !bytes.Equal(before.State, after.State) || before.ClockState != after.ClockState {
+		t.Fatalf("rejected child changed document\n got=%#v\nwant=%#v", after, before)
+	}
+	if nested, ok := root.Map("nested"); nested == nil || ok {
+		t.Fatalf("rejected child is visible: %#v, %t", nested, ok)
+	}
+	if updates != 0 {
+		t.Fatalf("rejected child emitted %d updates", updates)
 	}
 }
 
