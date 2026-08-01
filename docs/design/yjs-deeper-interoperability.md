@@ -71,6 +71,14 @@ fresh `Y.Doc` with Yjs GC enabled, writes the resulting merged snapshot and
 state vector through an fsync + rename transaction, and advances its recovery
 cursor only after that write succeeds.
 
+The bundled runtime is a loopback-only, single-process sidecar for one data
+directory. Its request lock has process scope, so an HA deployment must assign
+each document directory to one writer or provide a different store with
+cross-process serialization. The Go client never follows a redirect from the
+configured bearer-token endpoint, and a handler permits one store-backed room
+per exact durable document identity; both rules prevent trust-boundary drift or
+live fan-out split-brain.
+
 Tenant, room, epoch, schema label, and V1/V2 format form the immutable durable
 identity. The schema label is a fencing/version field, not a claim that the
 sidecar understands an application's ProseMirror, Quill, or custom schema.
