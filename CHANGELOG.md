@@ -38,6 +38,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Reduced allocations for first large linear RGA inserts and initial syncs by
+  batching sequence-pair storage, reusing verified local tag order, and
+  pre-sizing empty-document indexes without changing canonical wire bytes.
 - Avoided redundant sorting and packed wall-gap allocations when serializing a
   verified linear RGA state, while retaining the existing canonical fallback
   for branching, multi-replica, or unknown-tombstone states.
