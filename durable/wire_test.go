@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/DarkInno/crdt"
@@ -25,7 +26,7 @@ func TestWireRoundTripsAndRejectsInvalidControl(t *testing.T) {
 	if err != nil || highWater != 8 || manifest.Compatible(remote) != nil {
 		t.Fatalf("welcome = %#v high=%d err=%v", remote, highWater, err)
 	}
-	if err := unmarshalError([]byte(`{"version":1,"code":"replay_unavailable"}`)); err != ErrReplayUnavailable {
+	if err := unmarshalError([]byte(`{"version":1,"code":"replay_unavailable"}`)); !errors.Is(err, ErrReplayUnavailable) {
 		t.Fatalf("replay error = %v", err)
 	}
 	vector, err := replica.NewFrontier(map[string]uint64{"alice": 4, "bob": 2})
