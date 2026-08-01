@@ -6,9 +6,13 @@ import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
 import { BlockNoteEditor } from "@blocknote/core";
+import { Editor, Mark, Node } from "@tiptap/core";
+import TiptapDocument from "@tiptap/extension-document";
+import TiptapParagraph from "@tiptap/extension-paragraph";
+import TiptapText from "@tiptap/extension-text";
 
 import { decodeFrame } from "../dist/frame.js";
-import { bindBlockNoteRichText, bindCodeMirrorPlainText, bindQuillRichText, bindRGAPlainText } from "../dist/bindings.js";
+import { bindBlockNoteRichText, bindCodeMirrorPlainText, bindQuillRichText, bindRGAPlainText, bindTiptapRichText } from "../dist/bindings.js";
 import {
   CRDTRuntimeError,
   RICH_TEXT_PROTOCOL,
@@ -245,6 +249,78 @@ test("BlockNote default text blocks exchange actual Go Wasm rich-text frames wit
   assert.equal(bob.destroy(), true);
   assert.equal(aliceDocument.close(), true);
   assert.equal(bobDocument.close(), true);
+});
+
+test("Tiptap rich-text profile exchanges actual Go Wasm frames with marks and atomic embeds", () => {
+  const Bold = Mark.create({ name: "bold" });
+  const Mention = Node.create({
+    name: "mention",
+    group: "inline",
+    inline: true,
+    atom: true,
+    addAttributes() {
+      return { id: { default: null }, label: { default: null } };
+    },
+  });
+  const extensions = [TiptapDocument, TiptapParagraph, TiptapText, Bold, Mention];
+  const initial = {
+    type: "doc",
+    content: [{
+      type: "paragraph",
+      content: [
+        { type: "text", text: "Hello ", marks: [{ type: "bold" }] },
+        { type: "mention", attrs: { id: "u-7", label: "Ada" } },
+      ],
+    }],
+  };
+  const aliceDocument = richTextRuntime.create("tiptap-rich-alice");
+  const bobDocument = richTextRuntime.create("tiptap-rich-bob");
+  const aliceEditor = new Editor({ extensions, content: initial });
+  const aliceFrames = [];
+  const alice = bindTiptapRichText(aliceDocument, aliceEditor, {
+    initialContent: "editor",
+    embeds: [tiptapMentionCodec],
+    onLocalFrame: (frame) => aliceFrames.push(frame),
+  });
+  assert.equal(decodeFrame(aliceFrames[0]).typeID, RICH_TEXT_PROTOCOL.deltaTypeID);
+  bobDocument.applyDelta(aliceFrames[0]);
+  const bobEditor = new Editor({ extensions, content: { type: "doc", content: [{ type: "paragraph" }] } });
+  const bobFrames = [];
+  const bob = bindTiptapRichText(bobDocument, bobEditor, {
+    initialContent: "document",
+    embeds: [tiptapMentionCodec],
+    onLocalFrame: (frame) => bobFrames.push(frame),
+  });
+  assert.equal(bobEditor.getJSON().content?.[0]?.content?.[0]?.text, "Hello ");
+  assert.equal(bobEditor.getJSON().content?.[0]?.content?.[1]?.type, "mention");
+  assert.equal(bobFrames.length, 0);
+
+  assert.equal(aliceEditor.commands.setContent({
+    type: "doc",
+    content: [{
+      type: "paragraph",
+      content: [
+        { type: "text", text: "Review ", marks: [{ type: "bold" }] },
+        { type: "mention", attrs: { id: "u-7", label: "Ada" } },
+      ],
+    }],
+  }), true);
+  const frame = aliceFrames.at(-1);
+  assert.ok(frame instanceof Uint8Array);
+  bob.applyRemote(frame);
+  assert.equal(bobEditor.getJSON().content?.[0]?.content?.[0]?.text, "Review ");
+  assert.equal(bobEditor.getJSON().content?.[0]?.content?.[1]?.type, "mention");
+  assert.equal(bobFrames.length, 0);
+
+  const restored = richTextRuntime.restore(aliceDocument.snapshot());
+  assert.deepEqual(restored.spans(), aliceDocument.spans());
+  assert.equal(restored.close(), true);
+  assert.equal(alice.destroy(), true);
+  assert.equal(bob.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
+  aliceEditor.destroy();
+  bobEditor.destroy();
 });
 
 test("CodeMirror-shaped binding exchanges actual Go Wasm RGA frames without echoing remote updates", () => {
@@ -557,6 +633,23 @@ const testRichTextAttributes = {
   },
 };
 
+const tiptapMentionCodec = {
+  kind: "mention",
+  nodeType: "mention",
+  encode(node) {
+    if (node.type !== "mention" || !isRecord(node.attrs) || typeof node.attrs.id !== "string" || typeof node.attrs.label !== "string") {
+      throw new Error("invalid mention");
+    }
+    return { id: node.attrs.id, label: node.attrs.label };
+  },
+  decode(payload) {
+    if (!isRecord(payload) || typeof payload.id !== "string" || typeof payload.label !== "string") {
+      throw new Error("invalid mention payload");
+    }
+    return { type: "mention", attrs: { id: payload.id, label: payload.label } };
+  },
+};
+
 class TestRichQuillPort {
   #listeners = new Set();
 
@@ -603,4 +696,8 @@ class SelectionTextPort extends TestTextPort {
 
 function utf16OffsetAtRune(value, offset) {
   return Array.from(value).slice(0, offset).join("").length;
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
