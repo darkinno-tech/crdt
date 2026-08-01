@@ -43,6 +43,8 @@ be committed.
 - [Scalar RGA v1 wire protocol](protocol/rga-scalar-v1.md)
 - [RGA run-v2 wire protocol](protocol/rga-run-v2.md)
 - [RGA run-v2 线协议](protocol/rga-run-v2.zh-CN.md)
+- [Compression-aware outer frame v2](protocol/frame-v2.md)
+- [压缩感知的 CRDT 外层帧 v2](protocol/frame-v2.zh-CN.md)
 - [Awareness / presence v1](protocol/awareness-v1.md)
 - [Awareness / presence v1 协议](protocol/awareness-v1.zh-CN.md)
 - [Rich-text v1 wire protocol](protocol/richtext-v1.md)

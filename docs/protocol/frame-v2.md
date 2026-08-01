@@ -49,6 +49,14 @@ compatible with a v1 peer. The direct path can use a compressed final-frame
 budget smaller than the equivalent v1 envelope, but its decoded payload still
 must fit `MaxPayload`.
 
+For raw interactive payloads, the direct APIs write the canonical payload into
+the final v2 envelope after first checking its exact `MaxFrameBytes` budget.
+They therefore avoid a separate payload allocation and copy. Payloads at the
+compression threshold or above still use one `MaxPayload`-bounded temporary
+buffer: the encoder must inspect the complete payload before choosing raw or
+DEFLATE mode. This is a local allocation optimization, not a relaxation of
+output limits or canonicality checks.
+
 For a v2 group, bind `WireFormatVersion: frame.FormatVersionV2` in its
 `replica.Protocol`. `NewChange`, `Inbox`, snapshots, recovery plans, and
 checkpoints then reject an otherwise valid v1 frame rather than silently
@@ -136,5 +144,5 @@ version binding, and a three-editor RGA simulation with duplicate and shuffled
 v2 frames. Run controlled measurements with:
 
 ```sh
-go test -run='^$' -bench='BenchmarkFrameUpdateFormats|BenchmarkRGADeltaWireProtocols' -benchmem ./encoding ./text
+go test -run='^$' -bench='BenchmarkFrameUpdateFormats|BenchmarkRGADeltaWireProtocols|BenchmarkRGASmallDeltaFrameV2Encoders' -benchmem ./encoding ./text
 ```
