@@ -300,11 +300,13 @@ func makePackedRunChain(block []runNode) (packedRunChain, bool) {
 	}
 	textBytes := 0
 	transitionCount := 0
+	previous = block[0].id
 	for index, item := range block {
 		textBytes += utf8.RuneLen(item.item.rune)
-		if index > 0 && item.id.WallTime > block[index-1].id.WallTime {
+		if index > 0 && item.id.WallTime > previous.WallTime {
 			transitionCount++
 		}
+		previous = item.id
 	}
 	chain := packedRunChain{
 		transitions: make([]byte, transitionLength),
