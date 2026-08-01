@@ -18,11 +18,17 @@ the negotiated Go/Wasm `RGAWasmDocument` to a text editor surface:
   application-supplied, schema-preserving text-leaf port rather than flattening
   blocks or marks into an unsafe string conversion.
 
+New browser groups use run-v2 by default. A large-text group may instead build
+`WASM_RGA_PROTOCOL=packed-v3` and pass `RGA_PROTOCOL_PACKED_V3` to
+`initRGAWasm`, but only after its authenticated Manifest binds TypeIDs `29/30`,
+semantics version `3`, and compatible resource limits. The artifact accepts
+only that one frame pair: it never falls back to v1 or run-v2.
+
 ```ts
 const binding = bindQuillPlainText(document, quill, {
   initialContent: "editor", // explicit one-time import; default is document
   onLocalFrame(frame) {
-    // Authenticate and bind the RGA run-v2 Manifest before durable outbox/send.
+    // Authenticate and bind this document's exact RGA Manifest before send.
     outbox.append(frame);
   },
 });
@@ -139,6 +145,7 @@ runs generic and CodeMirror-shaped flows over real Go RGA frames. Run:
 ```sh
 make typescript-test
 make wasm-test
+make wasm-packed-test
 make typescript-bindings-benchmark
 make wasm-bindings-benchmark
 ```
@@ -147,7 +154,7 @@ The benchmark targets report controlled local-machine samples, not a
 browser/device SLA. Both print `native_incremental` and
 `full_projection_fallback` samples under the same workload. The simulated
 target isolates adapter work; the Wasm target includes a 12,288-rune
-CodeMirror-port document, real Go run-v2 replacement, and receiver application
+CodeMirror-port document, real Go negotiated-RGA replacement, and receiver application
 for each edit. Set `CRDT_BINDINGS_INITIAL_RUNES` for a larger simulated text
 fixture. The current two-host, five-sample evidence and its limits are in the
 [2026-08-01 cross-host benchmark](../operations/rga-incremental-editor-benchmark-2026-08-01.md).

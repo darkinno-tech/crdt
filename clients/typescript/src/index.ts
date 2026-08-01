@@ -14,6 +14,7 @@ export {
   initRichTextWasm,
   initRGAWasm,
   RICH_TEXT_PROTOCOL,
+  RGA_PROTOCOL_PACKED_V3,
   RGA_PROTOCOL_RUN_V2,
   RGA_PROTOCOL_V1,
   RGA_WASM_GLOBAL,
@@ -170,3 +171,20 @@ export type {
   NativeNestedTypeListener,
   NativeNestedValue,
 } from "./nested.js";
+export {
+  bindYjsCodeMirrorPlainText,
+  YjsBindingError,
+  YjsCodeMirrorBinding,
+  YjsTextBinding,
+} from "./yjs.js";
+export type {
+  BindYjsCodeMirrorOptions,
+  YjsBindingErrorCode,
+  YjsCodeMirrorTextPort,
+  YjsCodeMirrorViewUpdate,
+  YjsRemoteCursor,
+  YjsTextBindingOptions,
+  YjsTextChange,
+  YjsTextSelection,
+  YjsUpdateFormat,
+} from "./yjs.js";

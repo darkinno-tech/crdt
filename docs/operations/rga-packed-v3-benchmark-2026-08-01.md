@@ -54,6 +54,41 @@ not make the protocols interoperable or establish identical rich-text, storage,
 GC, allocation, or network behavior. The HLC timestamp width can vary with
 clock time; the percentage and Yjs comparison are the useful signals.
 
+## Browser-runtime initial synchronization
+
+The original codec comparison did not prove that a browser artifact could
+select packed-v3. The browser-sized runtime is now measured separately after
+building the document through bounded 12,288-rune editor transactions. A fresh
+receiver validates and restores one complete 65,536-rune Chinese-text snapshot.
+This is the controlled Go browser-runtime core measurement; the matching
+compiled `js/wasm` artifact is exercised by `make wasm-packed-test` for loader,
+browser persistence, duplicate/reordered three-replica delivery, and the same
+64 Ki-rune initial snapshot recovery. It is not a WAN, TLS, durable-storage,
+or client-device SLA.
+
+```sh
+GOMAXPROCS=1 go test -run='^$' \
+  -bench='BenchmarkRuntimeInitialSnapshotAndRestore65536Runes/(run_v2|packed_v3)$|BenchmarkRuntimeInsertAndApply4096Runes(RunV2|PackedV3)$' \
+  -benchmem -benchtime=1s -count=3 -cpu=1 ./internal/wasm
+make wasm-packed-test
+```
+
+| Workload | run-v2 median | packed-v3 median | Change |
+| --- | ---: | ---: | ---: |
+| 4,096-rune Chinese local delta | 44,955 B | 12,838 B | -71.4% bytes |
+| 4,096-rune insert + receiver apply | 7.69 ms | 8.10 ms | +5.3% time |
+| 65,536-rune initial state snapshot | 719,652 B | 204,857 B | -71.5% bytes |
+| Initial snapshot + restore | 128.43 ms | 142.74 ms | +11.1% time |
+| Initial snapshot + restore allocations | 92.36 MiB | 87.88 MiB | -4.8% |
+
+The byte win is deliberate; packed-v3 keeps one bitmap, UTF-8 chain buffer,
+and exact wall-gap reconstruction work, so its initial snapshot CPU time is
+not a universal win. Use it for a manifest-negotiated dense local HLC chain
+where the transfer or persistence-byte budget dominates, and continue to use
+run-v2 for existing groups or shapes that do not meet the packed-chain rule.
+Both modes retain the same 1 MiB browser frame limit, 100,000-tag limit, and
+atomic rejection behavior.
+
 ## Local codec measurements
 
 The following Go-only medians are from three 200 ms, one-CPU samples. They are

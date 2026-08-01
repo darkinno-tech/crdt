@@ -28,6 +28,33 @@ func TestWireRoundTripsAndRejectsInvalidControl(t *testing.T) {
 	if err := unmarshalError([]byte(`{"version":1,"code":"replay_unavailable"}`)); err != ErrReplayUnavailable {
 		t.Fatalf("replay error = %v", err)
 	}
+	vector, err := replica.NewFrontier(map[string]uint64{"alice": 4, "bob": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateHello, err := marshalStateVectorHello(manifest, vector, 4, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, restoredVector, err := unmarshalStateVectorHello(stateHello, 4, 128)
+	if err != nil || manifest.Compatible(remote) != nil || restoredVector.Counter("alice") != 4 || restoredVector.Counter("bob") != 2 {
+		t.Fatalf("state hello remote=%#v vector=%#v err=%v", remote, restoredVector.Entries(), err)
+	}
+	stateWelcome, err := marshalStateVectorWelcome(manifest, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, highWater, err = unmarshalStateVectorWelcome(stateWelcome)
+	if err != nil || highWater != 8 || manifest.Compatible(remote) != nil {
+		t.Fatalf("state welcome remote=%#v high=%d err=%v", remote, highWater, err)
+	}
+	complete, err := marshalCatchUpComplete(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if highWater, err := unmarshalCatchUpComplete(complete); err != nil || highWater != 8 {
+		t.Fatalf("catch-up complete high=%d err=%v", highWater, err)
+	}
 	for _, invalid := range [][]byte{nil, []byte(`{"version":1}`), append(hello, 'x')} {
 		if _, _, err := unmarshalHello(invalid); err == nil {
 			t.Fatalf("unmarshal invalid hello %q succeeded", invalid)
@@ -92,6 +119,12 @@ func TestWireBoundaries(t *testing.T) {
 	if err := unmarshalError(nil); err == nil {
 		t.Fatal("empty error decoded")
 	}
+	if _, _, err := unmarshalStateVectorHello([]byte(`{"version":2,"manifest":{},"state_vector":[{"actor":"z","counter":1},{"actor":"a","counter":1}]}`), 2, 128); err == nil {
+		t.Fatal("non-canonical state vector succeeded")
+	}
+	if _, err := marshalStateVectorHello(durableTestManifest(t), replica.Frontier{}, 0, 128); err == nil {
+		t.Fatal("invalid state-vector limits succeeded")
+	}
 	if _, _, _, err := unmarshalEvent([]byte{eventMessage, 1}, 1<<20, 128); err == nil {
 		t.Fatal("truncated event decoded")
 	}
@@ -124,10 +157,18 @@ func FuzzWire(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(hello)
+	vectorHello, err := marshalStateVectorHello(manifest, replica.Frontier{}, 4, 128)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(vectorHello)
 	f.Add([]byte{changeMessage})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _, _ = unmarshalHello(data)
+		_, _, _ = unmarshalStateVectorHello(data, 4, 128)
 		_, _, _ = unmarshalWelcome(data)
+		_, _, _ = unmarshalStateVectorWelcome(data)
+		_, _ = unmarshalCatchUpComplete(data)
 		_ = unmarshalError(data)
 		_, _, _ = unmarshalChange(data, 1<<20, 128)
 		_, _, _, _ = unmarshalEvent(data, 1<<20, 128)

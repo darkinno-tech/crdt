@@ -14,5 +14,9 @@
   },
   "dependencies": {
     "yjs": "13.6.31"
+  },
+  "devDependencies": {
+    "ws": "8.21.1",
+    "y-websocket": "2.1.0"
   }
 }

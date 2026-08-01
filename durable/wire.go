@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -14,8 +15,9 @@ import (
 )
 
 const (
-	protocolVersion = 1
-	maxControlBytes = 16 << 10
+	protocolVersion            = 1
+	stateVectorProtocolVersion = 2
+	maxControlBytes            = 16 << 10
 
 	changeMessage = 1
 	eventMessage  = 2
@@ -29,10 +31,32 @@ type helloMessage struct {
 	Resume   uint64           `json:"resume"`
 }
 
+type stateVectorEntry struct {
+	Actor   string `json:"actor"`
+	Counter uint64 `json:"counter"`
+}
+
+type stateVectorHelloMessage struct {
+	Version     uint8              `json:"version"`
+	Manifest    replica.Manifest   `json:"manifest"`
+	StateVector []stateVectorEntry `json:"state_vector"`
+}
+
 type welcomeMessage struct {
 	Version   uint8            `json:"version"`
 	Manifest  replica.Manifest `json:"manifest"`
 	HighWater uint64           `json:"high_water"`
+}
+
+type stateVectorWelcomeMessage struct {
+	Version   uint8            `json:"version"`
+	Manifest  replica.Manifest `json:"manifest"`
+	HighWater uint64           `json:"high_water"`
+}
+
+type catchUpCompleteMessage struct {
+	Version   uint8  `json:"version"`
+	HighWater uint64 `json:"high_water"`
 }
 
 type errorMessage struct {
@@ -68,6 +92,39 @@ func unmarshalHello(data []byte) (replica.Manifest, uint64, error) {
 	return message.Manifest, message.Resume, nil
 }
 
+func marshalStateVectorHello(manifest replica.Manifest, vector replica.Frontier, maxEntries, maxActorBytes int) ([]byte, error) {
+	entries, err := stateVectorEntries(vector, maxEntries, maxActorBytes)
+	if err != nil {
+		return nil, errInvalidWire
+	}
+	return json.Marshal(stateVectorHelloMessage{
+		Version:     stateVectorProtocolVersion,
+		Manifest:    manifest,
+		StateVector: entries,
+	})
+}
+
+func unmarshalStateVectorHello(data []byte, maxEntries, maxActorBytes int) (replica.Manifest, replica.Frontier, error) {
+	if len(data) == 0 || len(data) > maxControlBytes {
+		return replica.Manifest{}, replica.Frontier{}, errInvalidWire
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var message stateVectorHelloMessage
+	if err := decoder.Decode(&message); err != nil || message.Version != stateVectorProtocolVersion || message.Manifest.Compatible(message.Manifest) != nil {
+		return replica.Manifest{}, replica.Frontier{}, errInvalidWire
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return replica.Manifest{}, replica.Frontier{}, errInvalidWire
+	}
+	vector, err := frontierFromStateVectorEntries(message.StateVector, maxEntries, maxActorBytes)
+	if err != nil {
+		return replica.Manifest{}, replica.Frontier{}, errInvalidWire
+	}
+	return message.Manifest, vector, nil
+}
+
 func marshalWelcome(manifest replica.Manifest, highWater uint64) ([]byte, error) {
 	return json.Marshal(welcomeMessage{Version: protocolVersion, Manifest: manifest, HighWater: highWater})
 }
@@ -87,6 +144,48 @@ func unmarshalWelcome(data []byte) (replica.Manifest, uint64, error) {
 		return replica.Manifest{}, 0, errInvalidWire
 	}
 	return message.Manifest, message.HighWater, nil
+}
+
+func marshalStateVectorWelcome(manifest replica.Manifest, highWater uint64) ([]byte, error) {
+	return json.Marshal(stateVectorWelcomeMessage{Version: stateVectorProtocolVersion, Manifest: manifest, HighWater: highWater})
+}
+
+func unmarshalStateVectorWelcome(data []byte) (replica.Manifest, uint64, error) {
+	if len(data) == 0 || len(data) > maxControlBytes {
+		return replica.Manifest{}, 0, errInvalidWire
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var message stateVectorWelcomeMessage
+	if err := decoder.Decode(&message); err != nil || message.Version != stateVectorProtocolVersion || message.Manifest.Compatible(message.Manifest) != nil {
+		return replica.Manifest{}, 0, errInvalidWire
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return replica.Manifest{}, 0, errInvalidWire
+	}
+	return message.Manifest, message.HighWater, nil
+}
+
+func marshalCatchUpComplete(highWater uint64) ([]byte, error) {
+	return json.Marshal(catchUpCompleteMessage{Version: stateVectorProtocolVersion, HighWater: highWater})
+}
+
+func unmarshalCatchUpComplete(data []byte) (uint64, error) {
+	if len(data) == 0 || len(data) > maxControlBytes {
+		return 0, errInvalidWire
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var message catchUpCompleteMessage
+	if err := decoder.Decode(&message); err != nil || message.Version != stateVectorProtocolVersion {
+		return 0, errInvalidWire
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return 0, errInvalidWire
+	}
+	return message.HighWater, nil
 }
 
 func marshalError(code string) ([]byte, error) {
@@ -213,4 +312,48 @@ func unmarshalChangeFields(data []byte, position, maxMessageBytes, maxActorBytes
 		return replica.Dot{}, nil, errInvalidWire
 	}
 	return dot, append([]byte(nil), delta...), nil
+}
+
+func stateVectorEntries(vector replica.Frontier, maxEntries, maxActorBytes int) ([]stateVectorEntry, error) {
+	if maxEntries <= 0 || maxActorBytes <= 0 {
+		return nil, errInvalidWire
+	}
+	entries := vector.Entries()
+	if len(entries) > maxEntries {
+		return nil, errInvalidWire
+	}
+	actors := make([]string, 0, len(entries))
+	for actor := range entries {
+		actors = append(actors, actor)
+	}
+	sort.Strings(actors)
+	encoded := make([]stateVectorEntry, 0, len(actors))
+	for _, actor := range actors {
+		counter := entries[actor]
+		if !utf8.ValidString(actor) || strings.TrimSpace(actor) == "" || len(actor) > maxActorBytes || counter == 0 {
+			return nil, errInvalidWire
+		}
+		encoded = append(encoded, stateVectorEntry{Actor: actor, Counter: counter})
+	}
+	return encoded, nil
+}
+
+func frontierFromStateVectorEntries(entries []stateVectorEntry, maxEntries, maxActorBytes int) (replica.Frontier, error) {
+	if maxEntries <= 0 || maxActorBytes <= 0 || len(entries) > maxEntries {
+		return replica.Frontier{}, errInvalidWire
+	}
+	frontier := make(map[string]uint64, len(entries))
+	previous := ""
+	for index, entry := range entries {
+		if !utf8.ValidString(entry.Actor) || strings.TrimSpace(entry.Actor) == "" || len(entry.Actor) > maxActorBytes || entry.Counter == 0 || (index > 0 && entry.Actor <= previous) {
+			return replica.Frontier{}, errInvalidWire
+		}
+		frontier[entry.Actor] = entry.Counter
+		previous = entry.Actor
+	}
+	vector, err := replica.NewFrontier(frontier)
+	if err != nil {
+		return replica.Frontier{}, errInvalidWire
+	}
+	return vector, nil
 }

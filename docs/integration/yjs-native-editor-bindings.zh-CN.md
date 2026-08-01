@@ -1,0 +1,112 @@
+# 原生 Yjs 增量编辑器绑定
+
+`@darkinno/crdt-client/yjs` 是面向**原生 Yjs 文档**的可选浏览器绑定。它把
+`Y.TextEvent.delta` 映射为 CodeMirror 6 的变更集；远端改一个字符只会修改对应区间，
+不会把整篇文本重新投影到编辑器。
+
+它与 `bindRGAPlainText` 严格隔离：Go RGA/run-v2 frame、`text.Anchor` 与 Go
+`awareness` 不是 Yjs document、relative position 或 y-protocols awareness。
+不要把两类协议放进同一个 room，也不要转换在线 mutation。
+
+## 兼容性边界
+
+| 表面 | 约定 |
+| --- | --- |
+| 文档与 update | 直接使用 `Y.Doc` / `Y.Text`，每个 room 明确固定 V1 或 V2。state vector 和差量仍是原生 Yjs 语义。 |
+| 远端编辑 | 将 `Y.TextEvent.delta` 转成一个或多个 CodeMirror UTF-16 change；首次挂接后不再为远端 update 调用 `text.toString()` 做全量投影。 |
+| 光标 | awareness JSON 保存编码后的 `Y.RelativePosition`；展示时只针对同一个本地 `Y.Text` 解析。 |
+| Presence | 直接使用 `y-protocols/awareness` 的 encode/apply API。Yjs client ID 仅用于路由，不是已认证用户身份。 |
+| 富文本 | 此绑定不支持 format 或 embed。一旦检测到就停止投影，绝不静默扁平化；富文本必须使用带 schema 的 Yjs 绑定。 |
+
+Go 侧的 `extensions.YJSHandler` 已兼容 y-websocket/y-protocols 外层，能够转发
+这些原生字节；配置 YJSStore 后可获得持久的 state-vector 恢复。它并不会把 Go
+CRDT group 变成 Yjs room。
+
+## 数据流与传输所有权
+
+```text
+CodeMirror 本地事务
+  -> Y.Text 事务（一帧原生 Yjs update）
+  -> y-websocket-compatible provider 或显式 onLocalUpdate 回调
+  -> extensions.YJSHandler / YJSStore
+  -> 对端 Y.applyUpdate
+  -> Y.TextEvent.delta
+  -> 精确 CodeMirror change + relative-position 光标解析
+
+Awareness.setLocalStateField(relative cursor)
+  -> y-protocols awareness update
+  -> relay（仅临时态）
+  -> applyAwarenessUpdate
+  -> remoteCursors()
+```
+
+一个 Y.Doc 只能有一种传输所有者：
+
+- 使用标准 `y-websocket` provider 时，复用同一个 `Y.Doc`/`Awareness`，不要配置
+  `onLocalUpdate` 与 `onLocalAwarenessUpdate`。
+- 宿主自行管理认证传输时，接收的二进制 payload 分别传给
+  `applyRemoteUpdate`/`applyRemoteAwarenessUpdate`，发送端只接收两个 `onLocal*`
+  回调。
+
+混用会重复转发幂等数据，并使背压、指标和授权审计变得不确定。
+
+## CodeMirror 6 接入
+
+应用拥有 provider、认证、授权与编辑器生命周期，binding 不拥有 WebSocket 或 Y.Doc：
+
+```ts
+import * as Y from "yjs";
+import { Awareness } from "y-protocols/awareness.js";
+import type { ViewUpdate } from "@codemirror/view";
+import { bindYjsCodeMirrorPlainText } from "@darkinno/crdt-client/yjs";
+
+const document = new Y.Doc();
+const text = document.getText("content");
+const awareness = new Awareness(document);
+let binding: ReturnType<typeof bindYjsCodeMirrorPlainText> | undefined;
+
+function onCodeMirrorUpdate(update: ViewUpdate) {
+  binding?.applyViewUpdate(update);
+}
+
+binding = bindYjsCodeMirrorPlainText(document, text, view, {
+  updateFormat: "v1", // 必须与 YJSRoom/YJSStore 的 format 一致。
+  maxUpdateBytes: 1 << 20,
+  maxAwarenessBytes: 64 << 10,
+  maxTextUTF16: 1 << 20,
+  maxCursorBytes: 256,
+}, awareness);
+
+binding.setLocalCursor({ anchor: 12, head: 18 });
+renderRemoteCursors(binding.remoteCursors());
+```
+
+首次挂接时 editor 与 document 不一致会写入一次完整初始值；之后远端事务全是区间
+change。单区间本地 CodeMirror 更新同样增量；旧 adapter 或多区间本地更新会走显式的
+原子文本 fallback，而不是发送残缺的 Yjs 事务。
+
+## 安全和资源边界
+
+- `maxUpdateBytes` 与 `maxAwarenessBytes` 在进入对应 JS decoder 前拒绝入站字节，取值
+  不得超过 relay/store 的同类限制。
+- `maxTextUTF16` 只在本地编辑前限制 UI 增长；它无法让已经解码的恶意 Yjs update 不分配
+  内存，公开入口仍必须依赖带认证的 server/store 限制。
+- `maxCursorBytes` 限制 relative-position payload；畸形、过期、属于其他 shared type 的
+  awareness 光标会被忽略。
+- awareness 是临时态：不能写入 YJSStore snapshot、Go CRDT frame、审计日志，也不能参与
+  授权。服务端必须像 `YJSHandler` 一样把 client ID 绑定到已认证连接。
+- 收到 `YjsBindingError("unsupported_text")` 表示渲染边界，底层 Yjs 文档仍有效。应卸载
+  plain-text view 并改用带 schema 的富文本 surface，不能删除 format/embed 后继续显示。
+
+## 验证与性能范围
+
+```sh
+make typescript-test
+node --test clients/typescript/test/yjs.test.mjs
+make typescript-yjs-bindings-benchmark
+```
+
+重点测试使用 JSDOM 下的真实 CodeMirror 6 view，覆盖远端区间更新、V1/V2、state-vector、
+光标/awareness、格式拒绝以及三副本延迟/重复/乱序模拟。性能脚本只记录本地进程工作量和
+editor write 形状，不能当作浏览器渲染、WebSocket、TLS、WAN、持久化或服务容量结论；记录
+见 [性能基线](../operations/yjs-native-editor-bindings-2026-08-01.md)。

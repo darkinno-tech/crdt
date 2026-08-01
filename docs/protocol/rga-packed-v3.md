@@ -97,11 +97,13 @@ acknowledgements, durable checkpointing, and old-frame retirement.
 
 ## Compatibility and verification
 
-Packed v3 is currently implemented by the Go library and the Go/Wasm runtime.
-Native or TypeScript implementations MUST NOT advertise TypeIDs `29/30` until
-they implement this exact decoder, limits, canonical re-encoder, and vectors.
-It is not Yjs wire compatibility; Yjs updates stay in the separately bounded
-opaque relay/store boundary.
+Packed v3 is implemented by the Go library and an explicitly built Go/Wasm
+runtime (`WASM_RGA_PROTOCOL=packed-v3`). The TypeScript loader exposes only the
+exact manifest contract and delegates every RGA frame to that runtime; it does
+not decode or translate packed frames. Native implementations MUST NOT
+advertise TypeIDs `29/30` until they implement this exact decoder, limits,
+canonical re-encoder, and vectors. It is not Yjs wire compatibility; Yjs
+updates stay in the separately bounded opaque relay/store boundary.
 
 [`testdata/rga-packed-v3-vectors.json`](testdata/rga-packed-v3-vectors.json)
 contains deterministic dense-chain, wall-transition, and tombstone data. Every
@@ -116,6 +118,7 @@ go test ./text ./replica ./cmd/crdt-compare
 go test -race ./text
 go test -run='^$' -fuzz=FuzzRGAPackedUnmarshal -fuzztime=150000x -parallel=1 ./text
 go test -run='^$' -bench='BenchmarkRGADeltaWireProtocols/(run-v2|packed-v3)$|BenchmarkRGAMarshalLinearDocument/(run_v2|packed_v3)$' -benchmem ./text
+make wasm-packed-test
 go run ./cmd/crdt-compare -protocol=packed-v3 -scenario=initial -sizes=4096,16384
 ```
 

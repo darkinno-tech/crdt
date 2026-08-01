@@ -15,6 +15,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Added an explicitly selected packed-v3 Go/Wasm browser runtime artifact and
+  TypeScript manifest contract. Its bounded initial snapshots and local edits
+  retain the same scalar RGA semantics while avoiding run-v2 wire expansion
+  for dense large-text chains.
 - Added disabled-by-default, manifest-bound WebSocket and HTTP/SSE live relay
   reference surfaces in `extensions`, plus runnable provider, race, fuzz,
   duplicate/reorder, concurrency, and loopback benchmark coverage.

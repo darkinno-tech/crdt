@@ -12,6 +12,7 @@ import { bindBlockNoteRichText, bindCodeMirrorPlainText, bindQuillRichText, bind
 import {
   CRDTRuntimeError,
   RICH_TEXT_PROTOCOL,
+  RGA_PROTOCOL_PACKED_V3,
   RGA_PROTOCOL_RUN_V2,
   RGA_PROTOCOL_V1,
   RGA_WASM_GLOBAL,
@@ -467,7 +468,10 @@ function protocolForArtifact(value) {
   if (value === "v1") {
     return RGA_PROTOCOL_V1;
   }
-  throw new Error("CRDT_RGA_PROTOCOL must be run-v2 or v1");
+  if (value === "packed-v3") {
+    return RGA_PROTOCOL_PACKED_V3;
+  }
+  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, or v1");
 }
 
 class TestTextPort {
