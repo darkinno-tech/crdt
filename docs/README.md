@@ -84,6 +84,8 @@ be committed.
 - [Controlled performance-regression CI](operations/performance-regression-ci.md)
 - [受控性能回归 CI](operations/performance-regression-ci.zh-CN.md)
 - [Yjs relay controlled validation — 2026-07-31](operations/yjs-relay-benchmark-2026-07-31.md)
+- [Native Yjs adoption assessment — 2026-08-01](operations/yjs-native-adoption-2026-08-01.md)
+- [Yjs 原生接入评估 — 2026-08-01](operations/yjs-native-adoption-2026-08-01.zh-CN.md)
 - [Rich-text editor binding controlled validation — 2026-07-31](operations/richtext-editor-binding-benchmark-2026-07-31.md)
 - [Native multilingual RGA controlled benchmark — 2026-07-31](operations/native-multilanguage-rga-benchmark-2026-07-31.md)
 - [RGA incremental editor cross-host benchmark — 2026-08-01](operations/rga-incremental-editor-benchmark-2026-08-01.md)
