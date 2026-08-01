@@ -73,6 +73,14 @@ snapshot 或授权 Yjs 文档内部。历史满时会拒绝写入，而不是静
 Go [`awareness`](../protocol/awareness-v1.md) 是另一套带认证的 Go-provider 协议；不要将其 update
 与 Yjs awareness bytes 混用，也不要把两者持久化为 CRDT document update。
 
+`YJSHandler` 故意没有通用的 Go-awareness ↔ Yjs-awareness 开关。两套协议分别使用已认证身份
+（`actor` 与 client ID）、独立的单调 clock，以及可能不同的 cursor schema；复用任一身份或 clock
+都会造成 equal-clock conflict、competing-client ownership failure，或让重连覆盖 presence。确有
+联邦需求的产品必须实现 application gateway：显式绑定 tenant/room/epoch、注入式分配 external
+client ID、为目标协议生成单调 clock、分别授权两个方向、限制 fan-out，并定义 cursor metadata 的
+loss policy。它应被视为一个新的 presence capability，并以真实 client interoperability test 验证，
+而不是透明 relay option。
+
 ## gRPC 已经是原生实现，而非 Yjs transport
 
 仓库已有 [`extensions.Relay`](extensions.md#native-grpc-relay)：它是为 manifest-bound Go CRDT
