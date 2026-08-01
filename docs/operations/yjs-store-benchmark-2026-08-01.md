@@ -26,7 +26,7 @@ passed all of the following:
 Focused Go wire fuzzing also passed:
 
 ```text
-go test -run='^$' -fuzz=FuzzDecodeYJSStoreBytes -fuzztime=10s -parallel=1 ./extensions
+go test -run='^$' -fuzz=FuzzDecodeYJSStoreBytes -fuzztime=250000x -parallel=1 ./extensions
 PASS; 134,550 executions, 48 new interesting inputs
 ```
 

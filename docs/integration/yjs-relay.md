@@ -89,6 +89,18 @@ The Go [`awareness`](../protocol/awareness-v1.md) package is a different,
 authenticated Go-provider protocol. Do not mix its updates with Yjs awareness
 bytes or persist either as a CRDT document update.
 
+There is intentionally no generic Go-awareness ↔ Yjs-awareness switch on
+`YJSHandler`. The protocols have separate authenticated identities
+(`actor` versus client ID), independent monotonic clocks, and potentially
+different cursor schemas. Reusing either identity or clock would allow an
+equal-clock conflict, a competing-client ownership failure, or a reconnection
+to overwrite presence. A product that really needs federation must implement
+an application gateway with an explicit tenant/room/epoch binding, an
+injective external-client-ID allocation, target-specific monotonic clocks,
+per-direction authorization, bounded fan-out, and a loss policy for cursor
+metadata. Treat it as a new presence capability with real client
+interoperability tests, not as a transparent relay option.
+
 ## gRPC is already native, not a Yjs transport
 
 The repository's existing [`extensions.Relay`](extensions.md#native-grpc-relay)

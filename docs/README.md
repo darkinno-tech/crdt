@@ -15,6 +15,8 @@ be committed.
 
 - [End-to-end integration tutorial](integration/overview.md)
 - [端到端集成教程](integration/overview.zh-CN.md)
+- [Intent-first CRDT setup](integration/intent-first-setup.md)
+- [按业务意图配置 CRDT](integration/intent-first-setup.zh-CN.md)
 - [Local bbolt checkpoint reference](integration/local-checkpoint.md)
 - [本地 bbolt 检查点参考实现](integration/local-checkpoint.zh-CN.md)
 - [Durable WebSocket relay reference](integration/durable-provider.md)

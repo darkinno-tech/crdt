@@ -191,6 +191,7 @@ func NewYJSHandler(config YJSConfig) (*YJSHandler, error) {
 		maxAwarenessClients = 256
 	}
 	rooms := make(map[string]*YJSRoom, len(config.Rooms))
+	storeDocuments := make(map[YJSDocument]struct{}, len(config.Rooms))
 	for _, room := range config.Rooms {
 		if room == nil || room.name == "" ||
 			(room.store == nil && room.maxUpdateBytes > limits.maxMessageBytes) ||
@@ -200,6 +201,12 @@ func NewYJSHandler(config YJSConfig) (*YJSHandler, error) {
 		}
 		if _, exists := rooms[room.name]; exists {
 			return nil, invalidConfig("extensions.new_yjs_handler", ErrInvalidConfig)
+		}
+		if room.store != nil {
+			if _, exists := storeDocuments[room.document]; exists {
+				return nil, invalidConfig("extensions.new_yjs_handler", ErrInvalidConfig)
+			}
+			storeDocuments[room.document] = struct{}{}
 		}
 		rooms[room.name] = room
 	}

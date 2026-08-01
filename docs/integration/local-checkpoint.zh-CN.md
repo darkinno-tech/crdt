@@ -208,8 +208,8 @@ bbolt 有可串行化 ACID 事务，但只有一个 writer。`FileStore` 每次�
 ```sh
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 ./persistence
 go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
 ```
 

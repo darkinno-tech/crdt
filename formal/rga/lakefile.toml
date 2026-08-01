@@ -1,5 +1,5 @@
 name = "darkinno-rga-formal"
-defaultTargets = ["RGAFormal"]
+defaultTargets = ["RGAFormal.Delta", "RGAFormal.Order", "RGAFormal.RunV2", "RGAFormal.Recovery"]
 
 [[lean_lib]]
 name = "RGAFormal"
