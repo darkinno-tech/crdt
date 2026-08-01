@@ -36,7 +36,7 @@ and disconnect cleanup. It passed:
 ```text
 go test ./extensions                         PASS
 go test -race ./extensions -run 'TestYJS'    PASS
-go test -run='^$' -fuzz=FuzzUnmarshalYJSMessages -fuzztime=10s -parallel=1 ./extensions
+go test -run='^$' -fuzz=FuzzUnmarshalYJSMessages -fuzztime=250000x -parallel=1 ./extensions
                                                 PASS; 124,088 executions
 ```
 

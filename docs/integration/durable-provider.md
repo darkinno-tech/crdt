@@ -129,7 +129,7 @@ of resetting the cursor or accepting a partial event stream.
 ```sh
 go test ./durable
 go test -race ./durable
-go test -run='^$' -fuzz=FuzzWire -fuzztime=10s ./durable
+go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x ./durable
 go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect)' -benchmem ./durable
 ```
 

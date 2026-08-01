@@ -33,7 +33,7 @@ go vet ./...
 | 三副本、快照恢复、批处理和 Merkle 反熵 | `make test-integration` |
 | 高基数恢复与收敛场景 | `make test-extreme` |
 | 数据竞争 | `make race` |
-| 解码器模糊测试（每个目标 10 秒） | `make fuzz` |
+| 解码器模糊测试（每个目标 250000 次；多副本文档模型 10000 次，可通过 `FUZZ_RUNS` / `FUZZ_MODEL_RUNS` 调整） | `make fuzz` |
 | 每包覆盖率门槛（90%） | `make coverage` |
 | 更新 TypeID 生成物 | `make generate` |
 | 检查 TypeID 生成物未漂移 | `make generate-check` |

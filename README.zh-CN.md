@@ -118,8 +118,8 @@ go run ./examples/persistent-replica
 ```sh
 go test ./persistence ./examples/persistent-replica
 go test -race ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=20s -parallel=1 ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=20s -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 ./persistence
+go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 ./persistence
 go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
 ```
 

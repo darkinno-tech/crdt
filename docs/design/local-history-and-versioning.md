@@ -126,8 +126,8 @@ repository restore, and concrete snapshot materialization.
 ```sh
 go test ./history -count=1
 go test -race ./history -count=1
-go test -run=^$ -fuzz=FuzzManagerUnmarshal -fuzztime=20s -parallel=1 ./history
-go test -run=^$ -fuzz=FuzzRepositoryUnmarshal -fuzztime=20s -parallel=1 ./history
+go test -run=^$ -fuzz=FuzzManagerUnmarshal -fuzztime=250000x -parallel=1 ./history
+go test -run=^$ -fuzz=FuzzRepositoryUnmarshal -fuzztime=250000x -parallel=1 ./history
 go test -run='^$' -bench='Benchmark(ManagerExecuteUndo|RepositoryCommitSnapshot)$' -benchmem ./history
 ```
 

@@ -82,7 +82,7 @@ if err := ref.Verify(file); err != nil {
 ```sh
 go test ./attachment
 go test -race ./attachment
-go test -run=^$ -fuzz=FuzzUnmarshalDelta -fuzztime=10s ./attachment
-go test -run=^$ -fuzz=FuzzReferenceVerify -fuzztime=10s ./attachment
+go test -run=^$ -fuzz=FuzzUnmarshalDelta -fuzztime=250000x ./attachment
+go test -run=^$ -fuzz=FuzzReferenceVerify -fuzztime=250000x ./attachment
 go test ./examples/attachment-collaboration
 ```
