@@ -171,3 +171,20 @@ export type {
   NativeNestedTypeListener,
   NativeNestedValue,
 } from "./nested.js";
+export {
+  bindYjsCodeMirrorPlainText,
+  YjsBindingError,
+  YjsCodeMirrorBinding,
+  YjsTextBinding,
+} from "./yjs.js";
+export type {
+  BindYjsCodeMirrorOptions,
+  YjsBindingErrorCode,
+  YjsCodeMirrorTextPort,
+  YjsCodeMirrorViewUpdate,
+  YjsRemoteCursor,
+  YjsTextBindingOptions,
+  YjsTextChange,
+  YjsTextSelection,
+  YjsUpdateFormat,
+} from "./yjs.js";

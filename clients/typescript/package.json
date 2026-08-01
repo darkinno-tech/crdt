@@ -12,7 +12,8 @@
     "./nested": "./dist/nested.js",
     "./collections": "./dist/collections.js",
     "./bindings": "./dist/bindings.js",
-    "./wasm": "./dist/wasm.js"
+    "./wasm": "./dist/wasm.js",
+    "./yjs": "./dist/yjs.js"
   },
   "files": [
     "dist",
@@ -23,7 +24,7 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "test": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/collections.test.mjs test/collections.real.test.mjs test/collections-editor.example.test.mjs test/offline-policy.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/blocknote.test.mjs test/blocknote.real.test.mjs test/rga-run-v2-vectors.test.mjs",
+    "test": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/collections.test.mjs test/collections.real.test.mjs test/collections-editor.example.test.mjs test/offline-policy.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/blocknote.test.mjs test/blocknote.real.test.mjs test/rga-run-v2-vectors.test.mjs test/yjs.test.mjs",
     "test:adapters:types": "tsc --project tsconfig.adapters.json && tsc --project tsconfig.blocknote-adapter.json",
     "test:wasm": "npm run build && node --test test/wasm.integration.test.mjs",
     "test:compat": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/collections.test.mjs test/collections.real.test.mjs test/collections-editor.example.test.mjs test/offline-policy.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/blocknote.test.mjs test/blocknote.real.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm.integration.test.mjs test/rga-browser.integration.test.mjs",
@@ -36,7 +37,12 @@
     "bench:collections": "npm run build && node bench/collections.bench.mjs",
     "bench:wasm": "node bench/wasm.bench.mjs",
     "bench:wasm-browser": "npm run build && node bench/wasm-browser.bench.mjs",
-    "bench:wasm-bindings": "npm run build && node bench/wasm-bindings.bench.mjs"
+    "bench:wasm-bindings": "npm run build && node bench/wasm-bindings.bench.mjs",
+    "bench:yjs-bindings": "npm run build && node bench/yjs-bindings.bench.mjs"
+  },
+  "dependencies": {
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.31"
   },
   "devDependencies": {
     "@blocknote/core": "^0.51.3",

@@ -1,0 +1,726 @@
+/**
+ * Native Yjs text and presence bindings.
+ *
+ * This module deliberately operates on Yjs documents, updates, relative
+ * positions, and y-protocols awareness directly. It is not an RGA-to-Yjs
+ * conversion layer. Use it with a y-websocket-compatible provider (including
+ * extensions.YJSHandler) or with the explicit update/awareness callbacks
+ * below, but never mix those transport ownership models for one Y.Doc.
+ */
+
+import * as Y from "yjs";
+import {
+  applyAwarenessUpdate,
+  Awareness,
+  encodeAwarenessUpdate,
+} from "y-protocols/awareness.js";
+
+/** The Yjs binary-update encoding pinned for one room. */
+export type YjsUpdateFormat = "v1" | "v2";
+
+export type YjsBindingErrorCode =
+  | "document_mismatch"
+  | "document_closed"
+  | "editor_update_failed"
+  | "invalid_options"
+  | "invalid_selection"
+  | "invalid_update"
+  | "resource_limit"
+  | "unsupported_text";
+
+/** A stable error code for callers that need to close or recover a binding. */
+export class YjsBindingError extends Error {
+  constructor(readonly code: YjsBindingErrorCode) {
+    super(code);
+    this.name = "YjsBindingError";
+  }
+}
+
+/** One UTF-16 editor replacement. Y.Text and CodeMirror both use UTF-16 indices. */
+export interface YjsTextChange {
+  readonly from: number;
+  readonly to: number;
+  readonly insert: string;
+}
+
+/** A live selection represented by Yjs relative positions, not ephemeral offsets. */
+export interface YjsTextSelection {
+  readonly anchor: number;
+  readonly head: number;
+}
+
+/** One peer cursor resolved against the current local Y.Text projection. */
+export interface YjsRemoteCursor {
+  readonly clientID: number;
+  readonly selection: YjsTextSelection;
+}
+
+export interface YjsTextBindingOptions {
+  /** Pins V1 or V2; one document room must never accept both encodings. */
+  readonly updateFormat?: YjsUpdateFormat;
+  /** Rejects one inbound update before handing it to the Yjs decoder. */
+  readonly maxUpdateBytes: number;
+  /** Rejects one inbound y-protocols awareness message before decoding it. */
+  readonly maxAwarenessBytes: number;
+  /** Caps local text growth before a local transaction mutates the Y.Doc. */
+  readonly maxTextUTF16: number;
+  /** Caps each encoded relative position retained in an awareness state. */
+  readonly maxCursorBytes: number;
+  /** Optional field name for this binding's JSON awareness cursor payload. */
+  readonly cursorField?: string;
+  /** Receives local Yjs document updates when this binding owns transport. */
+  readonly onLocalUpdate?: (update: Uint8Array) => void;
+  /** Receives local y-protocols awareness updates when this binding owns transport. */
+  readonly onLocalAwarenessUpdate?: (update: Uint8Array) => void;
+  /** Receives incremental remote or external Y.Text changes. */
+  readonly onTextChanges?: (changes: readonly YjsTextChange[]) => void;
+  /** Reports a boundedness or unsupported-text failure without exposing document bytes. */
+  readonly onError?: (error: YjsBindingError) => void;
+}
+
+interface EncodedYjsCursor {
+  readonly version: 1;
+  readonly anchor: string;
+  readonly head: string;
+}
+
+interface YjsDeltaOperation {
+  readonly insert?: unknown | undefined;
+  readonly delete?: number | undefined;
+  readonly retain?: number | undefined;
+  readonly attributes?: Readonly<Record<string, unknown>> | undefined;
+}
+
+const defaultCursorField = "crdt.yjs.cursor.v1";
+
+/**
+ * Binds one already-integrated Y.Text to incremental editor changes and the
+ * exact Yjs update/awareness APIs. It intentionally accepts only unformatted
+ * string Y.Text content. Rich-text schemas need a schema-aware Yjs binding;
+ * this class stops projecting instead of flattening formats or embeds.
+ */
+export class YjsTextBinding {
+  readonly updateFormat: YjsUpdateFormat;
+  readonly cursorField: string;
+  readonly #remoteUpdateOrigin = Object.freeze({ source: "crdt-yjs-remote-update" });
+  readonly #remoteAwarenessOrigin = Object.freeze({ source: "crdt-yjs-remote-awareness" });
+  readonly #localTextOrigin = Object.freeze({ source: "crdt-yjs-editor" });
+  readonly #observeText: (event: Y.YTextEvent) => void;
+  readonly #observeUpdate: (update: Uint8Array, origin: unknown) => void;
+  readonly #observeAwareness: (_change: unknown, origin: unknown) => void;
+  #closed = false;
+  #projectingText = true;
+  #textObserved = false;
+
+  constructor(
+    readonly document: Y.Doc,
+    readonly text: Y.Text,
+    private readonly options: YjsTextBindingOptions,
+    readonly awareness?: Awareness,
+  ) {
+    if (text.doc !== document) {
+      throw new YjsBindingError("document_mismatch");
+    }
+    validateOptions(options);
+    this.updateFormat = options.updateFormat ?? "v1";
+    this.cursorField = options.cursorField ?? defaultCursorField;
+    if (!validCursorField(this.cursorField)) {
+      throw new YjsBindingError("invalid_options");
+    }
+    if (text.length > options.maxTextUTF16 || !isPlainYText(text)) {
+      throw new YjsBindingError(text.length > options.maxTextUTF16 ? "resource_limit" : "unsupported_text");
+    }
+
+    this.#observeText = (event) => this.#handleTextEvent(event);
+    this.#observeUpdate = (update, origin) => this.#handleDocumentUpdate(update, origin);
+    this.#observeAwareness = (_change, origin) => this.#handleAwarenessUpdate(origin);
+    text.observe(this.#observeText);
+    this.#textObserved = true;
+    if (this.updateFormat === "v1") {
+      document.on("update", this.#observeUpdate);
+    } else {
+      document.on("updateV2", this.#observeUpdate);
+    }
+    awareness?.on("update", this.#observeAwareness);
+  }
+
+  /** Applies one transport-authenticated Yjs update and projects only its changed ranges. */
+  applyRemoteUpdate(update: Uint8Array): void {
+    this.#assertOpen();
+    assertBoundedBytes(update, this.options.maxUpdateBytes);
+    try {
+      if (this.updateFormat === "v1") {
+        Y.applyUpdate(this.document, update, this.#remoteUpdateOrigin);
+      } else {
+        Y.applyUpdateV2(this.document, update, this.#remoteUpdateOrigin);
+      }
+    } catch {
+      throw new YjsBindingError("invalid_update");
+    }
+  }
+
+  /** Returns the state vector used by a y-protocols sync Step 1. */
+  encodeStateVector(): Uint8Array {
+    this.#assertOpen();
+    const stateVector = Y.encodeStateVector(this.document);
+    assertBoundedBytes(stateVector, this.options.maxUpdateBytes);
+    return stateVector;
+  }
+
+  /** Encodes the V1/V2 state difference for a peer's state vector. */
+  encodeStateAsUpdate(remoteStateVector?: Uint8Array): Uint8Array {
+    this.#assertOpen();
+    if (remoteStateVector !== undefined) {
+      assertBoundedBytes(remoteStateVector, this.options.maxUpdateBytes);
+    }
+    const update = this.updateFormat === "v1"
+      ? Y.encodeStateAsUpdate(this.document, remoteStateVector)
+      : Y.encodeStateAsUpdateV2(this.document, remoteStateVector);
+    assertBoundedBytes(update, this.options.maxUpdateBytes);
+    return update;
+  }
+
+  /** Applies one inbound y-protocols awareness message without treating client IDs as identities. */
+  applyRemoteAwarenessUpdate(update: Uint8Array): void {
+    this.#assertOpen();
+    if (this.awareness === undefined) {
+      throw new YjsBindingError("invalid_options");
+    }
+    assertBoundedBytes(update, this.options.maxAwarenessBytes);
+    try {
+      applyAwarenessUpdate(this.awareness, update, this.#remoteAwarenessOrigin);
+    } catch {
+      throw new YjsBindingError("invalid_update");
+    }
+  }
+
+  /** Encodes selected awareness states for an explicit transport. */
+  encodeAwarenessUpdate(clientIDs: readonly number[]): Uint8Array {
+    this.#assertOpen();
+    if (this.awareness === undefined || !clientIDs.every(validClientID)) {
+      throw new YjsBindingError("invalid_options");
+    }
+    const update = encodeAwarenessUpdate(this.awareness, [...clientIDs]);
+    assertBoundedBytes(update, this.options.maxAwarenessBytes);
+    return update;
+  }
+
+  /** Stores the local cursor using encoded Yjs relative positions in awareness JSON. */
+  setLocalCursor(selection: YjsTextSelection): void {
+    this.#assertOpen();
+    if (this.awareness === undefined || !validSelection(selection, this.text.length)) {
+      throw new YjsBindingError("invalid_selection");
+    }
+    const cursor: EncodedYjsCursor = {
+      version: 1,
+      anchor: encodeRelativePosition(Y.createRelativePositionFromTypeIndex(this.text, selection.anchor), this.options.maxCursorBytes),
+      head: encodeRelativePosition(Y.createRelativePositionFromTypeIndex(this.text, selection.head), this.options.maxCursorBytes),
+    };
+    this.awareness.setLocalStateField(this.cursorField, cursor);
+  }
+
+  /** Clears only this binding's cursor field; other host-owned awareness fields remain intact. */
+  clearLocalCursor(): void {
+    this.#assertOpen();
+    if (this.awareness === undefined) {
+      throw new YjsBindingError("invalid_options");
+    }
+    this.awareness.setLocalStateField(this.cursorField, undefined);
+  }
+
+  /** Resolves all valid peer cursors against this exact Y.Text, skipping malformed foreign state. */
+  remoteCursors(includeLocal = false): readonly YjsRemoteCursor[] {
+    this.#assertOpen();
+    if (this.awareness === undefined) {
+      return [];
+    }
+    const cursors: YjsRemoteCursor[] = [];
+    for (const [clientID, state] of this.awareness.getStates()) {
+      if ((!includeLocal && clientID === this.document.clientID) || !validClientID(clientID)) {
+        continue;
+      }
+      const selection = decodeCursor(state?.[this.cursorField], this.document, this.text, this.options.maxCursorBytes);
+      if (selection !== undefined) {
+        cursors.push({ clientID, selection });
+      }
+    }
+    return cursors.sort((left, right) => left.clientID - right.clientID);
+  }
+
+  /**
+   * Applies a local editor replacement as one Yjs transaction. The caller must
+   * already have made the same replacement in its editor, so this binding does
+   * not echo the resulting Y.Text delta back to that editor.
+   */
+  applyLocalReplacement(change: YjsTextChange): void {
+    this.#assertTextProjection();
+    if (!validTextChange(change, this.text.length)) {
+      throw new YjsBindingError("invalid_selection");
+    }
+    const nextLength = this.text.length - (change.to - change.from) + change.insert.length;
+    if (nextLength > this.options.maxTextUTF16) {
+      throw new YjsBindingError("resource_limit");
+    }
+    this.document.transact(() => {
+      if (change.to > change.from) {
+        this.text.delete(change.from, change.to - change.from);
+      }
+      if (change.insert.length > 0) {
+        this.text.insert(change.from, change.insert);
+      }
+    }, this.#localTextOrigin);
+  }
+
+  /** Stops listeners without destroying caller-owned Y.Doc, Y.Text, or Awareness instances. */
+  destroy(): boolean {
+    if (this.#closed) {
+      return false;
+    }
+    this.#closed = true;
+    if (this.#textObserved) {
+      this.text.unobserve(this.#observeText);
+      this.#textObserved = false;
+    }
+    if (this.updateFormat === "v1") {
+      this.document.off("update", this.#observeUpdate);
+    } else {
+      this.document.off("updateV2", this.#observeUpdate);
+    }
+    this.awareness?.off("update", this.#observeAwareness);
+    return true;
+  }
+
+  #handleTextEvent(event: Y.YTextEvent): void {
+    if (this.#closed || !this.#projectingText) {
+      return;
+    }
+    const changes = changesFromYjsDelta(event.delta);
+    if (changes === undefined || this.text.length > this.options.maxTextUTF16 || !isPlainYjsDelta(event.delta)) {
+      this.#stopTextProjection(this.text.length > this.options.maxTextUTF16 ? "resource_limit" : "unsupported_text");
+      return;
+    }
+    if (event.transaction.origin !== this.#localTextOrigin && changes.length > 0) {
+      try {
+        this.options.onTextChanges?.(changes);
+      } catch {
+        // The Yjs transaction is already committed. Stop this view binding so
+        // it cannot claim a projection it failed to apply; the caller still
+        // owns the Y.Doc and may attach a recovery-capable editor surface.
+        this.#stopTextProjection("editor_update_failed");
+      }
+    }
+  }
+
+  #handleDocumentUpdate(update: Uint8Array, origin: unknown): void {
+    if (this.#closed || origin === this.#remoteUpdateOrigin || this.options.onLocalUpdate === undefined) {
+      return;
+    }
+    if (update.byteLength > this.options.maxUpdateBytes) {
+      this.#report("resource_limit");
+      return;
+    }
+    this.options.onLocalUpdate(update.slice());
+  }
+
+  #handleAwarenessUpdate(origin: unknown): void {
+    if (this.#closed || this.awareness === undefined || origin === this.#remoteAwarenessOrigin) {
+      return;
+    }
+    // Every local awareness update, including a heartbeat, is transportable.
+    // Remote updates use a distinct origin and never echo into a manual outbox.
+    if (this.options.onLocalAwarenessUpdate !== undefined) {
+      const update = encodeAwarenessUpdate(this.awareness, [this.awareness.clientID]);
+      if (update.byteLength <= this.options.maxAwarenessBytes) {
+        this.options.onLocalAwarenessUpdate(update.slice());
+      } else {
+        this.#report("resource_limit");
+      }
+    }
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) {
+      throw new YjsBindingError("document_closed");
+    }
+  }
+
+  #assertTextProjection(): void {
+    this.#assertOpen();
+    if (!this.#projectingText) {
+      throw new YjsBindingError("unsupported_text");
+    }
+  }
+
+  #stopTextProjection(code: Extract<YjsBindingErrorCode, "editor_update_failed" | "resource_limit" | "unsupported_text">): void {
+    this.#projectingText = false;
+    if (this.#textObserved) {
+      this.text.unobserve(this.#observeText);
+      this.#textObserved = false;
+    }
+    this.#report(code);
+  }
+
+  #report(code: YjsBindingErrorCode): void {
+    this.options.onError?.(new YjsBindingError(code));
+  }
+}
+
+/** The CodeMirror 6 surface used by the incremental native Yjs text binding. */
+export interface YjsCodeMirrorTextPort {
+  readonly state: {
+    readonly doc: {
+      readonly length: number;
+      toString(): string;
+    };
+  };
+  dispatch(spec: {
+    readonly changes?: YjsTextChange | readonly YjsTextChange[];
+  }): void;
+}
+
+/** The small CodeMirror update shape required to route local user transactions. */
+export interface YjsCodeMirrorViewUpdate {
+  readonly docChanged: boolean;
+  readonly changes?: {
+    iterChanges(listener: (
+      fromA: number,
+      toA: number,
+      fromB: number,
+      toB: number,
+      inserted: { toString(): string },
+    ) => void): void;
+  };
+}
+
+export type BindYjsCodeMirrorOptions = Omit<YjsTextBindingOptions, "onTextChanges">;
+
+/**
+ * Connects one CodeMirror 6 plain-text document to a native Y.Text. Remote
+ * Yjs transactions dispatch only their changed ranges, so a one-character
+ * remote update never becomes a full-document editor replacement.
+ */
+export class YjsCodeMirrorBinding {
+  readonly #binding: YjsTextBinding;
+  #writing = false;
+
+  constructor(
+    document: Y.Doc,
+    text: Y.Text,
+    private readonly view: YjsCodeMirrorTextPort,
+    options: BindYjsCodeMirrorOptions,
+    awareness?: Awareness,
+  ) {
+    this.#binding = new YjsTextBinding(document, text, {
+      ...options,
+      onTextChanges: (changes) => this.#applyRemoteChanges(changes),
+    }, awareness);
+    const current = view.state.doc.toString();
+    if (current !== text.toString()) {
+      this.#writeFullInitialProjection(text.toString());
+    }
+  }
+
+  get text(): Y.Text {
+    return this.#binding.text;
+  }
+
+  get document(): Y.Doc {
+    return this.#binding.document;
+  }
+
+  get awareness(): Awareness | undefined {
+    return this.#binding.awareness;
+  }
+
+  applyRemoteUpdate(update: Uint8Array): void {
+    this.#binding.applyRemoteUpdate(update);
+  }
+
+  applyRemoteAwarenessUpdate(update: Uint8Array): void {
+    this.#binding.applyRemoteAwarenessUpdate(update);
+  }
+
+  encodeStateVector(): Uint8Array {
+    return this.#binding.encodeStateVector();
+  }
+
+  encodeStateAsUpdate(remoteStateVector?: Uint8Array): Uint8Array {
+    return this.#binding.encodeStateAsUpdate(remoteStateVector);
+  }
+
+  encodeAwarenessUpdate(clientIDs: readonly number[]): Uint8Array {
+    return this.#binding.encodeAwarenessUpdate(clientIDs);
+  }
+
+  setLocalCursor(selection: YjsTextSelection): void {
+    this.#binding.setLocalCursor(selection);
+  }
+
+  clearLocalCursor(): void {
+    this.#binding.clearLocalCursor();
+  }
+
+  remoteCursors(includeLocal = false): readonly YjsRemoteCursor[] {
+    return this.#binding.remoteCursors(includeLocal);
+  }
+
+  /** Route every CodeMirror update listener event to this method. */
+  applyViewUpdate(update: YjsCodeMirrorViewUpdate): void {
+    if (this.#writing || !update.docChanged) {
+      return;
+    }
+    const change = singleCodeMirrorChange(update, this.view.state.doc.length, this.text.length);
+    if (change !== undefined) {
+      this.#binding.applyLocalReplacement(change);
+      return;
+    }
+    this.#replaceFromEditorFallback();
+  }
+
+  destroy(): boolean {
+    return this.#binding.destroy();
+  }
+
+  #applyRemoteChanges(changes: readonly YjsTextChange[]): void {
+    if (changes.length === 0) {
+      return;
+    }
+    this.#writing = true;
+    try {
+      const first = changes[0];
+      if (changes.length === 1 && first !== undefined) {
+        this.view.dispatch({ changes: first });
+      } else {
+        this.view.dispatch({ changes });
+      }
+    } finally {
+      this.#writing = false;
+    }
+  }
+
+  #writeFullInitialProjection(value: string): void {
+    this.#writing = true;
+    try {
+      this.view.dispatch({ changes: { from: 0, to: this.view.state.doc.length, insert: value } });
+    } finally {
+      this.#writing = false;
+    }
+  }
+
+  #replaceFromEditorFallback(): void {
+    const next = this.view.state.doc.toString();
+    const previous = this.text.toString();
+    if (next === previous) {
+      return;
+    }
+    let prefix = 0;
+    while (prefix < previous.length && prefix < next.length && previous.charCodeAt(prefix) === next.charCodeAt(prefix)) {
+      prefix += 1;
+    }
+    let previousEnd = previous.length;
+    let nextEnd = next.length;
+    while (previousEnd > prefix && nextEnd > prefix && previous.charCodeAt(previousEnd - 1) === next.charCodeAt(nextEnd - 1)) {
+      previousEnd -= 1;
+      nextEnd -= 1;
+    }
+    this.#binding.applyLocalReplacement({ from: prefix, to: previousEnd, insert: next.slice(prefix, nextEnd) });
+  }
+}
+
+export function bindYjsCodeMirrorPlainText(
+  document: Y.Doc,
+  text: Y.Text,
+  view: YjsCodeMirrorTextPort,
+  options: BindYjsCodeMirrorOptions,
+  awareness?: Awareness,
+): YjsCodeMirrorBinding {
+  return new YjsCodeMirrorBinding(document, text, view, options, awareness);
+}
+
+function changesFromYjsDelta(delta: readonly YjsDeltaOperation[]): YjsTextChange[] | undefined {
+  const changes: YjsTextChange[] = [];
+  let offset = 0;
+  let pending: { from: number; to: number; insert: string } | undefined;
+  const flush = () => {
+    if (pending !== undefined) {
+      changes.push(pending);
+      pending = undefined;
+    }
+  };
+  for (const operation of delta) {
+    if (!isPlainYjsOperation(operation)) {
+      return undefined;
+    }
+    if (typeof operation.retain === "number") {
+      flush();
+      offset += operation.retain;
+      continue;
+    }
+    if (typeof operation.delete === "number") {
+      if (pending === undefined) {
+        pending = { from: offset, to: offset, insert: "" };
+      }
+      pending.to += operation.delete;
+      offset += operation.delete;
+      continue;
+    }
+    if (typeof operation.insert === "string") {
+      if (pending === undefined) {
+        pending = { from: offset, to: offset, insert: "" };
+      }
+      pending.insert += operation.insert;
+      continue;
+    }
+    return undefined;
+  }
+  flush();
+  return changes;
+}
+
+function isPlainYText(text: Y.Text): boolean {
+  return (text.toDelta() as readonly YjsDeltaOperation[]).every(isPlainYjsOperation);
+}
+
+function isPlainYjsDelta(delta: readonly YjsDeltaOperation[]): boolean {
+  return delta.every(isPlainYjsOperation);
+}
+
+function isPlainYjsOperation(operation: YjsDeltaOperation): boolean {
+  if (operation.attributes !== undefined && Object.keys(operation.attributes).length !== 0) {
+    return false;
+  }
+  const actions = Number(typeof operation.retain === "number")
+    + Number(typeof operation.delete === "number")
+    + Number(typeof operation.insert === "string");
+  return actions === 1
+    && (typeof operation.retain !== "number" || Number.isSafeInteger(operation.retain) && operation.retain > 0)
+    && (typeof operation.delete !== "number" || Number.isSafeInteger(operation.delete) && operation.delete > 0);
+}
+
+function singleCodeMirrorChange(
+  update: YjsCodeMirrorViewUpdate,
+  nextLength: number,
+  previousLength: number,
+): YjsTextChange | undefined {
+  if (update.changes === undefined) {
+    return undefined;
+  }
+  let result: YjsTextChange | undefined;
+  let multiple = false;
+  update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+    if (result !== undefined || multiple || !validOffset(fromA, previousLength) || !validOffset(toA, previousLength) ||
+      toA < fromA || !validOffset(fromB, nextLength) || !validOffset(toB, nextLength) || toB < fromB) {
+      multiple = true;
+      return;
+    }
+    const value = inserted.toString();
+    if (value.length !== toB - fromB) {
+      multiple = true;
+      return;
+    }
+    result = { from: fromA, to: toA, insert: value };
+  });
+  if (multiple || result === undefined || nextLength !== previousLength - (result.to - result.from) + result.insert.length) {
+    return undefined;
+  }
+  return result;
+}
+
+function encodeRelativePosition(position: Y.RelativePosition, maximumBytes: number): string {
+  const encoded = Y.encodeRelativePosition(position);
+  assertBoundedBytes(encoded, maximumBytes);
+  return toBase64(encoded);
+}
+
+function decodeCursor(
+  value: unknown,
+  document: Y.Doc,
+  text: Y.Text,
+  maximumBytes: number,
+): YjsTextSelection | undefined {
+  if (!isEncodedCursor(value)) {
+    return undefined;
+  }
+  try {
+    const anchor = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(fromBase64(value.anchor, maximumBytes)), document);
+    const head = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(fromBase64(value.head, maximumBytes)), document);
+    if (anchor === null || head === null || anchor.type !== text || head.type !== text ||
+      !validSelection({ anchor: anchor.index, head: head.index }, text.length)) {
+      return undefined;
+    }
+    return { anchor: anchor.index, head: head.index };
+  } catch {
+    return undefined;
+  }
+}
+
+function isEncodedCursor(value: unknown): value is EncodedYjsCursor {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && (value as { version?: unknown }).version === 1
+    && typeof (value as { anchor?: unknown }).anchor === "string"
+    && typeof (value as { head?: unknown }).head === "string";
+}
+
+function toBase64(value: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < value.length; offset += 8192) {
+    binary += String.fromCharCode(...value.subarray(offset, Math.min(offset + 8192, value.length)));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(value: string, maximumBytes: number): Uint8Array {
+  if (value.length > base64Length(maximumBytes) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new YjsBindingError("resource_limit");
+  }
+  const binary = atob(value);
+  if (binary.length > maximumBytes) {
+    throw new YjsBindingError("resource_limit");
+  }
+  const decoded = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    decoded[index] = binary.charCodeAt(index);
+  }
+  return decoded;
+}
+
+function base64Length(bytes: number): number {
+  return Math.ceil(bytes / 3) * 4;
+}
+
+function validateOptions(options: YjsTextBindingOptions): void {
+  if (!validPositive(options.maxUpdateBytes) || !validPositive(options.maxAwarenessBytes) ||
+    !validPositive(options.maxTextUTF16) || !validPositive(options.maxCursorBytes)) {
+    throw new YjsBindingError("invalid_options");
+  }
+}
+
+function validCursorField(value: string): boolean {
+  return value.length > 0 && value.length <= 64 && /^[a-zA-Z0-9._-]+$/.test(value);
+}
+
+function assertBoundedBytes(value: Uint8Array, maximumBytes: number): void {
+  if (value.byteLength > maximumBytes) {
+    throw new YjsBindingError("resource_limit");
+  }
+}
+
+function validSelection(value: YjsTextSelection, length: number): boolean {
+  return validOffset(value.anchor, length) && validOffset(value.head, length);
+}
+
+function validTextChange(value: YjsTextChange, length: number): boolean {
+  return validSelection({ anchor: value.from, head: value.to }, length) && value.to >= value.from && typeof value.insert === "string";
+}
+
+function validOffset(value: number, length: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0 && value <= length;
+}
+
+function validPositive(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function validClientID(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
