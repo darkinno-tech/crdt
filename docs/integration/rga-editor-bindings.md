@@ -124,10 +124,11 @@ the bounded anchor shape, and clear a cursor when `anchor_gone` is returned.
 
 This is plain-text integration only. Quill's trailing newline is replicated as
 text. Tiptap accepts its narrow plain-text JSON subset, while Quill
-formatting/embeds, non-plain Tiptap/ProseMirror nodes, Slate elements, Lexical
-rich nodes, HTML/CSS, selection presence, shared undo history, persistence,
-replay, TLS, identity, authorization, and network transport remain
-application-owned.
+formatting/embeds, Slate elements, Lexical rich nodes, HTML/CSS, selection
+presence, shared undo history, persistence, replay, TLS, identity,
+authorization, and network transport remain application-owned. For the
+separately negotiated Tiptap/ProseMirror rich profile, see
+[`tiptap-richtext-bindings.md`](tiptap-richtext-bindings.md).
 
 Do not silently map a rich editor tree to plain text. For inline attributes,
 use the separate stable `richtext.Document` protocol with its manifest,

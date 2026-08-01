@@ -19,6 +19,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   TypeScript manifest contract. Its bounded initial snapshots and local edits
   retain the same scalar RGA semantics while avoiding run-v2 wire expansion
   for dense large-text chains.
+- Added a bounded, Manifest-bound Tiptap rich-text profile and an
+  application-owned ProseMirror port for approved blocks, marks, hard breaks,
+  and codec-validated atomic inline embeds. Unknown editor tree structure
+  fails closed; stable rich-text v1 TypeIDs and frame semantics are unchanged.
 - Added disabled-by-default, manifest-bound WebSocket and HTTP/SSE live relay
   reference surfaces in `extensions`, plus runnable provider, race, fuzz,
   duplicate/reorder, concurrency, and loopback benchmark coverage.
