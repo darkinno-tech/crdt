@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'none'; object-src 'none'; connect-src 'self'; script-src 'self'; worker-src 'self'" />
+    <title>Local-first multi-tab board</title>
+  </head>
+  <body>
+    <main>
+      <h1>Local-first multi-tab board</h1>
+      <p>Open this exact URL in a second tab. BroadcastChannel is only a live hint; the pending outbox remains until an authenticated server adapter returns a durable receipt.</p>
+      <form id="title-form">
+        <label>Board title <input id="title" autocomplete="off" /></label>
+        <button>Save title</button>
+      </form>
+      <form id="card-form">
+        <label>Card <input id="card" autocomplete="off" /></label>
+        <button>Add card</button>
+      </form>
+      <ul id="cards"></ul>
+      <p>Pending durable outbox entries: <output id="outbox">0</output></p>
+      <p id="service-worker" role="status">Registering offline shell…</p>
+      <p id="error" role="alert"></p>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

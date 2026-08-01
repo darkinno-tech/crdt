@@ -20,6 +20,8 @@ be committed.
 - [Durable WebSocket relay reference](integration/durable-provider.md)
 - [可持久化 WebSocket relay 参考实现](integration/durable-provider.zh-CN.md)
 - [Browser and provider architecture](integration/provider-architecture.md)
+- [TypeScript Collections structured-editor integration](integration/typescript-collections-editor.md)
+- [Browser multi-tab delivery and offline shell](integration/browser-multitab-offline.md)
 - [WebSocket provider reference](integration/websocket-provider.md)
 - [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
 - [Yjs / y-protocols compatibility relay](integration/yjs-relay.md)
