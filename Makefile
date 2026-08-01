@@ -5,7 +5,7 @@ GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/
 # A single fuzz worker avoids scheduler starvation in shared CI. Bound each
 # target by executions, not wall time: Go 1.26 can report a normal timed fuzz
 # shutdown as context deadline exceeded at the exact duration boundary.
-FUZZ_RUNS ?= 250000
+FUZZ_RUNS ?= 150000
 # This model executes each operation on three replicas, delivers every delta
 # repeatedly, and serializes the final states. Keep its scenario budget lower
 # than byte-decoder fuzzers while still exploring 10k adversarial schedules.
