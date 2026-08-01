@@ -309,6 +309,13 @@ to the document projection, and a joining client must bind after state recovery
 with `initialContent: "document"`. See the [rich-text editor binding
 guide](../../docs/integration/richtext-editor-bindings.md).
 
+For BlockNote's default text blocks, use `bindBlockNoteRichText` with the
+manifest SchemaID `darkinno:blocknote-text-v1`. It preserves the bounded
+paragraph/heading/list/quote/code subset, nesting, default block props, and
+approved inline styles without adding BlockNote or Yjs to this package's
+runtime dependencies. Tables, media, links, custom blocks, and unknown props
+are rejected rather than flattened. See the [BlockNote binding guide](../../docs/integration/blocknote-richtext-bindings.md).
+
 ## Build and verify
 
 From the repository root:
@@ -319,6 +326,7 @@ make wasm-v1 # optional legacy scalar-v1 artifact in .tmp/crdt-rga-v1-wasm/
 make typescript-test
 make typescript-native-benchmark
 make typescript-bindings-benchmark
+make typescript-blocknote-benchmark
 make wasm-test
 make wasm-v1-test # verifies the separately built legacy artifact
 make typescript-benchmark
