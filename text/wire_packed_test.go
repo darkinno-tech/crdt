@@ -176,6 +176,252 @@ func TestRGAPackedCanonicalChoiceUsesConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestRGAPackedLocalOperationsPreflightAndSnapshotBounds(t *testing.T) {
+	limits := frame.DefaultLimits()
+	source := mustRGA(t, "packed-local")
+
+	inserted, err := source.InsertPackedBinaryWithLimits(0, "abc", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedInsert, err := UnmarshalRGAPackedDeltaWithLimits(inserted, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := source.String(), "abc"; got != want {
+		t.Fatalf("packed insertion text = %q, want %q", got, want)
+	}
+	observer := mustRGA(t, "packed-local-observer")
+	if err := observer.ApplyDelta(decodedInsert); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := observer.String(), source.String(); got != want {
+		t.Fatalf("packed insertion delivery = %q, want %q", got, want)
+	}
+
+	prepared, preparedFrame, err := source.PrepareInsertPackedBinaryWithLimits(3, "d", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := source.String(), "abc"; got != want {
+		t.Fatalf("prepared packed insertion changed source to %q, want %q", got, want)
+	}
+	decodedPrepared, err := UnmarshalRGAPackedDeltaWithLimits(preparedFrame, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := decodedPrepared.NodePositions(), prepared.NodePositions(); !equalPositions(got, want) {
+		t.Fatal("prepared packed insertion frame changed positions")
+	}
+	if err := source.ApplyDelta(prepared); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := source.String(), "abcd"; got != want {
+		t.Fatalf("applied prepared insertion = %q, want %q", got, want)
+	}
+
+	deleted, err := source.DeletePackedBinaryWithLimits(1, 2, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnmarshalRGAPackedDeltaWithLimits(deleted, limits); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := source.String(), "ad"; got != want {
+		t.Fatalf("packed deletion text = %q, want %q", got, want)
+	}
+	preparedDelete, preparedDeleteFrame, err := source.PrepareDeletePackedBinaryWithLimits(1, 1, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnmarshalRGAPackedDeltaWithLimits(preparedDeleteFrame, limits); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := source.String(), "ad"; got != want {
+		t.Fatalf("prepared packed deletion changed source to %q, want %q", got, want)
+	}
+	if err := source.ApplyDelta(preparedDelete); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := source.String(), "a"; got != want {
+		t.Fatalf("applied prepared deletion = %q, want %q", got, want)
+	}
+
+	saved, err := source.SnapshotPackedCurrentStateWithLimits(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := NewFromSnapshotWithOptions(saved, DefaultOptions(), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := recovered.String(), source.String(); got != want {
+		t.Fatalf("bounded packed snapshot = %q, want %q", got, want)
+	}
+
+	tight := limits
+	tight.MaxFrameBytes = 8
+	tight.MaxPayload = 1
+	before := source.String()
+	if _, err := source.InsertPackedBinaryWithLimits(1, "reject", tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("tight packed insertion error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := source.String(); got != before {
+		t.Fatalf("rejected packed insertion changed source to %q, want %q", got, before)
+	}
+	if _, err := source.MarshalPackedBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("tight packed state error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if _, err := source.SnapshotPackedCurrentStateWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("tight packed snapshot error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+
+	var nilRGA *RGA
+	if _, err := nilRGA.MarshalPackedBinaryWithLimits(limits); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil packed marshal error = %v, want %v", err, ErrNilText)
+	}
+	if err := nilRGA.UnmarshalPackedBinaryWithLimits(inserted, limits); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil packed unmarshal error = %v, want %v", err, ErrNilText)
+	}
+}
+
+func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
+	var nilRGA *RGA
+	if _, err := nilRGA.MarshalPackedBinary(); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil MarshalPackedBinary = %v", err)
+	}
+	if err := nilRGA.UnmarshalPackedBinary(nil); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil UnmarshalPackedBinary = %v", err)
+	}
+	if _, err := nilRGA.SnapshotPackedCurrentState(); !errors.Is(err, ErrNilText) {
+		t.Fatalf("nil SnapshotPackedCurrentState = %v", err)
+	}
+
+	first := Position{ReplicaID: "source", WallTime: 1}
+	second := Position{ReplicaID: "source", WallTime: 2}
+	nodes := map[Position]node{
+		first:  {rune: 'a'},
+		second: {parent: first, rune: 'b'},
+	}
+	limits := frame.DefaultLimits()
+	if _, err := marshalRGAPacked(crdt.TypeIDRGAPackedState, map[Position]node{second: nodes[second]}, nil, limits); !errors.Is(err, ErrIncompleteState) {
+		t.Fatalf("incomplete packed state = %v", err)
+	}
+	if _, err := marshalRGAPacked(crdt.TypeIDRGAPackedDelta, map[Position]node{{}: {rune: 'x'}}, nil, limits); !errors.Is(err, ErrInvalidDelta) {
+		t.Fatalf("invalid packed delta = %v", err)
+	}
+	limitedNodes := limits
+	limitedNodes.MaxElements = 1
+	if _, err := marshalRGAPacked(crdt.TypeIDRGAPackedState, nodes, nil, limitedNodes); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("node-limited packed state = %v", err)
+	}
+	if _, err := marshalRGAPackedState(rgaRunState{nodes: []runNode{{id: first, item: nodes[first]}, {id: second, item: nodes[second]}}}, limitedNodes); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("node-limited captured packed state = %v", err)
+	}
+	if _, err := marshalRGAPackedState(rgaRunState{nodes: []runNode{{item: node{rune: 'x'}}}}, limits); !errors.Is(err, ErrInvalidDelta) {
+		t.Fatalf("invalid captured packed state = %v", err)
+	}
+	limitedString := limits
+	limitedString.MaxStringBytes = 1
+	if _, err := packedRunPayloadSize([]packedRunBlock{{nodes: []runNode{{id: first, item: nodes[first]}}}}, nil, limitedString); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("string-limited packed payload = %v", err)
+	}
+	limitedPayload := limits
+	limitedPayload.MaxPayload = 1
+	if _, err := packedRunPayloadSize([]packedRunBlock{{nodes: []runNode{{id: first, item: nodes[first]}}}}, nil, limitedPayload); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("payload-limited packed payload = %v", err)
+	}
+	if size, err := packedRunPayloadSize([]packedRunBlock{{nodes: []runNode{{id: first, item: nodes[first]}, {id: second, item: nodes[second]}}}}, []Position{first}, limits); err != nil || size == 0 {
+		t.Fatalf("packed chain payload = %d, %v", size, err)
+	}
+	longParent := Position{ReplicaID: "long", WallTime: 1}
+	if _, err := packedRunPayloadSize([]packedRunBlock{{nodes: []runNode{{id: first, item: node{parent: longParent, rune: 'a'}}}}}, nil, limitedString); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("parent string-limited packed payload = %v", err)
+	}
+	if _, err := packedRunBlockSize(packedRunBlock{nodes: []runNode{{id: first, item: node{rune: -1}}}}, limits); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("invalid packed scalar = %v", err)
+	}
+	if _, ok := packedTransitionLength(1); ok {
+		t.Fatal("short packed transition length accepted")
+	}
+	if got, ok := packedTransitionLength(9); !ok || got != 1 {
+		t.Fatalf("packed transition length = %d, %v", got, ok)
+	}
+	if unusedPackedTransitionBitsSet([]byte{0}, 2) || !unusedPackedTransitionBitsSet([]byte{0x80}, 2) {
+		t.Fatal("packed unused transition-bit validation mismatch")
+	}
+	if _, ok := makePackedRunChain([]runNode{{id: first, item: nodes[first]}}); ok {
+		t.Fatal("single packed chain node accepted")
+	}
+	if _, ok := makePackedRunChain([]runNode{{id: first, item: node{rune: -1}}, {id: second, item: nodes[second]}}); ok {
+		t.Fatal("invalid packed chain scalar accepted")
+	}
+	if _, err := marshalPackedRunPayload([]packedRunBlock{{nodes: []runNode{{id: first, item: node{rune: -1}}}}}, nil, limits); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("invalid packed payload scalar = %v", err)
+	}
+	if err := writePackedRunPayload(make([]byte, 1), []packedRunBlock{{nodes: []runNode{{id: first, item: nodes[first]}}}}, nil); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("short packed payload buffer = %v", err)
+	}
+	if _, err := packedRunPayloadSize(nil, []Position{longParent}, limitedString); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("tombstone string-limited packed payload = %v", err)
+	}
+
+	encoded, err := marshalRGAPacked(crdt.TypeIDRGAPackedState, nodes, map[Position]struct{}{first: {}}, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedNodes, decodedTombstones, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, limits, true)
+	if err != nil || len(decodedNodes) != len(nodes) || len(decodedTombstones) != 1 {
+		t.Fatalf("packed state decode = nodes=%d tombstones=%d err=%v", len(decodedNodes), len(decodedTombstones), err)
+	}
+	if _, err := UnmarshalRGAPackedDelta(encoded); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("packed wrong type = %v", err)
+	}
+	decodeLimited := limits
+	decodeLimited.MaxElements = 1
+	if _, _, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, decodeLimited, true); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("packed decode limit = %v", err)
+	}
+	pending := mustRGA(t, "packed-pending")
+	pending.pending[Position{ReplicaID: "missing", WallTime: 1}] = node{parent: Position{ReplicaID: "parent", WallTime: 1}, rune: 'x'}
+	if _, err := pending.MarshalPackedBinaryWithLimits(limits); !errors.Is(err, ErrIncompleteState) {
+		t.Fatalf("pending packed state = %v", err)
+	}
+	if _, err := pending.SnapshotPackedCurrentStateWithLimits(limits); !errors.Is(err, ErrIncompleteState) {
+		t.Fatalf("pending packed snapshot = %v", err)
+	}
+
+	for name, payload := range map[string][]byte{
+		"bad-block-kind":   frame.AppendUvarint(frame.AppendUvarint(nil, 1), 3),
+		"truncated-node":   frame.AppendUvarint(frame.AppendUvarint(nil, 1), runBlockNode),
+		"short-chain":      frame.AppendUvarint(frame.AppendUvarint(frame.AppendUvarint(nil, 1), runBlockChain), 1),
+		"trailing-payload": append(frame.AppendUvarint(nil, 0), 0, 0),
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDRGAPackedDelta, Payload: payload})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+				t.Fatalf("unmarshal invalid packed = %v", err)
+			}
+		})
+	}
+	chainParentFlag := frame.AppendUvarint(nil, 1)
+	chainParentFlag = frame.AppendUvarint(chainParentFlag, packedRunBlockChain)
+	chainParentFlag = frame.AppendUvarint(chainParentFlag, 2)
+	chainParentFlag = frame.AppendUvarint(chainParentFlag, uint64(len(first.ReplicaID)))
+	chainParentFlag = append(chainParentFlag, first.ReplicaID...)
+	chainParentFlag = frame.AppendUvarint(chainParentFlag, 2)
+	data, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDRGAPackedDelta, Payload: chainParentFlag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("invalid packed chain parent flag = %v", err)
+	}
+}
+
 func TestRGAPackedManifestDeliversDuplicateReorderedEditsAndSnapshotDelta(t *testing.T) {
 	manifest, err := replica.NewManifest("document", "example.com/text/packed-v3", 1, replica.Protocol{
 		StateID: crdt.TypeIDRGAPackedState, DeltaID: crdt.TypeIDRGAPackedDelta, SemanticsVersion: PackedV3SemanticsVersion,
