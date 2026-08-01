@@ -23,7 +23,7 @@ void Promise.resolve(go.run(instance));
 const api = await waitForRuntime();
 const protocol = protocolFromRaw(unwrap(api.protocol()));
 
-function runSample() {
+function runSample(mode) {
   const sourceHandle = handle(unwrap(api.create("bindings-bench-source")));
   const targetHandle = handle(unwrap(api.create("bindings-bench-target")));
   const initialFrame = unwrap(api.insert(sourceHandle, 0, INITIAL_TEXT));
@@ -43,8 +43,8 @@ function runSample() {
   const started = performance.now();
   for (let index = 0; index < EDITS; index += 1) {
     const offset = (index * 131) % view.state.doc.length;
-    view.userReplace(offset, 1, String.fromCharCode(65 + (index % 26)));
-    binding.applyViewUpdate({ docChanged: true });
+    const update = view.userReplace(offset, 1, String.fromCharCode(65 + (index % 26)));
+    binding.applyViewUpdate(mode === "native_incremental" ? update : { docChanged: true });
   }
   const elapsedMs = performance.now() - started;
   const heapDelta = process.memoryUsage().heapUsed - beforeHeap;
@@ -96,6 +96,14 @@ class CodeMirrorPort {
 
   userReplace(from, count, value) {
     this.value = `${this.value.slice(0, from)}${value}${this.value.slice(from + count)}`;
+    return {
+      docChanged: true,
+      changes: {
+        iterChanges(listener) {
+          listener(from, from + count, from, from + value.length, { toString: () => value });
+        },
+      },
+    };
   }
 }
 
@@ -139,9 +147,11 @@ function handle(value) {
 }
 
 console.log(`runtime=node-${process.version} workload=codemirror-port-go-wasm-rga controlled=true initial_runes=${Array.from(INITIAL_TEXT).length} local_edits=${EDITS}`);
-for (let sample = 0; sample < SAMPLES; sample += 1) {
-  const result = runSample();
-  console.log(
-    `sample=${sample + 1} elapsed_ms=${result.elapsedMs.toFixed(2)} ms_per_local_merge=${(result.elapsedMs / EDITS).toFixed(3)} frame_bytes=${result.frameBytes} heap_delta_b=${result.heapDelta}`,
-  );
+for (const mode of ["native_incremental", "full_projection_fallback"]) {
+  for (let sample = 0; sample < SAMPLES; sample += 1) {
+    const result = runSample(mode);
+    console.log(
+      `scenario=${mode} sample=${sample + 1} elapsed_ms=${result.elapsedMs.toFixed(2)} ms_per_local_merge=${(result.elapsedMs / EDITS).toFixed(3)} frame_bytes=${result.frameBytes} heap_delta_b=${result.heapDelta}`,
+    );
+  }
 }
