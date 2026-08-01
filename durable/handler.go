@@ -484,7 +484,7 @@ type serverPeer struct {
 }
 
 func newServerPeer(connection *websocket.Conn, maxEvents, maxBytes int, writeTimeout time.Duration) *serverPeer {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118 -- serverPeer.close owns and invokes cancel exactly once.
 	return &serverPeer{
 		connection:   connection,
 		context:      ctx,
@@ -570,6 +570,9 @@ func (peer *serverPeer) isClosed() bool {
 }
 
 func normalizeLimits(config Config) (limits, error) {
+	if config.MaxReplayEvents < 0 || config.MaxReplayBytes < 0 {
+		return limits{}, ErrInvalidConfig
+	}
 	result := limits{
 		maxMessageBytes:       config.MaxMessageBytes,
 		maxActorBytes:         config.MaxActorBytes,

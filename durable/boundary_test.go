@@ -432,6 +432,12 @@ func TestServerPeerQueueIsBounded(t *testing.T) {
 }
 
 func TestNilAndInvalidEdgesFailClosed(t *testing.T) {
+	if _, err := normalizeLimits(Config{MaxReplayEvents: -1}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("negative replay events = %v", err)
+	}
+	if _, err := normalizeLimits(Config{MaxReplayBytes: -1}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("negative replay bytes = %v", err)
+	}
 	var nilClient *ReconnectClient
 	if nilClient.Cursor() != 0 || !errors.Is(nilClient.Err(), ErrClosed) || !errors.Is(nilClient.Publish(context.Background(), replica.Change{}), ErrClosed) {
 		t.Fatal("nil client boundary did not fail closed")
