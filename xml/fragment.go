@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/DarkInno/crdt"
@@ -218,11 +217,11 @@ func ParseDocument(data []byte) (Node, error) {
 	budget := parseBudget{}
 	for {
 		token, err := decoder.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return Node{}, ErrInvalidDocument
 		}
 		if err != nil {
-			return Node{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
+			return Node{}, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
 		}
 		if declaration, ok := token.(stdxml.ProcInst); ok {
 			if declaration.Target == "xml" {
@@ -240,13 +239,13 @@ func ParseDocument(data []byte) (Node, error) {
 		}
 		for {
 			token, err = decoder.Token()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return node, nil
 			}
 			if err != nil {
-				return Node{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
+				return Node{}, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
 			}
-			if text, ok := token.(stdxml.CharData); ok && strings.TrimSpace(string(text)) == "" {
+			if text, ok := token.(stdxml.CharData); ok && xmlWhitespace(text) {
 				continue
 			}
 			return Node{}, ErrInvalidDocument
@@ -300,7 +299,7 @@ func parseElement(decoder *stdxml.Decoder, start stdxml.StartElement, depth int,
 	for {
 		token, err := decoder.Token()
 		if err != nil {
-			return Node{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
+			return Node{}, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
 		}
 		switch value := token.(type) {
 		case stdxml.StartElement:
@@ -337,7 +336,12 @@ func renderNodes(nodes []Node) (string, error) {
 	var buffer bytes.Buffer
 	encoder := stdxml.NewEncoder(&buffer)
 	for _, node := range nodes {
-		if err := encodeNode(encoder, node, 1); err != nil {
+		// Each root is validated once before encoding. Recursively validating
+		// inside encodeNode would revalidate every descendant subtree.
+		if err := validateNode(node, 1, new(nodeBudget)); err != nil {
+			return "", err
+		}
+		if err := encodeNode(encoder, node); err != nil {
 			return "", err
 		}
 	}
@@ -347,10 +351,7 @@ func renderNodes(nodes []Node) (string, error) {
 	return buffer.String(), nil
 }
 
-func encodeNode(encoder *stdxml.Encoder, node Node, depth int) error {
-	if err := validateNode(node, depth, new(nodeBudget)); err != nil {
-		return err
-	}
+func encodeNode(encoder *stdxml.Encoder, node Node) error {
 	switch node.Kind {
 	case TextNode:
 		return encoder.EncodeToken(stdxml.CharData(node.Text))
@@ -363,7 +364,7 @@ func encodeNode(encoder *stdxml.Encoder, node Node, depth int) error {
 			return err
 		}
 		for _, child := range node.Children {
-			if err := encodeNode(encoder, child, depth+1); err != nil {
+			if err := encodeNode(encoder, child); err != nil {
 				return err
 			}
 		}
@@ -417,7 +418,23 @@ func validXMLString(value string) bool {
 		return false
 	}
 	for _, runeValue := range value {
-		if runeValue == 0 || (runeValue < 0x20 && runeValue != '\t' && runeValue != '\n' && runeValue != '\r') {
+		if !validXMLRune(runeValue) {
+			return false
+		}
+	}
+	return true
+}
+
+func validXMLRune(value rune) bool {
+	return value == '\t' || value == '\n' || value == '\r' ||
+		(value >= 0x20 && value <= 0xd7ff) ||
+		(value >= 0xe000 && value <= 0xfffd) ||
+		(value >= 0x10000 && value <= 0x10ffff)
+}
+
+func xmlWhitespace(value []byte) bool {
+	for _, byteValue := range value {
+		if byteValue != ' ' && byteValue != '\t' && byteValue != '\n' && byteValue != '\r' {
 			return false
 		}
 	}
