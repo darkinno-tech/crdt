@@ -22,7 +22,7 @@ func TestCompareRunProducesBoundedReports(t *testing.T) {
 		t.Fatalf("reports = %#v", reports)
 	}
 	for _, item := range reports {
-		if item.UpdateBytes <= 0 || item.StateBytes <= 0 || len(item.SamplesMS) != 1 || item.MedianMS < 0 {
+		if item.Protocol != string(protocolRunV2) || item.UpdateBytes <= 0 || item.StateBytes <= 0 || len(item.SamplesMS) != 1 || item.MedianMS < 0 {
 			t.Fatalf("invalid report = %#v", item)
 		}
 	}
@@ -46,10 +46,33 @@ func TestCompareHelpersAndInvalidArguments(t *testing.T) {
 	if _, err := parseScenario("unknown"); err == nil {
 		t.Fatal("parseScenario accepted an unknown scenario")
 	}
-	for _, args := range [][]string{{"-scenario", "unknown"}, {"-sizes", "0"}, {"-samples", "0"}, {"-warmups", "-1"}, {"-iterations", "0"}, {"-unknown"}} {
+	if protocol, err := parseProtocol(string(protocolPackedV3)); err != nil || protocol != protocolPackedV3 {
+		t.Fatalf("parseProtocol = %q, %v", protocol, err)
+	}
+	if _, err := parseProtocol("unknown"); err == nil {
+		t.Fatal("parseProtocol accepted an unknown protocol")
+	}
+	for _, args := range [][]string{{"-scenario", "unknown"}, {"-protocol", "unknown"}, {"-sizes", "0"}, {"-samples", "0"}, {"-warmups", "-1"}, {"-iterations", "0"}, {"-unknown"}} {
 		if err := run(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("run(%q) succeeded", args)
 		}
+	}
+}
+
+func TestComparePackedProtocolReportsCompactFrames(t *testing.T) {
+	var output bytes.Buffer
+	if err := run([]string{"-protocol", "packed-v3", "-sizes", "4096", "-samples", "1", "-warmups", "0", "-iterations", "1"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var reports []report
+	if err := json.Unmarshal(output.Bytes(), &reports); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 || reports[0].Protocol != string(protocolPackedV3) || reports[0].Implementation != protocolPackedV3.implementation() {
+		t.Fatalf("packed reports = %#v", reports)
+	}
+	if reports[0].UpdateBytes >= reports[0].Runes*2 {
+		t.Fatalf("packed update = %d bytes for %d runes; expected compact dense frame", reports[0].UpdateBytes, reports[0].Runes)
 	}
 }
 

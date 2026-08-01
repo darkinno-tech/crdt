@@ -59,7 +59,7 @@ go test ./...
 
 - G-Counter、PN-Counter、G-Set、add-wins OR-Set 和因果 MV-Register。
 - 有界规范化 state/delta 帧、确定性 snapshot、恢复计划，以及可复用 replica ID 所需的 HLC 状态。
-- 默认使用稳定 run-v2 帧的 RGA 协作文本、稳定有界 rich-text 和 observed-remove tree 协议，以及 list、XML fragment 层。
+- 默认使用稳定 run-v2 帧的 RGA 协作文本；并提供对密集 HLC 链显式协商的 packed-v3 帧，以及稳定有界 rich-text、observed-remove tree、list、XML fragment 层。
 - Delta 批处理、Merkle 反熵、精确确认的 tombstone-GC 协调，以及 Manifest 绑定的 replica/inbox 恢复辅助能力。
 - 有界 live WebSocket provider、独立的 bbolt durable relay，以及本地 bbolt/文件 checkpoint Store 参考实现。
 - 可选、由 Manifest 协商的[压缩感知外层帧 v2](docs/protocol/frame-v2.md)，提供显式 v1 转换，但不改变 CRDT TypeID 或语义。
@@ -83,6 +83,7 @@ go test ./...
 | 安全规划更深层的 Yjs 支持 | [Yjs 深层互操作决策](docs/design/yjs-deeper-interoperability.md) |
 | 在不复制媒体字节的前提下附加媒体 | [附件集成](docs/integration/attachment.zh-CN.md) |
 | 在 Go/Wasm 之外实现 run-v2 | [RGA run-v2 协议与向量](docs/protocol/rga-run-v2.zh-CN.md) |
+| 在不改变 scalar RGA 语义下缩小大文本帧 | [Packed RGA v3 协议](docs/protocol/rga-packed-v3.zh-CN.md) 与 `go run ./cmd/crdt-compare -protocol=packed-v3` |
 | 使用 Rust、Python、Swift 或 C++ 原生 RGA runtime | [多语言 RGA 交付决策](docs/design/native-multilanguage-rga.zh-CN.md) |
 | 实现稳定格式化或树 | [rich-text v1](docs/protocol/richtext-v1.md) 和 [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
 
