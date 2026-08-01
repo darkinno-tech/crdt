@@ -121,6 +121,30 @@ func TestYJSStoreClientRejectsUnsafeConfigurationAndMapsSidecarErrors(t *testing
 	}
 }
 
+func TestYJSStoreClientDoesNotFollowRedirects(t *testing.T) {
+	token := strings.Repeat("r", 32)
+	redirected := make(chan struct{}, 1)
+	destination := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		redirected <- struct{}{}
+		writeYJSStoreJSON(t, writer, yjsStateVectorResponse{StateVector: base64.StdEncoding.EncodeToString([]byte{1})})
+	}))
+	defer destination.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, destination.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	store := testYJSStore(t, source.URL, token)
+	if _, err := store.StateVector(context.Background(), testYJSDocument()); !errors.Is(err, ErrYJSStoreUnavailable) {
+		t.Fatalf("redirected sidecar error = %v, want %v", err, ErrYJSStoreUnavailable)
+	}
+	select {
+	case <-redirected:
+		t.Fatal("YJSStore followed a redirect away from its configured endpoint")
+	default:
+	}
+}
+
 func TestYJSStoreDocumentIdentifiersAreStrict(t *testing.T) {
 	store := testYJSStore(t, "http://127.0.0.1:1", strings.Repeat("z", 32))
 	for _, document := range []YJSDocument{

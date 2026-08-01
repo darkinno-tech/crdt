@@ -10,6 +10,21 @@ import { createYJSStoreServer, loadConfig } from "./server.mjs";
 
 const token = "yjs-store-test-token-0123456789abcdef";
 
+test("the bundled sidecar only permits literal loopback listeners", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "darkinno-yjs-store-loopback-"));
+  const base = {
+    YJS_STORE_DATA_DIR: dataDir,
+    YJS_STORE_TOKEN: token,
+    YJS_STORE_PORT: "0",
+  };
+  for (const host of ["0.0.0.0", "::", "localhost", "store.example"]) {
+    await assert.rejects(() => loadConfig({ ...base, YJS_STORE_HOST: host }), /loopback/);
+  }
+  const ipv6 = await loadConfig({ ...base, YJS_STORE_HOST: "::1" });
+  assert.equal(ipv6.host, "::1");
+  assert.throws(() => createYJSStoreServer({ ...ipv6, host: "0.0.0.0" }), /invalid Yjs store configuration/);
+});
+
 test("real Yjs v1 state-vector diff, merge, and durable recovery converge", async (context) => {
   const running = await startStore(context);
   const document = testDocument("v1");
