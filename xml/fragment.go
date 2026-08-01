@@ -217,11 +217,11 @@ func ParseDocument(data []byte) (Node, error) {
 	budget := parseBudget{}
 	for {
 		token, err := decoder.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return Node{}, ErrInvalidDocument
 		}
 		if err != nil {
-			return Node{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
+			return Node{}, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
 		}
 		if declaration, ok := token.(stdxml.ProcInst); ok {
 			if declaration.Target == "xml" {
@@ -239,11 +239,11 @@ func ParseDocument(data []byte) (Node, error) {
 		}
 		for {
 			token, err = decoder.Token()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return node, nil
 			}
 			if err != nil {
-				return Node{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
+				return Node{}, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
 			}
 			if text, ok := token.(stdxml.CharData); ok && xmlWhitespace(text) {
 				continue
@@ -299,7 +299,7 @@ func parseElement(decoder *stdxml.Decoder, start stdxml.StartElement, depth int,
 	for {
 		token, err := decoder.Token()
 		if err != nil {
-			return Node{}, fmt.Errorf("%w: %v", ErrInvalidDocument, err)
+			return Node{}, fmt.Errorf("%w: %w", ErrInvalidDocument, err)
 		}
 		switch value := token.(type) {
 		case stdxml.StartElement:

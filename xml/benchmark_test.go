@@ -1,6 +1,9 @@
 package xml
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestRenderDocumentRejectsNestedInvalidNode(t *testing.T) {
 	root := Node{
@@ -14,7 +17,7 @@ func TestRenderDocumentRejectsNestedInvalidNode(t *testing.T) {
 			}},
 		}},
 	}
-	if _, err := RenderDocument(root); err != ErrInvalidNode {
+	if _, err := RenderDocument(root); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("RenderDocument(nested invalid node) = %v, want %v", err, ErrInvalidNode)
 	}
 }
