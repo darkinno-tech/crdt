@@ -38,6 +38,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Avoided redundant sorting and packed wall-gap allocations when serializing a
+  verified linear RGA state, while retaining the existing canonical fallback
+  for branching, multi-replica, or unknown-tombstone states.
 - Added explicit output and recovery limits for RGA state/delta serialization
   and snapshot restoration, so embedders can use the same budgets at every
   browser-facing boundary.
