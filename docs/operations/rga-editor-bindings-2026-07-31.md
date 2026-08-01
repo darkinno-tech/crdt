@@ -1,4 +1,10 @@
-# RGA editor binding expansion assessment — 2026-07-31
+# RGA editor binding expansion assessment — 2026-07-31 (historical)
+
+> This document records the pre-incremental editor-binding assessment. The
+> CodeMirror single-range path no longer uses the O(document) comparison
+> described below. Use the [cross-host incremental benchmark —
+> 2026-08-01](rga-incremental-editor-benchmark-2026-08-01.md) for current
+> validation and measured data.
 
 ## Decision
 
@@ -23,12 +29,11 @@ local delete-only state if an insertion fails. Applications needing a large
 paste must split it into individually accepted editor transactions before
 calling this binding.
 
-The comparison/replace projection remains O(document runes) per editor change
-because it computes the common prefix/suffix. This is correct across all
-supported editor ports but is not a long-document incremental-operation
-engine. A future optimization may consume editor-native incremental changes
-only after proving Unicode offset conversion, composition handling, selection,
-and atomic frame admission against the same test vectors.
+At the time of this historical assessment, the comparison/replace projection
+was O(document runes) per editor change because it computed a common
+prefix/suffix. The current CodeMirror single-range implementation is an
+incremental operation engine; its Unicode conversion, atomic admission, and
+safe multi-range fallback are documented and re-measured in the newer report.
 
 ## Security
 
