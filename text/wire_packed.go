@@ -19,7 +19,6 @@ const packedRunBlockChain uint64 = 2
 // Logical to zero. This is exactly the sequence emitted by local HLC.Now.
 type packedRunChain struct {
 	transitions []byte
-	wallDeltas  []uint64
 	text        []byte
 }
 
@@ -78,8 +77,12 @@ func marshalRGAPackedState(state rgaRunState, limits frame.DecoderLimits) ([]byt
 	if len(state.nodes) > limits.MaxElements || len(state.nodes) > limits.MaxTags || len(state.tombstones) > limits.MaxTags-len(state.nodes) {
 		return nil, frame.ErrFrameLimit
 	}
-	sort.Sort(runNodes(state.nodes))
-	sort.Slice(state.tombstones, func(i, j int) bool { return state.tombstones[i].Compare(state.tombstones[j]) < 0 })
+	if !state.nodesSorted {
+		sort.Sort(runNodes(state.nodes))
+	}
+	if !state.tombstonesSorted {
+		sort.Slice(state.tombstones, func(i, j int) bool { return state.tombstones[i].Compare(state.tombstones[j]) < 0 })
+	}
 	if _, err := validateCompleteRunState(state); err != nil {
 		return nil, err
 	}
@@ -163,7 +166,14 @@ func packedRunBlockSize(block packedRunBlock, limits frame.DecoderLimits) (int, 
 	if block.packed {
 		size += frame.UvarintSize(first.id.WallTime) + frame.UvarintSize(first.id.Logical)
 		size += frame.UvarintSize(uint64(len(block.chain.transitions))) + len(block.chain.transitions)
-		for _, gap := range block.chain.wallDeltas {
+		for index := 1; index < len(block.nodes); index++ {
+			if !packedTransition(block.chain.transitions, index-1) {
+				continue
+			}
+			gap, ok := packedWallGap(block.nodes, index)
+			if !ok {
+				return 0, frame.ErrInvalidFrame
+			}
 			size += frame.UvarintSize(gap)
 		}
 		size += frame.UvarintSize(uint64(len(block.chain.text))) + len(block.chain.text)
@@ -210,7 +220,14 @@ func writePackedRunPayload(payload []byte, blocks []packedRunBlock, tombstones [
 			output = frame.AppendUvarint(output, block.nodes[0].id.Logical)
 			output = frame.AppendUvarint(output, uint64(len(block.chain.transitions)))
 			output = append(output, block.chain.transitions...)
-			for _, gap := range block.chain.wallDeltas {
+			for index := 1; index < len(block.nodes); index++ {
+				if !packedTransition(block.chain.transitions, index-1) {
+					continue
+				}
+				gap, ok := packedWallGap(block.nodes, index)
+				if !ok {
+					return frame.ErrInvalidFrame
+				}
 				output = frame.AppendUvarint(output, gap)
 			}
 			output = frame.AppendUvarint(output, uint64(len(block.chain.text)))
@@ -283,10 +300,12 @@ func makePackedRunChain(block []runNode) (packedRunChain, bool) {
 		return packedRunChain{}, false
 	}
 	previous := block[0].id
+	textBytes := 0
 	for index, item := range block {
 		if !utf8.ValidRune(item.item.rune) {
 			return packedRunChain{}, false
 		}
+		textBytes += utf8.RuneLen(item.item.rune)
 		if index == 0 {
 			continue
 		}
@@ -298,33 +317,32 @@ func makePackedRunChain(block []runNode) (packedRunChain, bool) {
 		}
 		previous = item.id
 	}
-	textBytes := 0
-	transitionCount := 0
-	previous = block[0].id
-	for index, item := range block {
-		textBytes += utf8.RuneLen(item.item.rune)
-		if index > 0 && item.id.WallTime > previous.WallTime {
-			transitionCount++
-		}
-		previous = item.id
-	}
 	chain := packedRunChain{
 		transitions: make([]byte, transitionLength),
-		wallDeltas:  make([]uint64, transitionCount),
 		text:        make([]byte, 0, textBytes),
 	}
 	previous = block[0].id
-	wallIndex := 0
 	for index, item := range block {
 		chain.text = utf8.AppendRune(chain.text, item.item.rune)
 		if index > 0 && item.id.WallTime > previous.WallTime {
 			setPackedTransition(chain.transitions, index-1)
-			chain.wallDeltas[wallIndex] = item.id.WallTime - previous.WallTime
-			wallIndex++
 		}
 		previous = item.id
 	}
 	return chain, true
+}
+
+func packedWallGap(nodes []runNode, index int) (uint64, bool) {
+	if index <= 0 || index >= len(nodes) {
+		return 0, false
+	}
+	// index is positive and strictly smaller than len(nodes), as checked above.
+	previous := nodes[index-1] // #nosec G602 -- index bounds are validated above.
+	current := nodes[index]    // #nosec G602 -- index bounds are validated above.
+	if current.id.WallTime <= previous.id.WallTime {
+		return 0, false
+	}
+	return current.id.WallTime - previous.id.WallTime, true
 }
 
 func packedTransitionLength(count int) (int, bool) {

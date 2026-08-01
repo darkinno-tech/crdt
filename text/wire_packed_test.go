@@ -341,6 +341,15 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 	if _, err := packedRunBlockSize(packedRunBlock{nodes: []runNode{{id: first, item: node{rune: -1}}}}, limits); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("invalid packed scalar = %v", err)
 	}
+	if gap, ok := packedWallGap([]runNode{{id: first, item: nodes[first]}, {id: second, item: nodes[second]}}, 1); !ok || gap != 1 {
+		t.Fatalf("packed wall gap = %d, %t", gap, ok)
+	}
+	if _, ok := packedWallGap([]runNode{{id: first, item: nodes[first]}, {id: second, item: nodes[second]}}, 0); ok {
+		t.Fatal("first packed wall gap accepted")
+	}
+	if _, ok := packedWallGap([]runNode{{id: second, item: nodes[second]}, {id: first, item: nodes[first]}}, 1); ok {
+		t.Fatal("non-increasing packed wall gap accepted")
+	}
 	if _, ok := packedTransitionLength(1); ok {
 		t.Fatal("short packed transition length accepted")
 	}
