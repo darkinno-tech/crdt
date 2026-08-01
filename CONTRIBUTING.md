@@ -60,8 +60,9 @@ make test-integration
 
 ## 分支与发布列车
 
-- `beta` 是唯一的集成分支：先在新的、基于 `origin/beta` 的隔离 worktree 提交并运行本地验证，再推送到 `beta`；等待远端 CI 通过后再发起发布 PR。不能对 `beta` 强推。
-- `main` 是发布镜像：不在本地开发，只通过 CI 已通过的 `beta -> main` PR 更新。单人维护时不要求他人审批，但仍必须通过所有必需检查。`main` 比 `beta` 多一个 merge commit 是正常的发布记录，不要为此 rebase、强推或反向合并。
+- `beta` 是日常集成分支：先在新的、基于 `origin/beta` 的隔离 worktree 提交并完成与改动相称的本地验证，再推送到 `beta`。日常推送不会启动完整远端 CI，也不能对 `beta` 强推。
+- `preprod` 是唯一的发布候选分支：只能通过仓库内的 `beta -> preprod` PR 更新。该 PR 会运行完整的远端门禁；每项检查都是独立 job，失败后可在 GitHub 的 **Re-run failed jobs** 中单独重跑，或从 Actions 的 `Test` 工作流选择对应 `suite` 手动重跑。
+- `main` 是发布镜像：不在本地开发，只通过已受 `preprod` 保护的 `preprod -> main` PR 更新。该提升不重复完整 CI，因为待合并的源码树已在 `beta -> preprod` 合并候选上验证；`main` 比 `preprod` 多一个 merge commit 是正常的发布记录，不要为此 rebase、强推或反向合并。
 - 需要更新一个干净的 `main` worktree 时，运行 `make sync-main`。该命令在工作区有改动、不在 `main`、或本地 `main` 存在未发布提交时拒绝执行，以保证只做快进更新。
 
 唯一例外是首次安装发布列车门禁：若 bootstrap PR 先进入 `main`，可在隔离 worktree 中用一次普通 merge 将该已验证的 `main` 提交同步回 `beta`，然后恢复单向的 `beta -> main` 发布流程；不得 rebase 或强推 `beta`。
@@ -76,7 +77,7 @@ cd ../crdt-beta
 git push origin HEAD:beta
 ```
 
-如果推送被拒绝，先重新获取 `origin/beta`，在隔离 worktree 中检查和整合冲突；不要使用 `--force`。只有当所对应 SHA 的 beta CI 全部成功后，才创建到 `main` 的 PR。
+如果推送被拒绝，先重新获取 `origin/beta`，在隔离 worktree 中检查和整合冲突；不要使用 `--force`。准备发布时创建 `beta -> preprod` PR；只有该 PR 的所有必需检查通过并合入 `preprod` 后，才创建 `preprod -> main` PR。
 
 ## 架构边界
 

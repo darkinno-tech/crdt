@@ -144,7 +144,7 @@ make verify
 
 ## 贡献与发布
 
-贡献应包含聚焦测试、保持规范化编码、在分配或变异前限制不可信输入，并更新最贴近的文档。请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；beta 变更应走经过评审的 beta-to-main 发布路径，不能手动移动已发布 tag。
+贡献应包含聚焦测试、保持规范化编码、在分配或变异前限制不可信输入，并更新最贴近的文档。请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；beta 变更应走经过评审的 beta-to-preprod-to-main 发布路径，不能手动移动已发布 tag。
 
 ## 许可证
 

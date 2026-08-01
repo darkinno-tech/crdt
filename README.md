@@ -150,7 +150,7 @@ For host wiring of layered configuration, structured error codes, and bounded du
 
 ## Contributing and releases
 
-Contributions should include focused tests, preserve canonical encoding, bound untrusted input before allocation or mutation, and update the closest relevant documentation. Review [CONTRIBUTING.md](CONTRIBUTING.md); keep beta changes on the reviewed beta-to-main release path and do not manually move published tags.
+Contributions should include focused tests, preserve canonical encoding, bound untrusted input before allocation or mutation, and update the closest relevant documentation. Review [CONTRIBUTING.md](CONTRIBUTING.md); keep beta changes on the reviewed beta-to-preprod-to-main release path and do not manually move published tags.
 
 ## License
 
