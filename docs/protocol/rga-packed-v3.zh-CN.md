@@ -49,9 +49,10 @@ UTF-8 文本必须有效且刚好有 `count` 个 Unicode scalar；第一项使�
 state 必须父节点完整；delta 可以起于外部 parent，但只可在有界 pending 策略内保存，不能将
 未完成状态写成 snapshot。失败不得改变文本、HLC、pending 或持久化状态。
 
-v3 目前由 Go 与 Go/Wasm runtime 实现。原生或 TypeScript 实现未完成同样的有界 decoder、
-canonical re-encoder 与向量前，不得宣称支持 `29/30`。它不是 Yjs 协议兼容层；Yjs 仍通过
-独立有界的 opaque relay/store 处理。
+v3 由 Go 库和显式构建的 Go/Wasm runtime（`WASM_RGA_PROTOCOL=packed-v3`）实现。
+TypeScript loader 只暴露精确 Manifest 契约，并将所有 RGA 帧交给该 runtime；它不自行解码或
+转换 packed 帧。原生实现未完成同样的有界 decoder、canonical re-encoder 与向量前，不得宣称
+支持 `29/30`。它不是 Yjs 协议兼容层；Yjs 仍通过独立有界的 opaque relay/store 处理。
 
 [`testdata/rga-packed-v3-vectors.json`](testdata/rga-packed-v3-vectors.json) 提供确定性的
 密集链、wall 跳变和墓碑向量。实现必须验证外层、重建节点图、逐字节重编码、空文档应用结果，

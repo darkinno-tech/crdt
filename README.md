@@ -66,7 +66,7 @@ go test ./...
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
 - [RGA diagnostic obfuscation](docs/integration/debug-obfuscation.md) that replaces text content while retaining an isolated debug timeline structure.
 
-All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. LWW-Set/Map, scalar RGA v1, list RGA, run-v2 RGA, rich-text v1, and observed-remove tree v1 still require an authenticated exact manifest: a frame type alone is never a negotiated protocol, authenticated peer, or permission to compact tombstones.
+All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. LWW-Set/Map, scalar RGA v1, list RGA, run-v2 RGA, packed-v3 RGA, rich-text v1, and observed-remove tree v1 still require an authenticated exact manifest: a frame type alone is never a negotiated protocol, authenticated peer, or permission to compact tombstones.
 
 ## Choose a path
 
