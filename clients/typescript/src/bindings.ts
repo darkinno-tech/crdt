@@ -759,6 +759,24 @@ export type {
   BlockNoteRichTextPort,
 } from "./blocknote.js";
 
+// Kept on the editor-binding entrypoint so a consumer can use a structural
+// Tiptap / ProseMirror port without importing Tiptap itself at runtime.
+export {
+  bindProseMirrorRichText,
+  bindTiptapRichText,
+  TiptapRichTextBinding,
+  TIPTAP_CORE_RICH_TEXT_SCHEMA_ID,
+} from "./tiptap.js";
+export type {
+  BindTiptapRichTextOptions,
+  ProseMirrorRichTextPort,
+  TiptapEmbedCodec,
+  TiptapEmbedArray,
+  TiptapEmbedObject,
+  TiptapEmbedValue,
+  TiptapRichTextPort,
+} from "./tiptap.js";
+
 function quillDeltaToDocumentOperations(delta: QuillRichTextDelta, codec: RichTextAttributeCodec): RichTextEditorOperation[] {
   if (!isRecord(delta) || (delta.ops !== undefined && !Array.isArray(delta.ops))) {
     throw new CRDTRuntimeError("unsupported_rich_text");
