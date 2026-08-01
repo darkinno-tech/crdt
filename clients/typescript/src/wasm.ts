@@ -27,6 +27,13 @@ export const RGA_PROTOCOL_RUN_V2: Readonly<RGAProtocolExpectation> = Object.free
   semanticsVersion: FrameSemanticsVersion.RGARun,
 });
 
+/** Explicit compact RGA v3 contract for a separately authenticated Manifest. */
+export const RGA_PROTOCOL_PACKED_V3: Readonly<RGAProtocolExpectation> = Object.freeze({
+  stateTypeID: FrameType.RGAPackedState,
+  deltaTypeID: FrameType.RGAPackedDelta,
+  semanticsVersion: FrameSemanticsVersion.RGAPacked,
+});
+
 /** Exact rich-text v1 contract selected by a separate authenticated Manifest. */
 export const RICH_TEXT_PROTOCOL: Readonly<RGAProtocolExpectation> = Object.freeze({
   stateTypeID: FrameType.RichTextState,
@@ -39,7 +46,8 @@ export interface InitRGAWasmOptions {
   readonly wasmURL: string | URL;
   /**
    * Exact protocol contract authenticated for the replication group. Defaults
-   * to run-v2; pass RGA_PROTOCOL_V1 only with a separately built v1 artifact.
+   * to run-v2; pass the exact v1 or packed-v3 contract only with its
+   * separately built artifact and authenticated Manifest.
    */
   readonly expectedProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
@@ -71,7 +79,7 @@ export interface InitRichTextWasmOptions {
   /**
    * RGA protocol compiled into the shared artifact. This is independent of
    * the rich-text Manifest: omit it for the default run-v2 artifact, or pass
-   * the authenticated v1 contract when loading a legacy combined build.
+   * the exact authenticated v1 or packed-v3 contract for that combined build.
    */
   readonly expectedRGAProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
@@ -378,7 +386,8 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
 /**
  * Initializes the rich-text v1 surface in the same Go Wasm artifact used by
  * the RGA runtime. Rich text remains a separately negotiated manifest group;
- * its frames must never be sent to an RGA run-v2 document.
+ * its frames must never be sent to an RGA document with a different negotiated
+ * frame pair.
  */
 export async function initRichTextWasm(options: InitRichTextWasmOptions): Promise<RichTextWasmRuntime> {
   const sharedOptions: InitRGAWasmOptions = {
@@ -604,7 +613,10 @@ function isKnownRGAProtocol(value: unknown): value is Readonly<RGAProtocolExpect
       value.semanticsVersion === RGA_PROTOCOL_V1.semanticsVersion) ||
     (value.stateTypeID === RGA_PROTOCOL_RUN_V2.stateTypeID &&
       value.deltaTypeID === RGA_PROTOCOL_RUN_V2.deltaTypeID &&
-      value.semanticsVersion === RGA_PROTOCOL_RUN_V2.semanticsVersion)
+      value.semanticsVersion === RGA_PROTOCOL_RUN_V2.semanticsVersion) ||
+    (value.stateTypeID === RGA_PROTOCOL_PACKED_V3.stateTypeID &&
+      value.deltaTypeID === RGA_PROTOCOL_PACKED_V3.deltaTypeID &&
+      value.semanticsVersion === RGA_PROTOCOL_PACKED_V3.semanticsVersion)
   );
 }
 
