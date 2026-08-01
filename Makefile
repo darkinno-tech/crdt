@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -87,6 +87,19 @@ coverage:
 
 benchmark:
 	go test -run='^$$' -bench=. -benchmem ./...
+
+# Level 1 interoperability needs the maintained Yjs engine. These targets are
+# separate from Go-only checks so library consumers do not need Node merely to
+# compile this module. They install the lockfile exactly, then exercise both
+# direct real-Yjs scenarios and the Go-to-sidecar HTTP contract.
+yjs-store-test:
+	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
+	$(NPM) --prefix yjsstore/runtime test
+	CRDT_YJS_STORE_NODE_INTEGRATION=1 go test -count=1 ./extensions -run '^TestYJSStoreNodeSidecarIntegration$$'
+
+yjs-store-benchmark:
+	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
+	$(NPM) --prefix yjsstore/runtime run bench
 
 # BENCHMARK_BASE must be a checkout of the commit to compare against. The
 # candidate and baseline run consecutively with one logical processor so their

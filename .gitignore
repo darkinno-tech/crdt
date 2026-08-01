@@ -11,6 +11,7 @@
 /clients/typescript/node_modules/
 /bench/competitors/node_modules/
 /bench/competitors/.tmp/
+/yjsstore/runtime/node_modules/
 
 # Native language-client build and interpreter artifacts.
 /clients/rust/target/

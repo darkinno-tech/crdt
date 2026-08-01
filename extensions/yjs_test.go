@@ -230,6 +230,11 @@ func TestYJSHandlerConfigurationAndRoutingBoundaries(t *testing.T) {
 		t.Fatalf("negative awareness limit error = %v", err)
 	}
 	config.MaxAwarenessClients = 1
+	config.StoreTimeout = -time.Second
+	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("negative store timeout error = %v", err)
+	}
+	config.StoreTimeout = 0
 	config.Rooms = nil
 	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("empty rooms error = %v", err)
@@ -305,6 +310,72 @@ func TestYJSHandlerProtocolControlMessages(t *testing.T) {
 	}
 	if data := readYJSMessage(t, client); !bytes.Equal(data, awareness) {
 		t.Fatalf("awareness query response = %x", data)
+	}
+}
+
+func TestYJSStoreBackedRoomUsesDurableStateVectorAndDiff(t *testing.T) {
+	store := &testSemanticYJSStore{vector: []byte{0}, delta: yjsHelloUpdate}
+	document := testYJSDocument()
+	room, err := NewYJSRoom(YJSRoomConfig{
+		Name:                "notes",
+		MaxUpdateBytes:      4096,
+		MaxStateVectorBytes: 64,
+		MaxSyncBytes:        4096,
+		Store:               store,
+		Document:            document,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewYJSRoom(YJSRoomConfig{Name: "invalid", MaxUpdateBytes: 1024, Store: store, Document: document}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("store room without semantic bounds error = %v", err)
+	}
+	handler, err := NewYJSHandler(YJSConfig{
+		Rooms: []*YJSRoom{room},
+		Authenticate: func(request *http.Request) (Peer, error) {
+			return Peer{ID: strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")}, nil
+		},
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		MaxMessageBytes:       4096 + maxYJSWireOverhead,
+		MaxQueuedMessages:     16,
+		MaxQueuedBytes:        4096 + maxYJSWireOverhead,
+		MaxAwarenessClients:   16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := newYJSTestClient(t, server.URL, "writer")
+	defer func() { _ = client.CloseNow() }()
+	if message := readYJSMessage(t, client); !bytes.Equal(message, marshalYJSSync(yjsWireSyncStep1, store.vector)) {
+		t.Fatalf("store bootstrap = %x", message)
+	}
+	remoteVector := []byte{9}
+	if err := client.Write(context.Background(), websocket.MessageBinary, marshalYJSSync(yjsWireSyncStep1, remoteVector)); err != nil {
+		t.Fatal(err)
+	}
+	if message := readYJSMessage(t, client); !bytes.Equal(message, marshalYJSSync(yjsWireSyncStep2, store.delta)) {
+		t.Fatalf("store diff = %x", message)
+	}
+	if err := client.Write(context.Background(), websocket.MessageBinary, marshalYJSSync(yjsWireUpdate, yjsHelloUpdate)); err != nil {
+		t.Fatal(err)
+	}
+	if message := readYJSMessage(t, client); !bytes.Equal(message, marshalYJSSync(yjsWireUpdate, yjsHelloUpdate)) {
+		t.Fatalf("store broadcast = %x", message)
+	}
+	store.mu.Lock()
+	gotDocument, gotUpdate, gotVector := store.document, store.update, store.remoteVector
+	store.mu.Unlock()
+	if gotDocument != document || !bytes.Equal(gotUpdate, yjsHelloUpdate) || !bytes.Equal(gotVector, remoteVector) {
+		t.Fatalf("store calls document=%#v update=%x vector=%x", gotDocument, gotUpdate, gotVector)
+	}
+	room.mu.Lock()
+	retained := len(room.updates)
+	room.mu.Unlock()
+	if retained != 0 {
+		t.Fatalf("store-backed room retained %d opaque updates", retained)
 	}
 }
 
@@ -541,4 +612,44 @@ func waitForYJSAwarenessRemoval(t testing.TB, room *YJSRoom, clientID uint64) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+type testSemanticYJSStore struct {
+	mu           sync.Mutex
+	vector       []byte
+	delta        []byte
+	document     YJSDocument
+	update       []byte
+	remoteVector []byte
+}
+
+func (store *testSemanticYJSStore) Apply(_ context.Context, document YJSDocument, update []byte) (YJSApplyResult, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.document = document
+	store.update = append([]byte(nil), update...)
+	return YJSApplyResult{Applied: true, Cursor: 1, StateVector: append([]byte(nil), store.vector...)}, nil
+}
+
+func (store *testSemanticYJSStore) StateVector(_ context.Context, document YJSDocument) ([]byte, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.document = document
+	return append([]byte(nil), store.vector...), nil
+}
+
+func (store *testSemanticYJSStore) Diff(_ context.Context, document YJSDocument, remoteVector []byte) ([]byte, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.document = document
+	store.remoteVector = append([]byte(nil), remoteVector...)
+	return append([]byte(nil), store.delta...), nil
+}
+
+func (store *testSemanticYJSStore) Snapshot(context.Context, YJSDocument) (YJSSnapshot, error) {
+	return YJSSnapshot{}, ErrYJSStoreUnavailable
+}
+
+func (store *testSemanticYJSStore) Merge(context.Context, YJSDocument, [][]byte) ([]byte, error) {
+	return nil, ErrYJSStoreUnavailable
 }
