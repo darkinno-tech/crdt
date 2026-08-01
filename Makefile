@@ -87,16 +87,20 @@ benchmark:
 
 # Level 1 interoperability needs the maintained Yjs engine. These targets are
 # separate from Go-only checks so library consumers do not need Node merely to
-# compile this module. They install the lockfile exactly, then exercise both
-# direct real-Yjs scenarios and the Go-to-sidecar HTTP contract.
+# compile this module. They install the lockfile exactly, then exercise direct
+# real-Yjs scenarios, the Go-to-sidecar HTTP contract, and the standard
+# y-websocket provider through the complete durable relay path.
 yjs-store-test:
 	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
 	$(NPM) --prefix yjsstore/runtime test
-	CRDT_YJS_STORE_NODE_INTEGRATION=1 go test -count=1 ./extensions -run '^TestYJSStoreNodeSidecarIntegration$$'
+	CRDT_YJS_STORE_NODE_INTEGRATION=1 go test -count=1 ./extensions -run '^TestYJS.*Node.*Integration$$'
 
 yjs-store-benchmark:
 	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
-	$(NPM) --prefix yjsstore/runtime run bench
+	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 1
+	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 4
+	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 16
+	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 64
 
 # BENCHMARK_BASE must be a checkout of the commit to compare against. The
 # candidate and baseline run consecutively with one logical processor so their
