@@ -76,6 +76,7 @@ be committed.
 - [Yjs relay controlled validation — 2026-07-31](operations/yjs-relay-benchmark-2026-07-31.md)
 - [Rich-text editor binding controlled validation — 2026-07-31](operations/richtext-editor-binding-benchmark-2026-07-31.md)
 - [Native multilingual RGA controlled benchmark — 2026-07-31](operations/native-multilanguage-rga-benchmark-2026-07-31.md)
+- [Browser multi-tab/offline controlled validation — 2026-08-01](operations/browser-multitab-offline-2026-08-01.md)
 - [DarkInno / Yjs text comparison](operations/crdt-library-comparison-2026-07-30.md)
 - [DarkInno / Yjs 文本对比](operations/crdt-library-comparison-2026-07-30.zh-CN.md)
 - [System context architecture (SVG)](assets/architecture.svg)
