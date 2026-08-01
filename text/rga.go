@@ -222,6 +222,11 @@ type eligibleCompactionPlan struct {
 type Delta struct {
 	nodes      map[Position]node
 	tombstones map[Position]struct{}
+	// canonicalNodeIDs is populated only while constructing a large local
+	// parent-before-child run. It is never decoded from peer input. ApplyDelta
+	// rechecks its membership and ordering before using it, then falls back to
+	// sorting the opaque map for every other delta.
+	canonicalNodeIDs []Position
 }
 
 // Options bounds retained RGA metadata. Values must be positive. The defaults
@@ -388,6 +393,9 @@ func (r *RGA) insertAfter(predecessor Position, value string) (Delta, error) {
 	}
 	runes := []rune(value)
 	delta := Delta{nodes: make(map[Position]node, len(runes)), tombstones: make(map[Position]struct{})}
+	if len(runes) >= resolvedRunFastPathMinNodes {
+		delta.canonicalNodeIDs = make([]Position, 0, len(runes))
+	}
 	parent := predecessor
 	for _, valueRune := range runes {
 		id, err := r.clock.Now()
@@ -395,6 +403,9 @@ func (r *RGA) insertAfter(predecessor Position, value string) (Delta, error) {
 			return Delta{}, err
 		}
 		delta.nodes[id] = node{parent: parent, rune: valueRune}
+		if delta.canonicalNodeIDs != nil {
+			delta.canonicalNodeIDs = append(delta.canonicalNodeIDs, id)
+		}
 		parent = id
 	}
 	if len(delta.nodes) == 0 {
@@ -403,6 +414,7 @@ func (r *RGA) insertAfter(predecessor Position, value string) (Delta, error) {
 	if err := r.ApplyDelta(delta); err != nil {
 		return Delta{}, err
 	}
+	delta.canonicalNodeIDs = nil
 	return delta, nil
 }
 
@@ -477,6 +489,7 @@ func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, enco
 	if err := r.ApplyDelta(delta); err != nil {
 		return Delta{}, nil, err
 	}
+	delta.canonicalNodeIDs = nil
 	return delta, encoded, nil
 }
 
@@ -514,12 +527,18 @@ func (r *RGA) prepareInsert(offset int, value string, limits *frame.DecoderLimit
 		parent = previous
 	}
 	delta := Delta{nodes: make(map[Position]node, len(runes)), tombstones: make(map[Position]struct{})}
+	if len(runes) >= resolvedRunFastPathMinNodes {
+		delta.canonicalNodeIDs = make([]Position, 0, len(runes))
+	}
 	for _, valueRune := range runes {
 		id, err := r.clock.Now()
 		if err != nil {
 			return Delta{}, nil, err
 		}
 		delta.nodes[id] = node{parent: parent, rune: valueRune}
+		if delta.canonicalNodeIDs != nil {
+			delta.canonicalNodeIDs = append(delta.canonicalNodeIDs, id)
+		}
 		parent = id
 	}
 	var encoded []byte
@@ -626,7 +645,7 @@ func (r *RGA) replace(offset, count int, value string, limits frame.DecoderLimit
 	if err != nil {
 		return nil, err
 	}
-	delta := Delta{nodes: inserted.nodes, tombstones: deleted.tombstones}
+	delta := Delta{nodes: inserted.nodes, tombstones: deleted.tombstones, canonicalNodeIDs: inserted.canonicalNodeIDs}
 	encoded, err := encode(delta, limits)
 	if err != nil {
 		return nil, err
@@ -872,7 +891,10 @@ func (r *RGA) resolvedLinearRunLocked(delta Delta) ([]Position, bool) {
 	if len(delta.nodes) < resolvedRunFastPathMinNodes {
 		return nil, false
 	}
-	ids := sortedNodeIDs(delta.nodes)
+	ids, cached := delta.cachedCanonicalNodeIDs()
+	if !cached {
+		ids = sortedNodeIDs(delta.nodes)
+	}
 	first := delta.nodes[ids[0]]
 	if first.parent.Valid() {
 		if _, exists := r.nodes[first.parent]; !exists {
@@ -897,6 +919,26 @@ func (r *RGA) resolvedLinearRunLocked(delta Delta) ([]Position, bool) {
 	return ids, true
 }
 
+// cachedCanonicalNodeIDs returns the locally recorded canonical ordering only
+// after checking that it still covers exactly the immutable opaque node map.
+// A malformed or stale cache cannot alter RGA ordering: the caller sorts the
+// map instead.
+func (d Delta) cachedCanonicalNodeIDs() ([]Position, bool) {
+	ids := d.canonicalNodeIDs
+	if len(ids) == 0 || len(ids) != len(d.nodes) {
+		return nil, false
+	}
+	for index, id := range ids {
+		if index > 0 && id.Compare(ids[index-1]) <= 0 {
+			return nil, false
+		}
+		if _, exists := d.nodes[id]; !exists {
+			return nil, false
+		}
+	}
+	return ids, true
+}
+
 // applyResolvedLinearRunLocked integrates a chain accepted by
 // resolvedLinearRunLocked. It preserves ApplyDelta's validation, limits, HLC
 // witness, pending replay, tombstone, and version semantics while avoiding
@@ -911,10 +953,23 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 			return err
 		}
 	}
+	if len(r.nodes) == 0 {
+		// The fast path is often the first state installed in a fresh replica.
+		// Reserve both indexes after all rejectable checks above, avoiding the
+		// repeated map growth otherwise caused by a large paste or initial sync.
+		r.nodes = make(map[Position]node, len(ids))
+		r.sequence.reserveInitialPairs(len(ids))
+	}
+	// Every pair is retained by sequence.pairs and its marker tree, so allocate
+	// a resolved run as one backing array instead of one heap object per rune.
+	// This path is only reached after resolvedLinearRunLocked has established
+	// the parent-before-child chain and canonical order.
+	pairs := make([]sequencePair, len(ids))
 	markers := make([]*sequenceMarker, 0, len(ids)*2)
-	for _, id := range ids {
+	for index, id := range ids {
 		_, deleted := r.tombstones[id]
-		markers = append(markers, &newSequencePair(id, !deleted).entry)
+		initializeSequencePair(&pairs[index], id, !deleted)
+		markers = append(markers, &pairs[index].entry)
 	}
 	for index := len(ids) - 1; index >= 0; index-- {
 		markers = append(markers, &markers[index].pair.exit)
