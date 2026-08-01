@@ -72,6 +72,7 @@ go test ./...
 | 目标 | 阅读或运行 |
 | --- | --- |
 | 学习基础 API | [入门指南](docs/getting-started.zh-CN.md) 与[可运行示例](examples) |
+| 不接触 CRDT 底层细节地使用命名 Map/Array | [共享文档指南](docs/integration/shared-document.zh-CN.md) 与 `go run ./examples/shared-document` |
 | 不手抄协议 ID 地选择 CRDT | [按业务意图配置](docs/integration/intent-first-setup.zh-CN.md) 和 `go run ./cmd/crdt-profile -format json` |
 | 构建完整客户端流程 | [端到端集成](docs/integration/overview.zh-CN.md) |
 | 安全跨越本地重启 | [本地 checkpoint Store](docs/integration/local-checkpoint.zh-CN.md) 与 `go run ./examples/persistent-replica` |
@@ -105,6 +106,7 @@ go run ./examples/persistent-replica
 | 包 | 职责 |
 | --- | --- |
 | `counter`、`set`、`register` | Counter、Set、Register CRDT。 |
+| `shared` | 稳定 document-tree-v1 帧之上的高层命名 Map/Array facade。 |
 | `lww`、`tree`、`text`、`list`、`xml`、`richtext` | 基于 HLC 的有序协作结构。 |
 | `encoding`、`delta`、`snapshot`、`clock` | 帧、受限批次、snapshot 与 HLC 状态。 |
 | `replica`、`membership`、`tombstonegc`、`merkle` | 投递连续性、成员关系、安全 GC 协调与反熵。 |

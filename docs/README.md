@@ -17,6 +17,8 @@ be committed.
 - [端到端集成教程](integration/overview.zh-CN.md)
 - [Intent-first CRDT setup](integration/intent-first-setup.md)
 - [按业务意图配置 CRDT](integration/intent-first-setup.zh-CN.md)
+- [Shared document without CRDT plumbing](integration/shared-document.md)
+- [不理解 CRDT 算法也能使用共享文档](integration/shared-document.zh-CN.md)
 - [Local bbolt checkpoint reference](integration/local-checkpoint.md)
 - [本地 bbolt 检查点参考实现](integration/local-checkpoint.zh-CN.md)
 - [Durable WebSocket relay reference](integration/durable-provider.md)

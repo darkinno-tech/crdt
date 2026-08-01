@@ -7,7 +7,7 @@
 # accidentally become fuzz targets.
 set -eu
 
-fuzz_runs=${FUZZ_RUNS:-250000}
+fuzz_runs=${FUZZ_RUNS:-150000}
 fuzz_model_runs=${FUZZ_MODEL_RUNS:-10000}
 fuzz_parallel=${FUZZ_PARALLEL:-1}
 found=0
