@@ -73,6 +73,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Goal | Read or run |
 | --- | --- |
 | Learn the basic APIs | [Getting started](docs/getting-started.md) and [runnable examples](examples) |
+| Use named shared Map/Array objects without CRDT plumbing | [Shared-document guide](docs/integration/shared-document.md) and `go run ./examples/shared-document` |
 | Choose a CRDT without hand-copying protocol IDs | [Intent-first setup](docs/integration/intent-first-setup.md) and `go run ./cmd/crdt-profile -format json` |
 | Build a complete client flow | [End-to-end integration](docs/integration/overview.md) |
 | Survive local restarts safely | [Local checkpoint Store references](docs/integration/local-checkpoint.md) and `go run ./examples/persistent-replica` |
@@ -107,6 +108,7 @@ The `durable` package intentionally persists a relay operation log and replay cu
 | Package | Purpose |
 | --- | --- |
 | `counter`, `set`, `register` | Counter, set, and register CRDTs. |
+| `shared` | High-level named Map/Array facade over stable document-tree-v1 frames. |
 | `lww`, `tree`, `text`, `list`, `xml`, `richtext`, `documenttree` | HLC-backed and ordered collaborative structures. |
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
