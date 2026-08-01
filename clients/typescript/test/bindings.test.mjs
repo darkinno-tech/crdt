@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   bindCodeMirrorPlainText,
   bindLexicalPlainText,
+  bindQuillRichText,
   bindQuillPlainText,
   bindRGAPlainText,
   bindTiptapPlainText,
@@ -257,6 +258,50 @@ test("Quill adapter accepts user text changes and ignores API writes used for re
   assert.equal(frames.length, 1);
 });
 
+test("Quill rich-text adapter preserves approved marks, rejects embeds, and suppresses remote echoes", () => {
+  const quill = new RichQuillPort({ ops: [{ insert: "Hello\n" }] });
+  const document = new FakeRichText();
+  const frames = [];
+  const binding = bindQuillRichText(document, quill, {
+    onLocalFrame: (frame) => frames.push(frame),
+    attributes: richTextAttributes,
+  });
+  assert.equal(document.text(), "Hello\n");
+  assert.equal(frames.length, 1);
+
+  quill.userDelta({
+    ops: [
+      { retain: 5, attributes: { bold: true } },
+      { insert: " world", attributes: { italic: true } },
+    ],
+  });
+  assert.equal(document.text(), "Hello world\n");
+  assert.deepEqual(document.spans(), [
+    { text: "Hello", attributes: { "rt.bold": "true" } },
+    { text: " world", attributes: { "rt.italic": "true" } },
+    { text: "\n", attributes: {} },
+  ]);
+  assert.equal(frames.length, 2);
+
+  assert.throws(() => quill.userDelta({ ops: [{ insert: { image: "untrusted" } }] }), /unsupported_rich_text/);
+  assert.equal(document.text(), "Hello world\n");
+  assert.deepEqual(quill.getContents(), {
+    ops: [
+      { insert: "Hello", attributes: { bold: true } },
+      { insert: " world", attributes: { italic: true } },
+      { insert: "\n" },
+    ],
+  });
+  assert.equal(frames.length, 2);
+
+  const remote = new FakeRichText(document.spans());
+  const remoteFrame = remote.applyEditorDelta([{ retain: 11 }, { insert: "!" }]);
+  binding.applyRemote(remoteFrame);
+  assert.equal(document.text(), "Hello world!\n");
+  assert.equal(frames.length, 2);
+  assert.equal(binding.destroy(), true);
+});
+
 test("CodeMirror adapter sends user updates through its configured view listener without echo", () => {
   const document = new FakeRGA("code");
   const view = new CodeMirrorPort("code");
@@ -343,4 +388,114 @@ function tiptapJSON(value) {
       content: paragraph === "" ? [] : [{ type: "text", text: paragraph }],
     })),
   };
+}
+
+const richTextAttributes = {
+  toDocumentChanges(attributes, operation) {
+    const changes = [];
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key !== "bold" && key !== "italic") throw new Error("unsupported_rich_text");
+      const documentKey = `rt.${key}`;
+      if (operation === "retain" && value === null) {
+        changes.push({ key: documentKey, remove: true });
+      } else if (value === true) {
+        changes.push({ key: documentKey, value: "true" });
+      } else {
+        throw new Error("unsupported_rich_text");
+      }
+    }
+    return changes;
+  },
+  toEditorAttributes(attributes, _text) {
+    const output = {};
+    for (const [key, value] of Object.entries(attributes)) {
+      if (key === "rt.bold" && value === "true") output.bold = true;
+      else if (key === "rt.italic" && value === "true") output.italic = true;
+      else throw new Error("unsupported_rich_text");
+    }
+    return output;
+  },
+};
+
+class RichQuillPort {
+  constructor(contents) {
+    this.contents = contents;
+    this.listeners = new Set();
+  }
+
+  getContents() {
+    return this.contents;
+  }
+
+  setContents(contents, source = "api") {
+    this.contents = contents;
+    for (const listener of [...this.listeners]) listener(contents, {}, source);
+  }
+
+  on(_event, listener) {
+    this.listeners.add(listener);
+  }
+
+  off(_event, listener) {
+    this.listeners.delete(listener);
+  }
+
+  userDelta(delta) {
+    for (const listener of [...this.listeners]) listener(delta, this.contents, "user");
+  }
+}
+
+class FakeRichText {
+  constructor(spans = []) {
+    this.values = [];
+    for (const span of spans) {
+      for (const rune of Array.from(span.text)) this.values.push({ rune, attributes: { ...(span.attributes ?? {}) } });
+    }
+  }
+
+  text() {
+    return this.values.map((value) => value.rune).join("");
+  }
+
+  spans() {
+    const spans = [];
+    for (const value of this.values) {
+      const previous = spans.at(-1);
+      if (previous !== undefined && JSON.stringify(previous.attributes) === JSON.stringify(value.attributes)) {
+        previous.text += value.rune;
+      } else {
+        spans.push({ text: value.rune, attributes: { ...value.attributes } });
+      }
+    }
+    return spans;
+  }
+
+  applyEditorDelta(operations) {
+    let offset = 0;
+    for (const operation of operations) {
+      if (operation.retain !== undefined) {
+        for (let index = offset; index < offset + operation.retain; index += 1) this.#applyChanges(this.values[index].attributes, operation.changes ?? []);
+        offset += operation.retain;
+      } else if (operation.delete !== undefined) {
+        this.values.splice(offset, operation.delete);
+      } else {
+        const inserted = Array.from(operation.insert).map((rune) => ({ rune, attributes: {} }));
+        for (const value of inserted) this.#applyChanges(value.attributes, operation.changes ?? []);
+        this.values.splice(offset, 0, ...inserted);
+        offset += inserted.length;
+      }
+    }
+    return new TextEncoder().encode(JSON.stringify(operations));
+  }
+
+  applyDelta(frame) {
+    this.applyEditorDelta(JSON.parse(new TextDecoder().decode(frame)));
+  }
+
+  #applyChanges(attributes, changes) {
+    for (const change of changes) {
+      if (change.remove) delete attributes[change.key];
+      else attributes[change.key] = change.value;
+    }
+  }
 }

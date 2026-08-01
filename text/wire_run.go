@@ -3,6 +3,7 @@ package text
 import (
 	"bytes"
 	"sort"
+	"strconv"
 	"unicode/utf8"
 
 	"github.com/DarkInno/crdt"
@@ -208,7 +209,11 @@ func writeRunPayload(payload []byte, blocks [][]runNode, tombIDs []Position) err
 	for _, block := range blocks {
 		if len(block) == 1 {
 			output = frame.AppendUvarint(output, runBlockNode)
-			output = appendRunNode(output, block[0])
+			var err error
+			output, err = appendRunNode(output, block[0])
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		output = frame.AppendUvarint(output, runBlockChain)
@@ -222,9 +227,13 @@ func writeRunPayload(payload []byte, blocks [][]runNode, tombIDs []Position) err
 			output = frame.AppendUvarint(output, 0)
 		}
 		for _, item := range block {
+			scalar, ok := encodeRunScalar(item.item.rune)
+			if !ok {
+				return frame.ErrInvalidFrame
+			}
 			output = frame.AppendUvarint(output, item.id.WallTime)
 			output = frame.AppendUvarint(output, item.id.Logical)
-			output = frame.AppendUvarint(output, uint64(item.item.rune))
+			output = frame.AppendUvarint(output, scalar)
 		}
 	}
 	output = frame.AppendUvarint(output, uint64(len(tombIDs)))
@@ -356,7 +365,11 @@ func acyclicSortedRunNodes(items []runNode) bool {
 	return true
 }
 
-func appendRunNode(output []byte, item runNode) []byte {
+func appendRunNode(output []byte, item runNode) ([]byte, error) {
+	scalar, ok := encodeRunScalar(item.item.rune)
+	if !ok {
+		return nil, frame.ErrInvalidFrame
+	}
 	output = frame.AppendTag(output, item.id)
 	if item.item.parent.Valid() {
 		output = frame.AppendUvarint(output, 1)
@@ -364,7 +377,22 @@ func appendRunNode(output []byte, item runNode) []byte {
 	} else {
 		output = frame.AppendUvarint(output, 0)
 	}
-	return frame.AppendUvarint(output, uint64(item.item.rune))
+	return frame.AppendUvarint(output, scalar), nil
+}
+
+func encodeRunScalar(value rune) (uint64, bool) {
+	if value < 0 || !utf8.ValidRune(value) {
+		return 0, false
+	}
+	return uint64(value), true
+}
+
+func decodeRunScalar(value uint64) (rune, bool) {
+	if value > uint64(utf8.MaxRune) {
+		return 0, false
+	}
+	scalar := rune(value)
+	return scalar, utf8.ValidRune(scalar)
 }
 
 func runPayloadSize(blocks [][]runNode, tombstones map[Position]struct{}, limits frame.DecoderLimits) (int, error) {
@@ -376,10 +404,14 @@ func runPayloadSizeWithTombstoneIDs(blocks [][]runNode, tombIDs []Position, limi
 	for _, block := range blocks {
 		if len(block) == 1 {
 			item := block[0]
+			scalar, ok := encodeRunScalar(item.item.rune)
+			if !ok {
+				return 0, frame.ErrInvalidFrame
+			}
 			if err := addWireTagSize(&size, item.id, limits); err != nil {
 				return 0, err
 			}
-			additional := frame.UvarintSize(uint64(item.item.rune)) + 1
+			additional := frame.UvarintSize(scalar) + 1
 			if item.item.parent.Valid() {
 				if len(item.item.parent.ReplicaID) > limits.MaxStringBytes {
 					return 0, frame.ErrFrameLimit
@@ -403,7 +435,11 @@ func runPayloadSizeWithTombstoneIDs(blocks [][]runNode, tombIDs []Position, limi
 			additional += frame.TagSize(block[0].item.parent)
 		}
 		for _, item := range block {
-			additional += frame.UvarintSize(item.id.WallTime) + frame.UvarintSize(item.id.Logical) + frame.UvarintSize(uint64(item.item.rune))
+			scalar, ok := encodeRunScalar(item.item.rune)
+			if !ok {
+				return 0, frame.ErrInvalidFrame
+			}
+			additional += frame.UvarintSize(item.id.WallTime) + frame.UvarintSize(item.id.Logical) + frame.UvarintSize(scalar)
 		}
 		if additional > limits.MaxPayload-size-1 {
 			return 0, frame.ErrFrameLimit
@@ -615,7 +651,7 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 	}
 	position := 0
 	blockCount, next, ok := frame.ReadUvarint(decoded.Payload, position)
-	if !ok || blockCount > uint64(limits.MaxElements) {
+	if !ok || limits.MaxElements < 0 || blockCount > uint64(limits.MaxElements) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	position = next
@@ -638,7 +674,8 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 			continue
 		}
 		count, next, ok := frame.ReadUvarint(decoded.Payload, position)
-		if !ok || count < 2 || count > uint64(limits.MaxElements-len(nodes)) {
+		remainingNodes := limits.MaxElements - len(nodes)
+		if !ok || count < 2 || remainingNodes < 0 || count > uint64(remainingNodes) {
 			return nil, nil, frame.ErrInvalidFrame
 		}
 		position = next
@@ -671,23 +708,29 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 				return nil, nil, frame.ErrInvalidFrame
 			}
 			runeValue, next, ok := frame.ReadUvarint(decoded.Payload, next)
-			if !ok || runeValue > uint64(^uint32(0)) {
+			scalar, validScalar := decodeRunScalar(runeValue)
+			if !ok || !validScalar {
 				return nil, nil, frame.ErrInvalidFrame
 			}
 			id := Position{ReplicaID: replicaID, WallTime: wallTime, Logical: logical}
 			if _, exists := nodes[id]; exists {
 				return nil, nil, frame.ErrInvalidFrame
 			}
-			nodes[id] = node{parent: parent, rune: rune(runeValue)}
+			nodes[id] = node{parent: parent, rune: scalar}
 			parent, position = id, next
 		}
 	}
 	tombCount, next, ok := frame.ReadUvarint(decoded.Payload, position)
-	if !ok || tombCount > uint64(limits.MaxTags-len(nodes)) {
+	remainingTags := limits.MaxTags - len(nodes)
+	if !ok || remainingTags < 0 || tombCount > uint64(remainingTags) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	position = next
-	tombstones := make(map[Position]struct{}, int(tombCount))
+	tombstoneCapacity, ok := runCountAsInt(tombCount)
+	if !ok {
+		return nil, nil, frame.ErrInvalidFrame
+	}
+	tombstones := make(map[Position]struct{}, tombstoneCapacity)
 	for index := uint64(0); index < tombCount; index++ {
 		id, next, ok := frame.ReadTag(decoded.Payload, position, limits.MaxStringBytes)
 		if !ok {
@@ -725,10 +768,19 @@ func readRunNode(payload []byte, position int, limits frame.DecoderLimits) (Posi
 		}
 	}
 	runeValue, next, ok := frame.ReadUvarint(payload, next)
-	if !ok || runeValue > uint64(^uint32(0)) {
+	scalar, validScalar := decodeRunScalar(runeValue)
+	if !ok || !validScalar {
 		return Position{}, node{}, position, false
 	}
-	return id, node{parent: parent, rune: rune(runeValue)}, next, true
+	return id, node{parent: parent, rune: scalar}, next, true
+}
+
+func runCountAsInt(value uint64) (int, bool) {
+	const maxInt = 1<<(strconv.IntSize-1) - 1
+	if value > uint64(maxInt) {
+		return 0, false
+	}
+	return int(value), true
 }
 
 // SnapshotRunCurrentState returns an HLC-backed run-v2 snapshot.

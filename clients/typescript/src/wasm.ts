@@ -1,4 +1,5 @@
 import { FrameSemanticsVersion, FrameType } from "./frame.js";
+import type { RichTextEditorOperation, RichTextSpan } from "./bindings.js";
 
 /** The global installed by the Go js/wasm entrypoint after it has started. */
 export const RGA_WASM_GLOBAL = "__darkinnoCRDTRGA";
@@ -26,6 +27,13 @@ export const RGA_PROTOCOL_RUN_V2: Readonly<RGAProtocolExpectation> = Object.free
   semanticsVersion: FrameSemanticsVersion.RGARun,
 });
 
+/** Exact rich-text v1 contract selected by a separate authenticated Manifest. */
+export const RICH_TEXT_PROTOCOL: Readonly<RGAProtocolExpectation> = Object.freeze({
+  stateTypeID: FrameType.RichTextState,
+  deltaTypeID: FrameType.RichTextDelta,
+  semanticsVersion: FrameSemanticsVersion.RichText,
+});
+
 export interface InitRGAWasmOptions {
   /** URL of the `crdt-rga.wasm` artifact built with `make wasm`. */
   readonly wasmURL: string | URL;
@@ -49,10 +57,48 @@ export interface RGAProtocol {
   readonly maxLocalEditRunes: number;
 }
 
+/** Browser limits returned by the bounded rich-text v1 Wasm runtime. */
+export interface RichTextProtocol extends RGAProtocol {
+  readonly maxLocalEditorOps: number;
+  readonly maxAttributesPerOperation: number;
+}
+
+export interface InitRichTextWasmOptions {
+  /** URL of the combined `crdt-rga.wasm` artifact built with `make wasm`. */
+  readonly wasmURL: string | URL;
+  /** Exact rich-text contract authenticated for the rich-text replication group. */
+  readonly expectedProtocol?: Readonly<RGAProtocolExpectation>;
+  /**
+   * RGA protocol compiled into the shared artifact. This is independent of
+   * the rich-text Manifest: omit it for the default run-v2 artifact, or pass
+   * the authenticated v1 contract when loading a legacy combined build.
+   */
+  readonly expectedRGAProtocol?: Readonly<RGAProtocolExpectation>;
+  /** Maximum time to wait for the Go runtime to publish its API. */
+  readonly startupTimeoutMs?: number;
+}
+
 export interface RGATag {
   readonly replicaID: string;
   readonly wallTime: bigint;
   readonly logical: bigint;
+}
+
+/** One stable RGA Position identity. It has the same fields as the mutation tag it references. */
+export type RGAPosition = RGATag;
+
+/** The side of one stable Position represented by a local cursor boundary. */
+export type RGAAnchorAssociation = "before" | "after";
+
+/**
+ * Stable local cursor metadata expressed directly with an RGA Position/Tag.
+ * A missing position denotes the synthetic root: `before` is document start
+ * and `after` is document end. This is deliberately not a Yjs-compatible
+ * relative-position wire format and must not be embedded in RGA frames.
+ */
+export interface RGAAnchor {
+  readonly position?: RGAPosition;
+  readonly association: RGAAnchorAssociation;
 }
 
 /**
@@ -128,6 +174,18 @@ export class RGAWasmDocument {
     return value;
   }
 
+  /** Returns a Position/Tag-backed local boundary for one visible rune offset. */
+  anchorAt(offset: number): RGAAnchor {
+    this.assertOpen();
+    return anchorFromRaw(unwrap(this.api.anchorAt(this.handle, offset)), this.limits);
+  }
+
+  /** Resolves a retained local Position/Tag boundary to a visible rune offset. */
+  resolveAnchor(anchor: RGAAnchor): number {
+    this.assertOpen();
+    return nonNegativeSafeInteger(unwrap(this.api.resolveAnchor(this.handle, anchorToRaw(anchor, this.limits))));
+  }
+
   /** Reports accepted nodes still waiting for an out-of-order parent. */
   pendingCount(): number {
     this.assertOpen();
@@ -183,6 +241,93 @@ export class RGAWasmRuntime {
   }
 }
 
+/** A local rich-text v1 document backed by the canonical Go Wasm runtime. */
+export class RichTextWasmDocument {
+  #closed = false;
+
+  constructor(
+    private readonly api: RawRGAAPI,
+    private readonly handle: number,
+    private readonly limits: RichTextProtocol,
+  ) {}
+
+  /** Exact negotiated rich-text frame and editor resource limits. */
+  get protocol(): RichTextProtocol {
+    this.assertOpen();
+    return this.limits;
+  }
+
+  /** Returns a copied renderer projection; attributes remain manifest-governed. */
+  spans(): readonly RichTextSpan[] {
+    this.assertOpen();
+    return richTextSpansFromRaw(unwrap(this.api.richTextSpans(this.handle)), this.limits);
+  }
+
+  /** Applies one full local editor transaction and returns one canonical frame. */
+  applyEditorDelta(operations: readonly RichTextEditorOperation[]): Uint8Array {
+    this.assertOpen();
+    validateRichTextEditorOperations(operations, this.limits);
+    return copiedBytes(unwrap(this.api.richTextApplyEditorDelta(this.handle, operations)));
+  }
+
+  /** Validates and joins one untrusted rich-text v1 frame. */
+  applyDelta(encoded: Uint8Array): void {
+    this.assertOpen();
+    if (!(encoded instanceof Uint8Array) || encoded.byteLength > this.limits.maxFrameBytes) {
+      throw new CRDTRuntimeError("resource_limit");
+    }
+    unwrap<void>(this.api.richTextApplyDelta(this.handle, encoded));
+  }
+
+  /** Returns a fully copied rich-text state/frontier/clock persistence unit. */
+  snapshot(): RGASnapshot {
+    this.assertOpen();
+    return snapshotFromRaw(unwrap(this.api.richTextSnapshot(this.handle)), this.limits);
+  }
+
+  /** Releases this local rich-text handle. It is safe to call more than once. */
+  close(): boolean {
+    if (this.#closed) {
+      return false;
+    }
+    this.#closed = true;
+    const value = unwrap(this.api.richTextDrop(this.handle));
+    if (typeof value !== "boolean") {
+      throw new CRDTRuntimeError("invalid_runtime_response");
+    }
+    return value;
+  }
+
+  private assertOpen(): void {
+    if (this.#closed) {
+      throw new CRDTRuntimeError("document_closed");
+    }
+  }
+}
+
+/** One initialized Go Wasm module; it may own multiple rich-text documents. */
+export class RichTextWasmRuntime {
+  readonly protocol: RichTextProtocol;
+
+  constructor(
+    private readonly api: RawRGAAPI,
+    protocol: RichTextProtocol,
+  ) {
+    this.protocol = protocol;
+  }
+
+  create(replicaID: string): RichTextWasmDocument {
+    assertBoundedString(replicaID, this.protocol.maxStringBytes, "resource_limit");
+    const handle = documentHandle(unwrap(this.api.richTextCreate(replicaID)));
+    return new RichTextWasmDocument(this.api, handle, this.protocol);
+  }
+
+  restore(snapshot: RGASnapshot): RichTextWasmDocument {
+    const handle = documentHandle(unwrap(this.api.richTextRestore(snapshotToRaw(snapshot, this.protocol))));
+    return new RichTextWasmDocument(this.api, handle, this.protocol);
+  }
+}
+
 /**
  * Initializes the RGA Wasm module. Load the `wasm_exec.js` copied by
  * `make wasm` before calling this function; it must come from the same Go
@@ -230,6 +375,25 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
   return new RGAWasmRuntime(api, readAndValidateProtocol(api, expectedProtocol));
 }
 
+/**
+ * Initializes the rich-text v1 surface in the same Go Wasm artifact used by
+ * the RGA runtime. Rich text remains a separately negotiated manifest group;
+ * its frames must never be sent to an RGA run-v2 document.
+ */
+export async function initRichTextWasm(options: InitRichTextWasmOptions): Promise<RichTextWasmRuntime> {
+  const sharedOptions: InitRGAWasmOptions = {
+    wasmURL: options.wasmURL,
+    expectedProtocol: options.expectedRGAProtocol ?? RGA_PROTOCOL_RUN_V2,
+    ...(options.startupTimeoutMs === undefined ? {} : { startupTimeoutMs: options.startupTimeoutMs }),
+  };
+  await initRGAWasm(sharedOptions);
+  const api = rawAPIFromGlobal();
+  if (api === undefined) {
+    throw new CRDTRuntimeError("wasm_start_failed");
+  }
+  return new RichTextWasmRuntime(api, readAndValidateRichTextProtocol(api, options.expectedProtocol ?? RICH_TEXT_PROTOCOL));
+}
+
 interface GoRuntime {
   readonly importObject: WebAssembly.Imports;
   run(instance: WebAssembly.Instance): Promise<void> | void;
@@ -258,9 +422,19 @@ interface RawRGAAPI {
   replace(handle: number, offset: number, count: number, value: string): RawResult;
   applyDelta(handle: number, encoded: Uint8Array): RawResult;
   text(handle: number): RawResult;
+  anchorAt(handle: number, offset: number): RawResult;
+  resolveAnchor(handle: number, anchor: RawAnchor): RawResult;
   pendingCount(handle: number): RawResult;
   snapshot(handle: number): RawResult;
   restore(snapshot: RawSnapshot): RawResult;
+  richTextProtocol(): RawResult;
+  richTextCreate(replicaID: string): RawResult;
+  richTextDrop(handle: number): RawResult;
+  richTextApplyEditorDelta(handle: number, operations: readonly RichTextEditorOperation[]): RawResult;
+  richTextApplyDelta(handle: number, encoded: Uint8Array): RawResult;
+  richTextSpans(handle: number): RawResult;
+  richTextSnapshot(handle: number): RawResult;
+  richTextRestore(snapshot: RawSnapshot): RawResult;
 }
 
 interface RawSnapshot {
@@ -273,6 +447,11 @@ interface RawTag {
   readonly replicaID: string;
   readonly wallTime: string;
   readonly logical: string;
+}
+
+interface RawAnchor {
+  readonly position: RawTag | null;
+  readonly association: RGAAnchorAssociation;
 }
 
 type SnapshotLimits = Pick<RGAProtocol, "maxFrameBytes" | "maxTags" | "maxStringBytes">;
@@ -311,9 +490,19 @@ function rawAPIFromGlobal(): RawRGAAPI | undefined {
     "replace",
     "applyDelta",
     "text",
+    "anchorAt",
+    "resolveAnchor",
     "pendingCount",
     "snapshot",
     "restore",
+    "richTextProtocol",
+    "richTextCreate",
+    "richTextDrop",
+    "richTextApplyEditorDelta",
+    "richTextApplyDelta",
+    "richTextSpans",
+    "richTextSnapshot",
+    "richTextRestore",
   ] as const;
   if (names.some((name) => typeof candidate[name] !== "function")) {
     return undefined;
@@ -356,6 +545,36 @@ function readAndValidateProtocol(api: RawRGAAPI, expected: Readonly<RGAProtocolE
     protocol.maxLocalEditBytes <= 0 ||
     protocol.maxLocalEditRunes <= 0 ||
     protocol.maxLocalEditBytes > protocol.maxFrameBytes
+  ) {
+    throw new CRDTRuntimeError("protocol_mismatch");
+  }
+  return protocol;
+}
+
+function readAndValidateRichTextProtocol(api: RawRGAAPI, expected: Readonly<RGAProtocolExpectation>): RichTextProtocol {
+  const raw = unwrap(api.richTextProtocol());
+  if (!isRecord(raw)) {
+    throw new CRDTRuntimeError("invalid_runtime_response");
+  }
+  const protocol: RichTextProtocol = {
+    stateTypeID: parseUnsignedInteger(raw.stateTypeID),
+    deltaTypeID: parseUnsignedInteger(raw.deltaTypeID),
+    semanticsVersion: parseUnsignedInteger(raw.semanticsVersion),
+    maxFrameBytes: nonNegativeSafeInteger(raw.maxFrameBytes),
+    maxTags: nonNegativeSafeInteger(raw.maxTags),
+    maxStringBytes: nonNegativeSafeInteger(raw.maxStringBytes),
+    maxLocalEditBytes: nonNegativeSafeInteger(raw.maxLocalEditBytes),
+    maxLocalEditRunes: nonNegativeSafeInteger(raw.maxLocalEditRunes),
+    maxLocalEditorOps: nonNegativeSafeInteger(raw.maxLocalEditorOps),
+    maxAttributesPerOperation: nonNegativeSafeInteger(raw.maxAttributesPerOperation),
+  };
+  if (
+    protocol.stateTypeID !== expected.stateTypeID ||
+    protocol.deltaTypeID !== expected.deltaTypeID ||
+    protocol.semanticsVersion !== expected.semanticsVersion ||
+    protocol.maxFrameBytes <= 0 || protocol.maxTags <= 0 || protocol.maxStringBytes <= 0 ||
+    protocol.maxLocalEditBytes <= 0 || protocol.maxLocalEditRunes <= 0 || protocol.maxLocalEditorOps <= 0 ||
+    protocol.maxAttributesPerOperation <= 0 || protocol.maxLocalEditBytes > protocol.maxFrameBytes
   ) {
     throw new CRDTRuntimeError("protocol_mismatch");
   }
@@ -432,6 +651,80 @@ function snapshotToRaw(snapshot: RGASnapshot, limits: SnapshotLimits): RawSnapsh
   };
 }
 
+function richTextSpansFromRaw(raw: unknown, limits: RichTextProtocol): readonly RichTextSpan[] {
+  if (!Array.isArray(raw) || raw.length > limits.maxTags) {
+    throw new CRDTRuntimeError("invalid_runtime_response");
+  }
+  return raw.map((span) => {
+    if (!isRecord(span) || typeof span.text !== "string" || utf8ByteLength(span.text) > limits.maxStringBytes) {
+      throw new CRDTRuntimeError("invalid_runtime_response");
+    }
+    const attributes = span.attributes;
+    if (!isRecord(attributes) || Object.keys(attributes).length > limits.maxAttributesPerOperation) {
+      throw new CRDTRuntimeError("invalid_runtime_response");
+    }
+    const copied: Record<string, string> = {};
+    for (const [key, value] of Object.entries(attributes)) {
+      if (utf8ByteLength(key) > limits.maxStringBytes || typeof value !== "string" || utf8ByteLength(value) > limits.maxStringBytes) {
+        throw new CRDTRuntimeError("invalid_runtime_response");
+      }
+      copied[key] = value;
+    }
+    return { text: span.text, attributes: copied };
+  });
+}
+
+function validateRichTextEditorOperations(operations: readonly RichTextEditorOperation[], limits: RichTextProtocol): void {
+  if (!Array.isArray(operations) || operations.length > limits.maxLocalEditorOps) {
+    throw new CRDTRuntimeError("resource_limit");
+  }
+  let insertedBytes = 0;
+  let insertedRunes = 0;
+  for (const operation of operations) {
+    if (!isRecord(operation)) {
+      throw new CRDTRuntimeError("invalid_argument");
+    }
+    const retain = operation.retain;
+    const deleted = operation.delete;
+    const inserted = operation.insert;
+    const actionCount = Number(validPositiveInteger(retain)) + Number(validPositiveInteger(deleted)) + Number(typeof inserted === "string" && inserted.length > 0);
+    if (actionCount !== 1 || (retain !== undefined && !validPositiveInteger(retain)) || (deleted !== undefined && !validPositiveInteger(deleted))) {
+      throw new CRDTRuntimeError("invalid_argument");
+    }
+    const changes = operation.changes ?? [];
+    if (!Array.isArray(changes) || changes.length > limits.maxAttributesPerOperation || (deleted !== undefined && changes.length > 0)) {
+      throw new CRDTRuntimeError("invalid_argument");
+    }
+    if (typeof inserted === "string") {
+      insertedBytes += utf8ByteLength(inserted);
+      insertedRunes += Array.from(inserted).length;
+      if (insertedBytes > limits.maxLocalEditBytes || insertedRunes > limits.maxLocalEditRunes) {
+        throw new CRDTRuntimeError("resource_limit");
+      }
+    }
+    for (const change of changes) {
+      if (!isRecord(change) || typeof change.key !== "string" || change.key === "" || utf8ByteLength(change.key) > limits.maxStringBytes) {
+        throw new CRDTRuntimeError("invalid_argument");
+      }
+      const remove = change.remove === true;
+      if (change.remove !== undefined && typeof change.remove !== "boolean") {
+        throw new CRDTRuntimeError("invalid_argument");
+      }
+      if (remove) {
+        if (change.value !== undefined || typeof inserted === "string") {
+          throw new CRDTRuntimeError("invalid_argument");
+        }
+      } else if (typeof change.value !== "string" || utf8ByteLength(change.value) > limits.maxStringBytes) {
+        throw new CRDTRuntimeError("invalid_argument");
+      }
+    }
+  }
+}
+
+function validPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
 function tagFromRaw(raw: unknown, limits: SnapshotLimits): RGATag {
   if (
     !isRecord(raw) ||
@@ -468,6 +761,42 @@ function tagToRaw(tag: RGATag, limits: SnapshotLimits): RawTag {
     replicaID: tag.replicaID,
     wallTime: tag.wallTime.toString(),
     logical: tag.logical.toString(),
+  };
+}
+
+function anchorFromRaw(raw: unknown, limits: SnapshotLimits): RGAAnchor {
+  if (
+    !isRecord(raw) ||
+    (raw.association !== "before" && raw.association !== "after") ||
+    !(raw.position === null || isRecord(raw.position))
+  ) {
+    throw new CRDTRuntimeError("invalid_runtime_response");
+  }
+  return {
+    association: raw.association,
+    ...(raw.position === null ? {} : { position: tagFromRaw(raw.position, limits) }),
+  };
+}
+
+function anchorToRaw(anchor: RGAAnchor, limits: SnapshotLimits): RawAnchor {
+  if (
+    !isRecord(anchor) ||
+    (anchor.association !== "before" && anchor.association !== "after") ||
+    !(anchor.position === undefined || isRecord(anchor.position))
+  ) {
+    throw new CRDTRuntimeError("invalid_anchor");
+  }
+  let position: RawTag | null = null;
+  if (anchor.position !== undefined) {
+    try {
+      position = tagToRaw(anchor.position, limits);
+    } catch {
+      throw new CRDTRuntimeError("invalid_anchor");
+    }
+  }
+  return {
+    association: anchor.association,
+    position,
   };
 }
 

@@ -1,0 +1,5 @@
+module CRDTRGAFFI [system] {
+  header "include/crdt_rga.h"
+  link "darkinno_crdt_rga"
+  export *
+}

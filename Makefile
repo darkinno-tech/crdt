@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-bindings-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression docker-test staticcheck lint verify wasm wasm-v1 wasm-v1-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -7,9 +7,29 @@ GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/
 # the fuzz context expires; 10s intermittently ended as context deadline.
 FUZZ_TIME ?= 20s
 FUZZ_PARALLEL ?= 1
+# XML starts from a much larger parser corpus and can need extra time for Go's
+# fuzz coordinator to quiesce after the requested window. Keep this targeted
+# grace period separate so ordinary decoder fuzzing remains fast.
+FUZZ_XML_TIME ?= 45s
 WASM_DIR ?= .tmp/crdt-rga-wasm
 WASM_RGA_PROTOCOL ?= run-v2
 NPM ?= npm
+RUST_MANIFEST ?= clients/rust/Cargo.toml
+RUST_LIBRARY_DIR ?= $(CURDIR)/clients/rust/target/debug
+RUST_LIBRARY_EXTENSION ?= $(shell uname -s | sed -e 's/^Darwin$$/dylib/' -e 's/^Linux$$/so/')
+RUST_LIBRARY_NAME ?= libdarkinno_crdt_rga.$(RUST_LIBRARY_EXTENSION)
+RUST_RELEASE_LIBRARY_DIR ?= $(CURDIR)/clients/rust/target/release
+CPP_COMPILER ?= c++
+CPP_FLAGS ?= -std=c++20 -Wall -Wextra -Werror -pedantic
+CPP_BUILD_DIR ?= clients/cpp/.build
+CPP_TEST_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-conformance
+CPP_BENCHMARK_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-benchmark
+
+ifeq ($(shell uname -s),Darwin)
+CPP_LIBRARY_PATH_ENV := DYLD_LIBRARY_PATH
+else
+CPP_LIBRARY_PATH_ENV := LD_LIBRARY_PATH
+endif
 
 fmt-check:
 	test -z "$$(gofmt -l .)"
@@ -40,7 +60,7 @@ vet:
 	go vet ./...
 
 fuzz:
-	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
+	FUZZ_TIME="$(FUZZ_TIME)" FUZZ_XML_TIME="$(FUZZ_XML_TIME)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
 
 # List the release fuzz coverage derived from the current package graph. It is
 # intentionally separate from fuzz-smoke, whose small curated list documents
@@ -55,6 +75,7 @@ fuzz-smoke:
 	go test -run=^$$ -fuzz=FuzzUnmarshalDelta -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./awareness
+	go test -run=^$$ -fuzz=FuzzDocumentTreeWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./documenttree
 	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./durable
 	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_TIME) -parallel=$(FUZZ_PARALLEL) ./replica
 
@@ -100,6 +121,9 @@ typescript-benchmark:
 typescript-native-benchmark:
 	$(NPM) --prefix clients/typescript run bench:native
 
+typescript-collections-benchmark:
+	$(NPM) --prefix clients/typescript run bench:collections
+
 typescript-browser-benchmark:
 	$(NPM) --prefix clients/typescript run bench:browser
 
@@ -110,9 +134,47 @@ wasm-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm
 
+wasm-browser-benchmark: wasm
+	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
+	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm-browser
+
 wasm-bindings-benchmark: wasm
 	$(NPM) --prefix clients/typescript ci --ignore-scripts --prefer-offline
 	CRDT_WASM_DIR="$(CURDIR)/$(WASM_DIR)" $(NPM) --prefix clients/typescript run bench:wasm-bindings
+
+# Native language clients share the Rust run-v2 core and its C ABI. They are
+# intentionally optional: the Go-only verify/docker images do not install the
+# Rust, Python, or Swift toolchains. Release candidates run these explicitly.
+rust-test:
+	cargo fmt --manifest-path "$(RUST_MANIFEST)" -- --check
+	cargo test --manifest-path "$(RUST_MANIFEST)"
+	cargo clippy --manifest-path "$(RUST_MANIFEST)" --all-targets -- -D warnings
+
+rust-benchmark:
+	cargo bench --manifest-path "$(RUST_MANIFEST)" --bench rga
+
+python-test:
+	cargo build --manifest-path "$(RUST_MANIFEST)"
+	CRDT_RGA_LIBRARY="$(RUST_LIBRARY_DIR)/$(RUST_LIBRARY_NAME)" python3 -m unittest clients/python/tests/test_rga.py -v
+
+swift-test:
+	@test "$$(uname -s)" = Darwin || (echo "swift-test requires a Darwin Rust dynamic library" >&2; exit 2)
+	cargo build --manifest-path "$(RUST_MANIFEST)"
+	CRDT_RGA_LIBRARY_DIR="$(RUST_LIBRARY_DIR)" DYLD_LIBRARY_PATH="$(RUST_LIBRARY_DIR)" swift run --package-path clients/swift crdt-rga-swift-conformance
+
+# The C++20 facade is an owned-handle binding over the same Rust run-v2 core.
+# It intentionally has no package manager or generated source dependency.
+cpp-test:
+	cargo build --manifest-path "$(RUST_MANIFEST)"
+	mkdir -p "$(CPP_BUILD_DIR)"
+	$(CPP_COMPILER) $(CPP_FLAGS) -Iclients/cpp/include -Iclients/rust/include clients/cpp/tests/conformance.cpp -L"$(RUST_LIBRARY_DIR)" -ldarkinno_crdt_rga -o "$(CPP_TEST_BINARY)"
+	$(CPP_LIBRARY_PATH_ENV)="$(RUST_LIBRARY_DIR)" "$(CPP_TEST_BINARY)"
+
+cpp-benchmark:
+	cargo build --release --manifest-path "$(RUST_MANIFEST)"
+	mkdir -p "$(CPP_BUILD_DIR)"
+	$(CPP_COMPILER) $(CPP_FLAGS) -O3 -Iclients/cpp/include -Iclients/rust/include clients/cpp/bench/rga.cpp -L"$(RUST_RELEASE_LIBRARY_DIR)" -ldarkinno_crdt_rga -o "$(CPP_BENCHMARK_BINARY)"
+	$(CPP_LIBRARY_PATH_ENV)="$(RUST_RELEASE_LIBRARY_DIR)" "$(CPP_BENCHMARK_BINARY)"
 
 docker-test:
 	docker build --build-arg GO_IMAGE=$${DOCKER_GO_IMAGE:-golang:1.26-bookworm} --file Dockerfile.ci --tag crdt-ci:local .

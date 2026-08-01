@@ -14,12 +14,19 @@ separate local-merge paths:
    The default artifact uses compact run-v2 frames, matching new Go RGA
    groups. Local edits produce canonical delta frames; incoming frames go
    through the same bounded Go decoder and merge semantics as server-side Go.
+4. `../rust` is a complete native Rust run-v2 client. Its owned-buffer C ABI
+   is the implementation used by the checked-in Python and Swift bindings.
+   It is the native alternative for hosts that cannot use Go/Wasm.
 
 `NativeDocument` is not a substitute implementation of Go RGA run-v2. Its
 canonical UTF-8 JSON updates are called **`native-ts-v1`** in this guide, have
 no `FrameType`, and must never be passed to `decodeFrame`, a Go frame decoder,
 or an existing Go replication group. For a group that must interoperate with
 Go, native mobile, or prior RGA data, retain the negotiated Wasm path below.
+
+For native desktop/server/mobile hosts that need the same TypeID `19/20`
+semantics without embedding Go, use the [Rust client](../rust/README.md) and
+its [multilanguage design](../../docs/design/native-multilanguage-rga.md).
 
 ## Native TypeScript shared types
 
@@ -90,6 +97,67 @@ parent wait under an explicit limit; snapshots reject while unresolved. This
 is a new semantics contract, not Yjs compatibility, a Go frame TypeID, or a
 transparent upgrade for a `NativeDocument` peer. See the
 [nested-type design](../../docs/design/native-typescript-nested-types.md).
+
+### Native collection bindings
+
+`@darkinno/crdt-client/collections` adds bounded Counter, Set, LWW register,
+and Tree views over a private `native-ts-v1` root namespace. Their negotiated
+semantic identifier is **`native-ts-collections-v1`**. The transport update is
+still canonical `native-ts-v1` JSON, but a peer must declare the same logical
+root names and types before applying it through `NativeCollectionsDocument`.
+Do not pass these updates to a raw `NativeDocument`, a Go frame decoder, or a
+Go Counter/Set/LWW/Tree group: that would bypass the collection semantic
+validator and does not establish wire compatibility.
+
+```ts
+import {
+  encodeNativeUpdate,
+  NativeCollectionsDocument,
+} from "@darkinno/crdt-client/collections";
+
+const board = new NativeCollectionsDocument("tablet-7");
+const inspections = board.getCounter("inspections"); // PN-Counter
+const openTasks = board.getORSet<{ id: string }>("open-tasks");
+const title = board.getLWWRegister<string>("title");
+const outline = board.getORTree<{ kind: string }>("outline");
+
+board.onUpdate(({ update, local }) => {
+  if (local) socket.send(encodeNativeUpdate(update));
+});
+
+board.transact(() => {
+  inspections.increment(1n);
+  openTasks.add({ id: "task-42" });
+  title.set("Morning inspection");
+  const root = outline.add(null, { kind: "report" });
+  outline.add(root, { kind: "finding" });
+});
+
+socket.onmessage = ({ data }) => {
+  board.applyEncodedUpdate(new Uint8Array(data), "authenticated-peer");
+};
+```
+
+- `NativeCounter` is a PN-Counter. Each actor only advances its own retained
+  positive/negative component; reads return `bigint`, and a remote component
+  that decreases under a newer tag is rejected before native-map mutation.
+- `NativeORSet` has immutable add tags and retained observed-remove
+  tombstones. A remove delivered before its add still wins when that add
+  arrives. Equal values may have several tags but appear once in `values()`.
+- `NativeLWWRegister` is a one-value retained-tombstone register; the existing
+  native ID order (counter, then UTF-8 actor bytes) resolves concurrency.
+- `NativeORTree` retains immutable parent links plus tombstones. Missing or
+  deleted parents hide descendants; moves are remove plus a new add, never a
+  parent rewrite. Cycles, excessive depth, pending parents, nodes, and
+  tombstones are rejected under explicit limits.
+
+Snapshots include root declarations, current bounded native-map state, and the
+local counter. Persist that unit atomically with the authenticated outbox and
+delivery frontier before reusing a replica ID. CRC/checksums in a surrounding
+transport still do not authenticate a peer or authorize a mutation.
+
+The [collection and rich-text architecture assessment](../../docs/design/typescript-client-types-and-rich-text.md)
+records the wire boundary and the next rich-editor implementation gate.
 
 ### Native protocol, limits, and persistence
 
@@ -232,6 +300,15 @@ Yjs bindings and do not replicate editor formatting, nodes, embeds, selections,
 or undo history. See the [editor binding guide](../../docs/integration/rga-editor-bindings.md)
 and [2026-07-31 assessment](../../docs/operations/rga-editor-bindings-2026-07-31.md).
 
+For Quill Deltas that must retain approved formatting, use `initRichTextWasm`
+and `bindQuillRichText` instead. It is a separate manifest-bound rich-text v1
+runtime (state/delta TypeIDs `23/24`), not an extension of the plain RGA
+adapter. The application must supply a schema-specific attribute codec; embeds
+and unknown attributes are rejected. Quill's required terminal newline belongs
+to the document projection, and a joining client must bind after state recovery
+with `initialContent: "document"`. See the [rich-text editor binding
+guide](../../docs/integration/richtext-editor-bindings.md).
+
 ## Build and verify
 
 From the repository root:
@@ -306,6 +383,46 @@ server-side policy enforcement.
 `document.snapshot()` returns `{ state, clock, frontier }`. Persist and restore
 all three fields atomically via `runtime.restore(snapshot)`. Saving only the
 state frame risks reusing an HLC mutation tag after a process restart.
+
+### Offline-first Wasm RGA facade
+
+`openRGAWasmBrowserDocument` provides the same atomic recovery boundary for a
+manifest-selected Go/Wasm RGA actor without making every application rebuild
+an IndexedDB log and outbox:
+
+```ts
+import {
+  createBrowserReplicaID,
+  initRGAWasm,
+  openRGAWasmBrowserDocument,
+} from "@darkinno/crdt-client";
+
+const runtime = await initRGAWasm({ wasmURL: "/assets/crdt-rga.wasm" });
+const replicaID = createBrowserReplicaID("tab"); // one concurrently active actor
+const document = await openRGAWasmBrowserDocument({
+  documentID: authenticatedGroupID,
+  replicaID,
+  runtime,
+  transport: authenticatedRGAReceiptTransport,
+});
+document.insert(0, "offline draft");
+await document.flush();
+```
+
+The facade uses separate `rga-documents` / `rga-updates` stores; it never mixes
+Go RGA frames with `native-ts-v1` records. Its key contains both document and
+replica IDs, so a live second tab must create a fresh actor rather than reuse
+the first tab's HLC. The transport resolves only at the application-defined
+durable receipt; a raw WebSocket enqueue is not sufficient.
+
+`anchorAt(runeOffset)` and `resolveAnchor(anchor)` expose local cursor
+boundaries as RGA Position/Tags instead of emulating a Yjs relative position.
+The plain-text binding can capture/restore supported editor selections through
+remote merges. Anchors are ephemeral application/presence metadata: never put
+them in RGA frames, snapshots, or the durable outbox. See the
+[offline RGA architecture](../../docs/design/browser-wasm-rga-offline-client.md),
+[editor binding guide](../../docs/integration/rga-editor-bindings.md), and
+[controlled performance evidence](../../docs/operations/browser-wasm-rga-offline-2026-07-31.md).
 
 The default client budget is intentionally conservative: 1 MiB total frame,
 100,000 nodes/tags, 10,000 unresolved nodes, 512 KiB pending metadata, and

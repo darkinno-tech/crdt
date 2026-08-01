@@ -338,6 +338,28 @@ func (r *Runtime) Text(handle uint64) (string, error) {
 	return document.String(), nil
 }
 
+// AnchorAt returns a stable Position/Tag-backed boundary for a visible rune
+// offset. It is local/editor metadata, not a framed RGA operation. Hosts may
+// send it only through an authenticated, bounded presence contract.
+func (r *Runtime) AnchorAt(handle uint64, offset int) (text.Anchor, error) {
+	document, err := r.document(handle)
+	if err != nil {
+		return text.Anchor{}, err
+	}
+	return document.AnchorAt(offset)
+}
+
+// ResolveAnchor maps a retained Position/Tag-backed boundary back to the
+// current visible rune offset. A compacted marker fails closed with
+// text.ErrAnchorGone; callers must clear or refresh the editor selection.
+func (r *Runtime) ResolveAnchor(handle uint64, anchor text.Anchor) (int, error) {
+	document, err := r.document(handle)
+	if err != nil {
+		return 0, err
+	}
+	return document.ResolveAnchor(anchor)
+}
+
 // PendingCount reports accepted out-of-order nodes waiting for a parent.
 func (r *Runtime) PendingCount(handle uint64) (int, error) {
 	document, err := r.document(handle)

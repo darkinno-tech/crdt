@@ -2,18 +2,21 @@
 
 ## 结论
 
-当前库的 Go framed CRDT 仍是**一组独立、单一语义的复制组**；不应将它们以
-`interface{}`、递归 JSON 或“一个 Manifest 内多个 TypeID”的方式临时拼接为嵌套
-文档。这样的改动会绕过 Manifest 的精确协议绑定、快照恢复与资源预算，不能证明
-收敛。
+当前库的 Go framed CRDT 仍是**一组独立、单一语义的复制组**；不得将既有
+`lww.Map`、`list.RGA` 等以 `interface{}`、递归 JSON 或“一个 Manifest 内多个
+TypeID”的方式临时拼接为嵌套文档。这样的改动会绕过 Manifest 的精确协议绑定、
+快照恢复与资源预算，不能证明收敛。
 
 `clients/typescript` 已提供独立协商的 `native-ts-nested-v1`。它组合 LWW Map 和
 RGA Array 两种原语，子容器由其整合操作的不可变 ID 唯一命名；它**不是** Go frame
 协议、Yjs 兼容层或“所有 CRDT 类型均可相互嵌套”的承诺。它已经覆盖有限乱序暂存、
 重复投递、快照恢复、别名/循环拒绝和三副本 shuffled simulation。
 
-因此本次选择是：保留现有 nested TypeScript 合同并加强全量 fuzz 的动态发现；Go
-嵌套能力在具备下述协议、测试与运维证据前不发布。
+此前的准入门槛现已由独立的 Go `documenttree` 协议满足：它使用新 TypeID
+`27/28`、语义版本 `1` 和独立 Manifest，包含有界对象表、Map、RGA Array 和
+子文档引用。规范见 [document-tree-v1](../protocol/document-tree-v1.md)，架构与
+子文档加载/授权边界见 [document-tree v1](document-tree-v1.md)。它仍不改变
+`native-ts-nested-v1` 的隔离合同，也绝不把其更新当作 Go frame。
 
 ## 事实与外部对照
 

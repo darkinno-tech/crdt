@@ -238,6 +238,12 @@ func TestFrameV2RawAndDeflateDecoderBoundaries(t *testing.T) {
 	if _, err := inflatePayload(compressed, 3); !errors.Is(err, ErrFrameLimit) {
 		t.Fatalf("short inflate limit error = %v", err)
 	}
+	if _, err := inflatePayload(compressed, -1); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("negative inflate limit error = %v", err)
+	}
+	if _, ok := uint64AsInt(uint64(maxIntValue) + 1); ok {
+		t.Fatal("uint64AsInt accepted an overflowing length")
+	}
 	if _, err := inflatePayload([]byte("not-deflate"), 1); !errors.Is(err, ErrInvalidFrame) {
 		t.Fatalf("invalid deflate error = %v", err)
 	}

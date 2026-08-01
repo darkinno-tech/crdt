@@ -37,21 +37,38 @@ func TestCompareHelpersAndInvalidArguments(t *testing.T) {
 			t.Fatalf("parseSizes(%q) succeeded", value)
 		}
 	}
-	if duration, updateBytes, stateBytes, err := runBatch("x", 1); err != nil || duration < 0 || updateBytes == 0 || stateBytes == 0 {
+	if duration, updateBytes, stateBytes, err := runBatch(scenarioInitial, "x", 1); err != nil || duration < 0 || updateBytes == 0 || stateBytes == 0 {
 		t.Fatalf("runBatch = %v, %d, %d, %v", duration, updateBytes, stateBytes, err)
 	}
-	if item, err := measure(1, 1, 1, 1, "revision"); err != nil || item.MedianMS < 0 || item.Revision != "revision" {
+	if item, err := measure(scenarioInitial, 1, 1, 1, 1, "revision"); err != nil || item.MedianMS < 0 || item.Revision != "revision" {
 		t.Fatalf("measure = %#v, %v", item, err)
 	}
-	for _, args := range [][]string{{"-sizes", "0"}, {"-samples", "0"}, {"-warmups", "-1"}, {"-iterations", "0"}, {"-unknown"}} {
+	if _, err := parseScenario("unknown"); err == nil {
+		t.Fatal("parseScenario accepted an unknown scenario")
+	}
+	for _, args := range [][]string{{"-scenario", "unknown"}, {"-sizes", "0"}, {"-samples", "0"}, {"-warmups", "-1"}, {"-iterations", "0"}, {"-unknown"}} {
 		if err := run(args, &bytes.Buffer{}); err == nil {
 			t.Fatalf("run(%q) succeeded", args)
 		}
 	}
 }
 
+func TestCompareOfflineConcurrentScenario(t *testing.T) {
+	var output bytes.Buffer
+	if err := run([]string{"-scenario", "offline-concurrent", "-sizes", "1", "-samples", "1", "-warmups", "0", "-iterations", "1"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var reports []report
+	if err := json.Unmarshal(output.Bytes(), &reports); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 || reports[0].Scenario != scenarioOfflineConcurrent.description() || reports[0].UpdateBytes <= 0 || reports[0].StateBytes <= 0 {
+		t.Fatalf("offline report = %#v", reports)
+	}
+}
+
 func TestCompareWritesRequestedFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "report.json")
+	path := filepath.Join(t.TempDir(), "reports", "report.json")
 	if err := run([]string{"-sizes", "1", "-samples", "1", "-warmups", "0", "-iterations", "1", "-output", path}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
