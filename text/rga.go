@@ -48,6 +48,10 @@ const (
 	// run-v2 text protocol (TypeIDs 19/20). It belongs in every run-v2 replica
 	// manifest. Scalar-v1 frames must never be substituted for run-v2 frames.
 	RunV2SemanticsVersion uint64 = crdt.SemanticsVersionRGARun
+	// PackedV3SemanticsVersion is the separately negotiated compact RGA
+	// protocol. It retains every scalar Position while packing dense local HLC
+	// runs; v1 and run-v2 frames remain distinct protocols.
+	PackedV3SemanticsVersion uint64 = crdt.SemanticsVersionRGAPacked
 )
 
 // Position is a stable, opaque identifier for one Unicode scalar value.
@@ -275,6 +279,14 @@ var _ crdt.DeltaCapable[*RGA, Delta] = (*RGA)(nil)
 // frame pair without treating legacy scalar-v1 helpers as the default.
 func StableFrameType() crdt.FrameType { return crdt.DefaultRGAFrameType() }
 
+// PackedFrameType returns the explicitly negotiated compact RGA v3 pair. It
+// is not a fallback for stable run-v2: a replication group must bind this
+// exact pair and semantics version in its authenticated manifest before using
+// the packed encoder or decoder.
+func PackedFrameType() crdt.FrameType {
+	return crdt.FrameType{StateID: crdt.TypeIDRGAPackedState, DeltaID: crdt.TypeIDRGAPackedDelta, SemanticsVersion: PackedV3SemanticsVersion, UsesHLC: true}
+}
+
 // LegacyFrameType returns the stable scalar RGA v1 state/delta pair. It is a
 // migration-compatible contract, not the default for new text groups.
 func LegacyFrameType() crdt.FrameType {
@@ -419,6 +431,13 @@ func (r *RGA) InsertRunBinaryWithLimits(offset int, value string, limits frame.D
 	return encoded, err
 }
 
+// InsertPackedBinaryWithLimits inserts text and returns a preflighted compact
+// RGA v3 delta. Callers must negotiate PackedFrameType before publishing it.
+func (r *RGA) InsertPackedBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.insert(offset, value, &limits, Delta.MarshalPackedBinaryWithLimits)
+	return encoded, err
+}
+
 // InsertRunFrameV2WithLimits inserts text and returns the same preflighted
 // run-v2 delta in a separately negotiated outer frame v2. The RGA payload is
 // unchanged; the outer representation may use DEFLATE only when it reduces
@@ -435,6 +454,13 @@ func (r *RGA) InsertRunFrameV2WithLimits(offset int, value string, limits frame.
 // before applying the returned delta with ApplyDelta.
 func (r *RGA) PrepareInsertRunBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareInsert(offset, value, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
+// PrepareInsertPackedBinaryWithLimits returns a preflighted compact RGA v3
+// insertion without mutating r. Reserved HLC tags remain safe to skip if the
+// caller abandons the surrounding transaction.
+func (r *RGA) PrepareInsertPackedBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareInsert(offset, value, &limits, Delta.MarshalPackedBinaryWithLimits)
 }
 
 // PrepareInsertRunFrameV2WithLimits returns a preflighted run-v2 insertion
@@ -538,6 +564,13 @@ func (r *RGA) DeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderL
 	return encoded, err
 }
 
+// DeletePackedBinaryWithLimits deletes visible text and returns the same
+// preflighted compact RGA v3 tombstone delta used for the output budget.
+func (r *RGA) DeletePackedBinaryWithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.delete(offset, count, &limits, Delta.MarshalPackedBinaryWithLimits)
+	return encoded, err
+}
+
 // DeleteRunFrameV2WithLimits deletes visible text and returns the same
 // preflighted run-v2 tombstone delta in a separately negotiated outer frame
 // v2. Callers must bind frame.FormatVersionV2 in their manifest.
@@ -561,6 +594,13 @@ func (r *RGA) ReplaceBinaryWithLimits(offset, count int, value string, limits fr
 // when a local frame or retention bound rejects the replacement.
 func (r *RGA) ReplaceRunBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
 	encoded, err := r.replace(offset, count, value, limits, Delta.MarshalRunBinaryWithLimits)
+	return encoded, err
+}
+
+// ReplacePackedBinaryWithLimits atomically replaces visible text with one
+// compact RGA v3 delta. Frame or retention rejection leaves r unchanged.
+func (r *RGA) ReplacePackedBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	encoded, err := r.replace(offset, count, value, limits, Delta.MarshalPackedBinaryWithLimits)
 	return encoded, err
 }
 
@@ -602,6 +642,12 @@ func (r *RGA) replace(offset, count int, value string, limits frame.DecoderLimit
 // must preflight an enclosing frame before committing local text changes.
 func (r *RGA) PrepareDeleteRunBinaryWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareDelete(offset, count, &limits, Delta.MarshalRunBinaryWithLimits)
+}
+
+// PrepareDeletePackedBinaryWithLimits returns a compact RGA v3 tombstone
+// delta without mutating r.
+func (r *RGA) PrepareDeletePackedBinaryWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareDelete(offset, count, &limits, Delta.MarshalPackedBinaryWithLimits)
 }
 
 // PrepareDeleteRunFrameV2WithLimits returns a preflighted run-v2 deletion
