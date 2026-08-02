@@ -331,6 +331,26 @@ func TestFrameV2RawAndDeflateDecoderBoundaries(t *testing.T) {
 	if _, ok := uint64AsInt(uint64(maxIntValue) + 1); ok {
 		t.Fatal("uint64AsInt accepted an overflowing length")
 	}
+	for _, test := range []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "codec length",
+			body: append(append(append([]byte("CRDT"), AppendUvarint(nil, FormatVersion)...), AppendUvarint(nil, 1)...), AppendUvarint(nil, uint64(maxIntValue)+1)...),
+		},
+		{
+			name: "payload length",
+			body: append(append(append(append([]byte("CRDT"), AppendUvarint(nil, FormatVersion)...), AppendUvarint(nil, 1)...), AppendUvarint(nil, 0)...), AppendUvarint(nil, uint64(maxIntValue)+1)...),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded := binary.BigEndian.AppendUint32(test.body, crc32.Checksum(test.body[4:], castagnoliTable))
+			if _, err := UnmarshalFrame(encoded, DefaultLimits()); !errors.Is(err, ErrFrameLimit) {
+				t.Fatalf("overflowing length error = %v, want ErrFrameLimit", err)
+			}
+		})
+	}
 	if _, err := inflatePayload([]byte("not-deflate"), 1); !errors.Is(err, ErrInvalidFrame) {
 		t.Fatalf("invalid deflate error = %v", err)
 	}

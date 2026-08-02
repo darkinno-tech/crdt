@@ -130,7 +130,7 @@ func BenchmarkRuntimeInitialSnapshotAndRestore65536Runes(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			want := populateInitialDocument(b, runtime, source, 64<<10)
+			want := populateInitialDocument(b, runtime, source)
 			first, err := runtime.Snapshot(source)
 			if err != nil {
 				b.Fatal(err)

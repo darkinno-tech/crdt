@@ -14,6 +14,8 @@ import (
 	"github.com/DarkInno/crdt/text"
 )
 
+const initialSnapshotRunes = 64 << 10
+
 func TestRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
 	testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t, DefaultRGAOptions(), RGAProtocol{
 		StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion, WireFormatVersion: frame.FormatVersion,
@@ -557,7 +559,6 @@ func TestRuntimeRejectsCrossWireFramesAndSnapshots(t *testing.T) {
 // state frame. This must preserve every rune while materially reducing the
 // transfer compared with the same run-v2 document.
 func TestRuntimePackedV3InitialSnapshotUsesTheCompactStateFrame(t *testing.T) {
-	const initialRunes = 64 << 10
 	run, err := NewRuntime(DefaultRunRGAOptions())
 	if err != nil {
 		t.Fatal(err)
@@ -573,11 +574,11 @@ func TestRuntimePackedV3InitialSnapshotUsesTheCompactStateFrame(t *testing.T) {
 	runSource := mustCreate(t, run, "run-initial-source")
 	packedSource := mustCreate(t, packed, "packed-initial-source")
 	packedV2Source := mustCreate(t, packedV2, "packed-v2-initial-source")
-	want := populateInitialDocument(t, run, runSource, initialRunes)
-	if got := populateInitialDocument(t, packed, packedSource, initialRunes); got != want {
+	want := populateInitialDocument(t, run, runSource)
+	if got := populateInitialDocument(t, packed, packedSource); got != want {
 		t.Fatalf("initial source text = %q, want %q", got[:min(len(got), 64)], want[:min(len(want), 64)])
 	}
-	if got := populateInitialDocument(t, packedV2, packedV2Source, initialRunes); got != want {
+	if got := populateInitialDocument(t, packedV2, packedV2Source); got != want {
 		t.Fatalf("outer-v2 initial source text = %q, want %q", got[:min(len(got), 64)], want[:min(len(want), 64)])
 	}
 	runSnapshot, err := run.Snapshot(runSource)
@@ -610,14 +611,14 @@ func TestRuntimePackedV3InitialSnapshotUsesTheCompactStateFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := mustText(t, packed, restored); got != want {
-		t.Fatalf("packed initial restore differs: got %d runes, want %d", len([]rune(got)), initialRunes)
+		t.Fatalf("packed initial restore differs: got %d runes, want %d", len([]rune(got)), initialSnapshotRunes)
 	}
 	restoredV2, err := packedV2.Restore(packedV2Snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := mustText(t, packedV2, restoredV2); got != want {
-		t.Fatalf("packed outer-v2 initial restore differs: got %d runes, want %d", len([]rune(got)), initialRunes)
+		t.Fatalf("packed outer-v2 initial restore differs: got %d runes, want %d", len([]rune(got)), initialSnapshotRunes)
 	}
 	if _, err := run.Restore(packedSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("run-v2 runtime restored packed initial snapshot: %v", err)
@@ -756,11 +757,11 @@ func mustText(t testing.TB, runtime *Runtime, handle uint64) string {
 	return value
 }
 
-func populateInitialDocument(t testing.TB, runtime *Runtime, handle uint64, runes int) string {
+func populateInitialDocument(t testing.TB, runtime *Runtime, handle uint64) string {
 	t.Helper()
 	const maxChunkRunes = 12 << 10
-	for offset := 0; offset < runes; {
-		count := min(maxChunkRunes, runes-offset)
+	for offset := 0; offset < initialSnapshotRunes; {
+		count := min(maxChunkRunes, initialSnapshotRunes-offset)
 		mustInsert(t, runtime, handle, offset, strings.Repeat("协", count))
 		offset += count
 	}
