@@ -165,7 +165,12 @@ func readAnchorPayload(data []byte, position int, limits AnchorEncodingLimits) (
 	if !ok || (present != 0 && present != 1) {
 		return Anchor{}, position, false
 	}
-	anchor := Anchor{Association: AnchorAssociation(association)}
+	// Keep the decoded wire value in its validated domain rather than narrowing
+	// an untrusted uint64. The preceding check admits exactly these two values.
+	anchor := Anchor{Association: AnchorBefore}
+	if association == uint64(AnchorAfter) {
+		anchor.Association = AnchorAfter
+	}
 	if present == 0 {
 		return anchor, position, true
 	}
