@@ -266,11 +266,11 @@ jobs:
           if [[ -f .benchmark-baseline/examples/go.mod ]]; then
             (
               cd .benchmark-baseline
-              GOMAXPROCS=1 go test "${benchmark_args[@]:0:8}" ./counter ./text
+              GOMAXPROCS=1 GOWORK=off go test "${benchmark_args[@]:0:8}" ./counter ./text
             ) > .benchmark-results/baseline.txt
             (
               cd .benchmark-baseline/examples
-              GOMAXPROCS=1 go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
+              GOMAXPROCS=1 GOWORK=off go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
             ) >> .benchmark-results/baseline.txt
           else
             (
