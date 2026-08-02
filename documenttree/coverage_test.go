@@ -12,7 +12,7 @@ import (
 	"github.com/DarkInno/crdt/snapshot"
 )
 
-func TestDocumentTreePublicAPIEdgesAndAllValueKinds(t *testing.T) {
+func TestDocumentTreePublicAPIEdgesAndFullyNestedValues(t *testing.T) {
 	if _, err := NewWithOptions("writer", Options{}); !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("invalid options = %v", err)
 	}
@@ -63,10 +63,7 @@ func TestDocumentTreePublicAPIEdgesAndAllValueKinds(t *testing.T) {
 	if _, err := root.Set("title", []byte("roadmap")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := root.SetSubdocument("notes", "subdoc-notes"); err != nil {
-		t.Fatal(err)
-	}
-	if keys := root.Keys(); len(keys) != 2 || keys[0] != "notes" || keys[1] != "title" {
+	if keys := root.Keys(); len(keys) != 1 || keys[0] != "title" {
 		t.Fatalf("map keys = %#v", keys)
 	}
 	if _, ok := root.Get("missing"); ok {
@@ -74,9 +71,6 @@ func TestDocumentTreePublicAPIEdgesAndAllValueKinds(t *testing.T) {
 	}
 	if _, err := root.Set("", []byte("bad")); !errors.Is(err, ErrInvalidKey) {
 		t.Fatalf("invalid key = %v", err)
-	}
-	if _, err := root.SetSubdocument("bad", "\n"); !errors.Is(err, ErrInvalidValue) {
-		t.Fatalf("invalid subdocument ID = %v", err)
 	}
 
 	array, _, err := root.CreateArray("items")
@@ -103,7 +97,11 @@ func TestDocumentTreePublicAPIEdgesAndAllValueKinds(t *testing.T) {
 	if _, err := childMap.Set("done", []byte("false")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := array.InsertSubdocument(3, "subdoc-comments"); err != nil {
+	fullyNested, _, err := array.InsertMap(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fullyNested.CreateArray("threads"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := array.Array(1); !ok {
@@ -143,31 +141,49 @@ func TestDocumentTreePublicAPIEdgesAndAllValueKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	registry, err := NewRegistry(DefaultRegistryOptions())
+}
+
+func TestDocumentTreeFullNestedHandlesRejectWrongShapeAndRange(t *testing.T) {
+	document := mustDocument(t, "writer")
+	if _, ok := document.RootMap(""); ok {
+		t.Fatal("invalid map root lookup succeeded")
+	}
+	if _, ok := document.RootArray("missing"); ok {
+		t.Fatal("missing array root lookup succeeded")
+	}
+
+	items, _, err := document.CreateRootArray("items")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Sync(document); err != nil {
+	if _, ok := document.RootMap("items"); ok {
+		t.Fatal("array root exposed as map")
+	}
+	if _, ok := document.RootArray(""); ok {
+		t.Fatal("invalid array root lookup succeeded")
+	}
+	if _, err := items.Insert(0, []byte("scalar")); err != nil {
 		t.Fatal(err)
 	}
-	if registry.Unload("missing") {
-		t.Fatal("unloaded missing reference")
+	if _, ok := items.Get(1); ok {
+		t.Fatal("out-of-range array read succeeded")
 	}
-	if _, ok := registry.Load("missing"); ok {
-		t.Fatal("loaded missing reference")
+	if _, _, err := items.InsertArray(-1); !errors.Is(err, ErrRange) {
+		t.Fatalf("negative nested insertion = %v", err)
 	}
-	if _, ok := registry.Load("subdoc-notes"); !ok || !registry.Unload("subdoc-notes") || registry.Loaded("subdoc-notes") {
-		t.Fatal("registry local lifecycle")
+
+	root, _, err := document.CreateRootMap("workspace")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := NewRegistry(RegistryOptions{}); !errors.Is(err, ErrResourceLimit) {
-		t.Fatalf("invalid registry options = %v", err)
+	if _, err := root.Set("scalar", []byte("value")); err != nil {
+		t.Fatal(err)
 	}
-	var nilRegistry *Registry
-	if err := nilRegistry.Sync(document); !errors.Is(err, ErrNilDocument) {
-		t.Fatalf("nil registry sync = %v", err)
+	if _, ok := root.Map("scalar"); ok {
+		t.Fatal("scalar exposed as map")
 	}
-	if nilRegistry.Unload("x") || nilRegistry.Loaded("x") || len(nilRegistry.Available()) != 0 {
-		t.Fatal("nil registry methods")
+	if _, ok := root.Array("scalar"); ok {
+		t.Fatal("scalar exposed as array")
 	}
 }
 
@@ -179,7 +195,7 @@ func TestDocumentTreeInternalValidationAndWireBranchCoverage(t *testing.T) {
 	if validStoredValue(Value{}, options) || validStoredValue(Value{Kind: ValueBytes, Object: ObjectRef{ID: ObjectID{ReplicaID: "x"}}}, options) {
 		t.Fatal("stored value validation")
 	}
-	if !validStoredValue(Bytes([]byte("x")), options) || !validStoredValue(Subdocument("child"), options) {
+	if !validStoredValue(Bytes([]byte("x")), options) || !validStoredValue(Value{Kind: ValueObject, Object: ObjectRef{ID: ObjectID{ReplicaID: "child"}, Kind: KindMap}}, options) {
 		t.Fatal("valid stored values")
 	}
 	if validOwner(objectOwner{}, options) || !validOwner(objectOwner{kind: ownerRoot, rootName: "root"}, options) {
@@ -193,8 +209,7 @@ func TestDocumentTreeInternalValidationAndWireBranchCoverage(t *testing.T) {
 	state.objects[first] = objectDecl{id: first, kind: KindMap, owner: objectOwner{kind: ownerRoot, rootName: "root"}}
 	state.objects[second] = objectDecl{id: second, kind: KindArray, owner: objectOwner{kind: ownerMap, parent: first, key: "array"}}
 	state.maps[first] = map[string]mapEntry{
-		"array":  {tag: second, present: true, value: Value{Kind: ValueObject, Object: ObjectRef{ID: second, Kind: KindArray}}},
-		"subdoc": {tag: ObjectID{ReplicaID: "three", WallTime: 3}, present: true, value: Subdocument("subdoc")},
+		"array": {tag: second, present: true, value: Value{Kind: ValueObject, Object: ObjectRef{ID: second, Kind: KindArray}}},
 	}
 	position := ObjectID{ReplicaID: "four", WallTime: 4}
 	state.arrays[second] = map[ObjectID]arrayNode{position: {id: position, value: Bytes([]byte("value"))}}
@@ -267,7 +282,7 @@ func TestDocumentTreeInternalValidationAndWireBranchCoverage(t *testing.T) {
 			t.Fatalf("object owner wire = %#v %d %t", got, next, ok)
 		}
 	}
-	for _, value := range []Value{Bytes([]byte("v")), {Kind: ValueObject, Object: ObjectRef{ID: second, Kind: KindMap}}, Subdocument("subdoc")} {
+	for _, value := range []Value{Bytes([]byte("v")), {Kind: ValueObject, Object: ObjectRef{ID: second, Kind: KindMap}}} {
 		wire := appendValue(nil, value)
 		got, next, ok := readValue(wire, 0, options, frame.DefaultLimits())
 		if !ok || next != len(wire) || !sameValue(got, value) {
@@ -359,9 +374,6 @@ func TestDocumentTreeRecoveryNilHandlesAndValidationFailures(t *testing.T) {
 	if _, err := nilMap.Set("x", nil); !errors.Is(err, ErrNilDocument) {
 		t.Fatal(err)
 	}
-	if _, err := nilMap.SetSubdocument("x", "sub"); !errors.Is(err, ErrNilDocument) {
-		t.Fatal(err)
-	}
 	if _, err := nilMap.Delete("x"); !errors.Is(err, ErrNilDocument) {
 		t.Fatal(err)
 	}
@@ -380,9 +392,6 @@ func TestDocumentTreeRecoveryNilHandlesAndValidationFailures(t *testing.T) {
 		t.Fatal("nil array diagnostics")
 	}
 	if _, err := nilArray.Insert(0, nil); !errors.Is(err, ErrNilDocument) {
-		t.Fatal(err)
-	}
-	if _, err := nilArray.InsertSubdocument(0, "sub"); !errors.Is(err, ErrNilDocument) {
 		t.Fatal(err)
 	}
 	if _, _, err := nilArray.InsertMap(0); !errors.Is(err, ErrNilDocument) {
@@ -498,7 +507,7 @@ func TestDocumentTreeMalformedCandidatesAndWireSizing(t *testing.T) {
 		t.Fatalf("map record size = %v", err)
 	}
 	size = 0
-	if err := addArrayRecordSize(&size, arrayRecord{target: shortFirst, node: arrayNode{id: shortSecond, parent: shortFirst, value: Subdocument("too-long")}}, limits); !errors.Is(err, frame.ErrFrameLimit) {
+	if err := addArrayRecordSize(&size, arrayRecord{target: shortFirst, node: arrayNode{id: shortSecond, parent: shortFirst, value: Bytes([]byte("too-long"))}}, limits); !errors.Is(err, frame.ErrFrameLimit) {
 		t.Fatalf("array record size = %v", err)
 	}
 	size = 0
@@ -522,7 +531,7 @@ func TestDocumentTreeMalformedCandidatesAndWireSizing(t *testing.T) {
 			t.Fatalf("normal object size = %d, %v", size, err)
 		}
 	}
-	for _, value := range []Value{Bytes([]byte("v")), {Kind: ValueObject, Object: ObjectRef{ID: shortFirst, Kind: KindMap}}, Subdocument("sub")} {
+	for _, value := range []Value{Bytes([]byte("v")), {Kind: ValueObject, Object: ObjectRef{ID: shortFirst, Kind: KindMap}}} {
 		size = 0
 		if err := addValueSize(&size, value, frame.DefaultLimits()); err != nil || size == 0 {
 			t.Fatalf("normal value size = %d, %v", size, err)
@@ -531,7 +540,6 @@ func TestDocumentTreeMalformedCandidatesAndWireSizing(t *testing.T) {
 	for _, record := range []mapRecord{
 		{target: shortFirst, key: "k", entry: mapEntry{tag: shortSecond}},
 		{target: shortFirst, key: "k", entry: mapEntry{tag: shortSecond, present: true, value: Value{Kind: ValueObject, Object: ObjectRef{ID: shortSecond, Kind: KindMap}}}},
-		{target: shortFirst, key: "k", entry: mapEntry{tag: shortSecond, present: true, value: Subdocument("sub")}},
 	} {
 		size = 0
 		if err := addMapRecordSize(&size, record, frame.DefaultLimits()); err != nil || size == 0 {
@@ -541,7 +549,6 @@ func TestDocumentTreeMalformedCandidatesAndWireSizing(t *testing.T) {
 	for _, record := range []arrayRecord{
 		{target: shortFirst, node: arrayNode{id: shortSecond, value: Bytes([]byte("v"))}},
 		{target: shortFirst, node: arrayNode{id: shortSecond, parent: shortFirst, value: Value{Kind: ValueObject, Object: ObjectRef{ID: shortSecond, Kind: KindMap}}}},
-		{target: shortFirst, node: arrayNode{id: shortSecond, parent: shortFirst, value: Subdocument("sub")}},
 	} {
 		size = 0
 		if err := addArrayRecordSize(&size, record, frame.DefaultLimits()); err != nil || size == 0 {
@@ -578,7 +585,7 @@ func TestDocumentTreeValidateStateRejectsEveryRecordClass(t *testing.T) {
 	state.maps[validTag] = map[string]mapEntry{"": {tag: validTag, present: true, value: Bytes(nil)}}
 	assertInvalid("map key", state, ErrInvalidDelta)
 	state = newDocumentState()
-	state.maps[validTag] = map[string]mapEntry{"key": {tag: validTag, present: true, value: Value{Kind: ValueBytes, Subdocument: SubdocumentRef{ID: "bad"}}}}
+	state.maps[validTag] = map[string]mapEntry{"key": {tag: validTag, present: true, value: Value{Kind: ValueBytes, Object: ObjectRef{ID: validTag, Kind: KindMap}}}}
 	assertInvalid("map value", state, ErrInvalidDelta)
 	state = newDocumentState()
 	state.arrays[ObjectID{}] = map[ObjectID]arrayNode{validTag: {id: validTag, value: Bytes(nil)}}
@@ -778,41 +785,6 @@ func TestDocumentTreeLimitsAndRecoveryEdgePaths(t *testing.T) {
 	}
 	if _, err := nilDocument.SnapshotCurrentState(); !errors.Is(err, ErrNilDocument) {
 		t.Fatalf("nil snapshot = %v", err)
-	}
-	if refs := nilDocument.Subdocuments(); refs != nil {
-		t.Fatalf("nil subdocuments = %#v", refs)
-	}
-
-	registryDocument := mustDocument(t, "registry-writer")
-	registryRoot, _, err := registryDocument.CreateRootMap("root")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registryRoot.SetSubdocument("a", "a"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registryRoot.SetSubdocument("b", "b"); err != nil {
-		t.Fatal(err)
-	}
-	limitedRegistry, err := NewRegistry(RegistryOptions{MaxSubdocuments: 1, MaxIDBytes: 16})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := limitedRegistry.Sync(registryDocument); !errors.Is(err, ErrResourceLimit) {
-		t.Fatalf("registry reference bound = %v", err)
-	}
-	registry, err := NewRegistry(DefaultRegistryOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.Sync(registryDocument); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := registry.Load("a"); !ok {
-		t.Fatal("registry load")
-	}
-	if err := registry.Sync(registryDocument); err != nil || !registry.Loaded("a") {
-		t.Fatalf("registry preserves visible loaded reference: %v", err)
 	}
 }
 

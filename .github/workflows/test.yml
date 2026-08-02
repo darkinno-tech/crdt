@@ -21,6 +21,7 @@ on:
           - all
           - test
           - wasm
+          - native
           - race
           - vet
           - fuzz
@@ -91,6 +92,51 @@ jobs:
           cache-dependency-path: clients/typescript/package-lock.json
       - name: Run TypeScript and Go Wasm compatibility tests
         run: make wasm-test
+
+  native-linux:
+    name: native-linux
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'native'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: native-linux-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run Rust, Python, and C++ native binding gates
+        run: |
+          command -v cargo
+          command -v python3
+          command -v c++
+          make rust-test python-test cpp-test
+
+  native-swift:
+    name: native-swift
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.action != 'closed' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'beta') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.suite == 'all' || inputs.suite == 'native'))
+    runs-on: macos-latest
+    timeout-minutes: 10
+    concurrency:
+      group: native-swift-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run Swift native binding gate
+        run: |
+          command -v cargo
+          command -v swift
+          make swift-test
 
   race:
     name: race
@@ -268,16 +314,18 @@ jobs:
           if [[ -f "${baseline_dir}/examples/go.mod" ]]; then
             (
               cd "${baseline_dir}"
-              GOMAXPROCS=1 GOWORK=off go test "${benchmark_args[@]:0:8}" ./counter ./text
+              # The checkout was moved outside the candidate before this
+              # command, so its own go.work cannot resolve candidate code.
+              GOMAXPROCS=1 go test "${benchmark_args[@]:0:8}" ./counter ./text
             ) > .benchmark-results/baseline.txt
             (
               cd "${baseline_dir}/examples"
-              GOMAXPROCS=1 GOWORK=off go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
+              GOMAXPROCS=1 go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
             ) >> .benchmark-results/baseline.txt
           else
             (
               cd "${baseline_dir}"
-              GOMAXPROCS=1 GOWORK=off go test "${benchmark_args[@]}"
+              GOMAXPROCS=1 go test "${benchmark_args[@]}"
             ) > .benchmark-results/baseline.txt
           fi
           GOMAXPROCS=1 go test "${benchmark_args[@]:0:8}" ./counter ./text > .benchmark-results/candidate.txt

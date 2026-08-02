@@ -1,5 +1,10 @@
 # Document-tree v1 wire protocol
 
+> Historical protocol only. New groups MUST use
+> [document-tree v2](document-tree-v2.md); TypeIDs `27/28` are never reused.
+> v2 intentionally removes v1's external lazy-reference value and does not
+> admit v1 frames through its default protocol policy.
+
 This document is normative for TypeIDs `27` (state) and `28` (delta), semantic
 version `1`. A peer MUST negotiate this exact pair in an authenticated
 `replica.Manifest` with an empty codec ID. It is not wire-compatible with Yjs,

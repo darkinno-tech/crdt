@@ -66,6 +66,30 @@ func BenchmarkCoordinatorAcknowledgeAndCompact(b *testing.B) {
 	}
 }
 
+// BenchmarkSimpleCollectorCollect measures one local-only cleanup cycle. It
+// intentionally includes target setup, just like
+// BenchmarkCoordinatorAcknowledgeAndCompact, so results describe a bounded
+// cleanup workload rather than a transport or durability claim.
+func BenchmarkSimpleCollectorCollect(b *testing.B) {
+	for _, tombstoneCount := range []int{32, 256} {
+		b.Run(fmt.Sprintf("tombstones_%d", tombstoneCount), func(b *testing.B) {
+			collector, err := NewSimpleCollector(SimplePolicy{MaxBatch: tombstoneCount})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for index := 0; index < b.N; index++ {
+				target, _ := benchmarkTombstoneTarget(b, tombstoneCount)
+				removed, err := collector.Collect(target)
+				if err != nil || removed != tombstoneCount {
+					b.Fatalf("Collect() = %d, %v; want %d, nil", removed, err, tombstoneCount)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkCoordinatorPruneAcknowledgements measures the normal checkpoint
 // path where one durable compaction drains every receipt tracked by a
 // coordinator. Setup is stopped so ns/op covers only the prune operation.

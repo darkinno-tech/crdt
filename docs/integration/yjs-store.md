@@ -167,6 +167,13 @@ handler. Construction rejects a second room with the same tenant, room, epoch,
 schema, and format because two live peer sets could otherwise persist to one
 document while failing to fan out each other's updates in real time.
 
+A trusted server-side agent must use [`YJSAgentPeer`](yjs-agent-peers.md), not
+this store directly. That API revalidates the application's read/write policy,
+keeps durable Apply before browser fan-out, and exposes only bounded
+snapshot/diff/update operations for a maintained Yjs tool runtime. The sidecar
+bearer token remains a Go-to-loopback trust boundary, never an agent-model or
+browser credential.
+
 `YJSStoreFormatV1` is the compatible choice for the standard y-websocket
 provider. V2 needs an explicitly negotiated provider/adapter that emits V2
 updates. A store rejects the other encoding instead of guessing based on a

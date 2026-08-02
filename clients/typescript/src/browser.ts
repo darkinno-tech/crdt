@@ -10,6 +10,7 @@ import type {
   NativePersistenceMetadata,
   NativeRoot,
   NativeSnapshot,
+  NativeStateVector,
   NativeTypeListener,
   NativeUpdate,
   NativeUpdateEvent,
@@ -257,6 +258,21 @@ export class NativeBrowserDocument {
   applyEncodedUpdate(encoded: Uint8Array, origin?: unknown): boolean {
     this.assertOpen();
     return this.document.applyEncodedUpdate(encoded, origin);
+  }
+
+  /** Returns the persisted native-ts-v1 sparse state vector for anti-entropy. */
+  getStateVector(): NativeStateVector {
+    this.assertOpen();
+    return this.document.getStateVector();
+  }
+
+  /**
+   * Builds bounded state updates that the authenticated peer vector lacks.
+   * This does not clear the durable outbox or constitute a remote receipt.
+   */
+  encodeStateAsUpdates(peerVector?: NativeStateVector): NativeUpdate[] {
+    this.assertOpen();
+    return this.document.encodeStateAsUpdates(peerVector);
   }
 
   onUpdate(listener: (event: NativeBrowserUpdateEvent) => void): () => void {
@@ -563,7 +579,7 @@ export class MemoryNativeBrowserPersistence implements NativeBrowserPersistence 
       throw new NativeBrowserError("persistence_failed");
     }
     this.#documents.set(key, {
-      metadata: { roots: snapshot.roots.map(copyRoot), counter: snapshot.counter },
+      metadata: snapshotMetadata(snapshot),
       baseUpdates: snapshot.updates.map(copyNativeUpdate),
       updates: [],
       nextSequence: 0,
@@ -702,7 +718,7 @@ export class IndexedDBNativePersistence implements NativeBrowserPersistence {
       transaction.objectStore(DOCUMENT_STORE).put({
         key,
         format: BROWSER_PERSISTENCE_FORMAT,
-        metadata: { roots: snapshot.roots.map(copyRoot), counter: snapshot.counter },
+        metadata: snapshotMetadata(snapshot),
         baseUpdates: snapshot.updates.map(copyNativeUpdate),
         nextSequence: 0,
         updateCount: 0,
@@ -1550,7 +1566,14 @@ function restoreDocument(
   }
   const document = NativeDocument.restore(
     replicaID,
-    { roots: stored.metadata.roots, updates: stored.baseUpdates, counter: stored.metadata.counter },
+    stored.metadata.stateVector === undefined
+      ? { roots: stored.metadata.roots, updates: stored.baseUpdates, counter: stored.metadata.counter }
+      : {
+        roots: stored.metadata.roots,
+        updates: stored.baseUpdates,
+        counter: stored.metadata.counter,
+        stateVector: stored.metadata.stateVector,
+      },
     options,
   );
   for (const update of stored.updates) {
@@ -1619,11 +1642,36 @@ function copyPersistedUpdate(update: BrowserPersistedUpdate): BrowserPersistedUp
 }
 
 function copyMetadata(metadata: NativePersistenceMetadata): NativePersistenceMetadata {
-  return { roots: metadata.roots.map(copyRoot), counter: metadata.counter };
+  const copied: NativePersistenceMetadata = {
+    roots: metadata.roots.map(copyRoot),
+    counter: metadata.counter,
+  };
+  if (metadata.stateVector !== undefined) {
+    return { ...copied, stateVector: copyStateVector(metadata.stateVector) };
+  }
+  return copied;
+}
+
+function snapshotMetadata(snapshot: NativeSnapshot): NativePersistenceMetadata {
+  return copyMetadata(
+    snapshot.stateVector === undefined
+      ? { roots: snapshot.roots, counter: snapshot.counter }
+      : { roots: snapshot.roots, counter: snapshot.counter, stateVector: snapshot.stateVector },
+  );
 }
 
 function copyRoot(root: NativeRoot): NativeRoot {
   return { name: root.name, type: root.type };
+}
+
+function copyStateVector(vector: NativeStateVector): NativeStateVector {
+  return {
+    version: vector.version,
+    entries: vector.entries.map((entry) => ({
+      actor: entry.actor,
+      ranges: entry.ranges.map((range) => ({ from: range.from, to: range.to })),
+    })),
+  };
 }
 
 function copyNativeUpdate(update: NativeUpdate): NativeUpdate {

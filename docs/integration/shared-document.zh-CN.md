@@ -3,7 +3,7 @@
 [English](shared-document.md)
 
 `shared.Document` 是面向结构化协作内容的 Go 高层入口。它将稳定的
-`document/tree-v1` 协议包装为命名 `Map`、`Array` 和直接读写方法：业务代码
+`document/tree-v2` 协议包装为命名 `Map`、`Array` 和直接读写方法：业务代码
 从“看板”“任务”“字段”开始，不需要手写 delta、TypeID 或 HLC。
 
 它借鉴 Yjs 的“文档 + 命名共享类型”交互方式，但**不兼容** Yjs API 或二进制
@@ -43,6 +43,15 @@ if err := task.SetJSON("task", map[string]any{"id": "release-notes", "done": fal
 `InsertArray` 创建单一所有者的嵌套对象，因此一个子对象不会被移动或挂到两个
 位置，离线并发时仍有确定结果。
 
+每个可达的 Map/Array 都使用同一复制合同，并会出现在完整 state/checkpoint frame 内。
+这个 facade 不提供子对象 `load`/`unload` 或外部文档标识：一个经过认证的
+Manifest/授权边界覆盖整棵树。若内容需要独立访问、留存或加载行为，必须在创建时拆成
+独立协商的文档组。
+
+`Map` 和 `Array` 会在具名根不存在时创建它，因此可能发出本地更新。只需检查已同步
+文档的代码应使用 `LookupMap` 或 `LookupArray`。这两个查找绝不会创建根、推进 HLC
+状态或调用 `OnUpdate`；根不存在、仍不完整或类型不匹配时，它们返回 `false`。
+
 你不需要实现 CRDT 算法，但需要选对业务含义：
 
 - 并发写同一个 Map key 使用 document tree 的 LWW 规则，最终只会确定性地保留一个
@@ -55,10 +64,11 @@ if err := task.SetJSON("task", map[string]any{"id": "release-notes", "done": fal
 | 创建文档 | `new Y.Doc()` | `shared.New("editor-a")` |
 | 获取/创建命名 Map | `doc.getMap("board")` | `doc.Map("board")` |
 | 获取/创建命名 Array | `doc.getArray("tasks")` | `doc.Array("tasks")` |
+| 只读取已有具名根且不创建 | `doc.share.get("board")` | `doc.LookupMap("board")` |
 | 订阅本地 update | `doc.on("update", ...)` | `doc.OnUpdate(...)` |
 | 应用 update | `Y.applyUpdate(doc, update)` | `doc.ApplyUpdate(update)` |
 
-Go 显式返回错误，所有错误都必须处理。每一次修改会产生一帧 update；当前 v1
+Go 显式返回错误，所有错误都必须处理。每一次修改会产生一帧 update；当前 v2
 没有把多次方法调用合成为一个 Yjs transaction 的语义。可以在已认证的传输层批量
 发送这些彼此独立的帧，但不能把它们误当作原子业务事务。
 
@@ -139,7 +149,7 @@ if err != nil {
 
 ## 人和 AI 都可检查的协议选择
 
-高层文档固定使用稳定的 `document/tree-v1` profile：
+高层文档固定使用稳定的 `document/tree-v2` profile：
 
 ```go
 profile := shared.Profile()
@@ -161,5 +171,5 @@ fmt.Println(profile.ConflictRule)
 ```
 
 深入理解单一所有权、pending 上限、恢复和 wire contract，请继续阅读
-[document-tree v1 架构](../design/document-tree-v1.md)与
-[document-tree v1 协议](../protocol/document-tree-v1.md)。
+[document-tree v2 架构](../design/document-tree-v2.md)与
+[document-tree v2 协议](../protocol/document-tree-v2.md)。

@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify formal-rga wasm wasm-v1 wasm-v1-test wasm-packed wasm-packed-test wasm-packed-v2 wasm-packed-v2-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark typescript-yjs-core-benchmark typescript-yjs-bindings-benchmark typescript-tiptap-richtext-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify formal-rga wasm wasm-v1 wasm-v1-test wasm-packed wasm-packed-test wasm-packed-v2 wasm-packed-v2-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark typescript-yjs-core-benchmark typescript-yjs-bindings-benchmark typescript-yjs-richtext-benchmark typescript-tiptap-richtext-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -20,7 +20,7 @@ RUST_LIBRARY_EXTENSION ?= $(shell uname -s | sed -e 's/^Darwin$$/dylib/' -e 's/^
 RUST_LIBRARY_NAME ?= libdarkinno_crdt_rga.$(RUST_LIBRARY_EXTENSION)
 RUST_RELEASE_LIBRARY_DIR ?= $(CURDIR)/clients/rust/target/release
 CPP_COMPILER ?= c++
-CPP_FLAGS ?= -std=c++20 -Wall -Wextra -Werror -pedantic
+CPP_FLAGS ?= -std=c++20 -Wall -Wextra -Werror -pedantic -pthread
 CPP_BUILD_DIR ?= clients/cpp/.build
 CPP_TEST_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-conformance
 CPP_BENCHMARK_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-benchmark
@@ -103,9 +103,11 @@ yjs-store-benchmark:
 	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 16
 	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 64
 
-# BENCHMARK_BASE must be a checkout of the commit to compare against. The
-# candidate and baseline run consecutively with one logical processor so their
-# medians are comparable; this detects regressions, not production capacity.
+# BENCHMARK_BASE must be an isolated checkout of the commit to compare against.
+# Each checkout resolves its own go.work, so split modules use the baseline
+# source rather than an unpublished module version. The candidate and baseline
+# run consecutively with one logical processor so their medians are comparable;
+# this detects regressions, not production capacity.
 benchmark-regression:
 	@test -n "$(BENCHMARK_BASE)" || (echo "set BENCHMARK_BASE to a baseline checkout" >&2; exit 2)
 	@mkdir -p .tmp/benchmark-results
@@ -173,6 +175,9 @@ typescript-yjs-core-benchmark:
 
 typescript-yjs-bindings-benchmark:
 	$(NPM) --prefix clients/typescript run bench:yjs-bindings
+
+typescript-yjs-richtext-benchmark:
+	$(NPM) --prefix clients/typescript run bench:yjs-richtext
 
 typescript-blocknote-benchmark:
 	$(NPM) --prefix clients/typescript run bench:blocknote

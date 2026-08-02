@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -233,10 +234,12 @@ func (s *ORSet[T]) Compact(stableFrontier map[string]crdt.Tag) (int, error) {
 	return removed, nil
 }
 
-// CompactTombstones removes exactly the supplied tombstones. It is safe for a
-// coordinator that has independently proved acknowledgement for each tag; a
-// tag that is not currently a tombstone is ignored. The input is completely
-// validated before s is modified.
+// CompactTombstones removes exactly the supplied tombstones. For replicated
+// state, use it only through a coordinator that has independently proved
+// acknowledgement for each tag. tombstonegc.SimpleCollector may call it only
+// for its documented local-only lifecycle. A tag that is not currently a
+// tombstone is ignored. The input is completely validated before s is
+// modified.
 func (s *ORSet[T]) CompactTombstones(acknowledged []crdt.Tag) (int, error) {
 	if s == nil {
 		return 0, ErrNilORSet
@@ -521,7 +524,7 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec boundElementC
 	for _, source := range plan.entries {
 		encoded, err := codec.marshal(source.element)
 		if err != nil {
-			return nil, fmt.Errorf("%w: marshal element: %v", ErrInvalidCodec, err)
+			return nil, fmt.Errorf("%w: marshal element: %w", ErrInvalidCodec, err)
 		}
 		if len(encoded) > limits.MaxStringBytes {
 			return nil, frame.ErrFrameLimit
@@ -547,8 +550,11 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec boundElementC
 	payloadSize := frame.UvarintSize(uint64(len(entries)))
 	tagCount := 0
 	for _, item := range entries {
-		tagCountForElement := item.tagEnd - item.tagStart
-		additional := frame.UvarintSize(uint64(len(item.encoded))) + len(item.encoded) + frame.UvarintSize(uint64(tagCountForElement))
+		tagCountForElement, ok := orSetCountAsUint64(item.tagEnd - item.tagStart)
+		if !ok {
+			return nil, ErrInvalidDelta
+		}
+		additional := frame.UvarintSize(uint64(len(item.encoded))) + len(item.encoded) + frame.UvarintSize(tagCountForElement)
 		if additional > limits.MaxPayload-payloadSize {
 			return nil, frame.ErrFrameLimit
 		}
@@ -593,7 +599,11 @@ func marshalORSetPlanWithLimits[T comparable](typeID uint64, codec boundElementC
 		payload = frame.AppendUvarint(payload[:0], uint64(len(entries)))
 		for _, item := range entries {
 			payload = appendBytes(payload, item.encoded)
-			payload = frame.AppendUvarint(payload, uint64(item.tagEnd-item.tagStart))
+			tagCountForElement, ok := orSetCountAsUint64(item.tagEnd - item.tagStart)
+			if !ok {
+				return ErrInvalidDelta
+			}
+			payload = frame.AppendUvarint(payload, tagCountForElement)
 			for _, tag := range plan.liveTags[item.tagStart:item.tagEnd] {
 				payload = frame.AppendTag(payload, tag)
 			}
@@ -654,16 +664,26 @@ func unmarshalORSetWithCodec[T comparable](data []byte, expectedTypeID uint64, c
 		return nil, nil, ErrCodecMismatch
 	}
 
+	maxElements, elementsOK := orSetLimit(limits.MaxElements)
+	maxTags, tagsOK := orSetLimit(limits.MaxTags)
+	if !elementsOK || !tagsOK {
+		return nil, nil, frame.ErrInvalidFrame
+	}
+
 	pos := 0
 	elementCount, next, ok := frame.ReadUvarint(decoded.Payload, pos)
-	if !ok || elementCount > uint64(limits.MaxElements) {
+	if !ok || elementCount > maxElements {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	pos = next
-	adds := make(map[T]map[crdt.Tag]struct{}, int(elementCount))
+	elementCapacity, ok := orSetMapCapacity(elementCount)
+	if !ok {
+		return nil, nil, frame.ErrInvalidFrame
+	}
+	adds := make(map[T]map[crdt.Tag]struct{}, elementCapacity)
 	liveTags := make(map[crdt.Tag]struct{})
 	var previousElement []byte
-	tagCount := 0
+	var tagCount uint64
 	for i := uint64(0); i < elementCount; i++ {
 		elementBytes, next, ok := frame.ReadBytes(decoded.Payload, pos, limits.MaxStringBytes)
 		if !ok || (i > 0 && bytes.Compare(previousElement, elementBytes) >= 0) {
@@ -672,7 +692,7 @@ func unmarshalORSetWithCodec[T comparable](data []byte, expectedTypeID uint64, c
 		pos = next
 		element, err := codec.unmarshal(elementBytes)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: unmarshal element: %v", ErrInvalidCodec, err)
+			return nil, nil, fmt.Errorf("%w: unmarshal element: %w", ErrInvalidCodec, err)
 		}
 		canonical, err := codec.marshal(element)
 		if err != nil || !bytes.Equal(canonical, elementBytes) {
@@ -684,11 +704,15 @@ func unmarshalORSetWithCodec[T comparable](data []byte, expectedTypeID uint64, c
 		previousElement = elementBytes
 
 		count, next, ok := frame.ReadUvarint(decoded.Payload, pos)
-		if !ok || count == 0 || count > uint64(limits.MaxTags-tagCount) {
+		if !ok || count == 0 || count > maxTags-tagCount {
 			return nil, nil, frame.ErrInvalidFrame
 		}
 		pos = next
-		tags := make(map[crdt.Tag]struct{}, int(count))
+		tagCapacity, ok := orSetMapCapacity(count)
+		if !ok {
+			return nil, nil, frame.ErrInvalidFrame
+		}
+		tags := make(map[crdt.Tag]struct{}, tagCapacity)
 		var previousTag crdt.Tag
 		for j := uint64(0); j < count; j++ {
 			tag, next, ok := frame.ReadTag(decoded.Payload, pos, limits.MaxStringBytes)
@@ -708,11 +732,15 @@ func unmarshalORSetWithCodec[T comparable](data []byte, expectedTypeID uint64, c
 	}
 
 	tombstoneCount, next, ok := frame.ReadUvarint(decoded.Payload, pos)
-	if !ok || tombstoneCount > uint64(limits.MaxTags-tagCount) {
+	if !ok || tombstoneCount > maxTags-tagCount {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	pos = next
-	tombstones := make(map[crdt.Tag]struct{}, int(tombstoneCount))
+	tombstoneCapacity, ok := orSetMapCapacity(tombstoneCount)
+	if !ok {
+		return nil, nil, frame.ErrInvalidFrame
+	}
+	tombstones := make(map[crdt.Tag]struct{}, tombstoneCapacity)
 	var previousTombstone crdt.Tag
 	for i := uint64(0); i < tombstoneCount; i++ {
 		tag, next, ok := frame.ReadTag(decoded.Payload, pos, limits.MaxStringBytes)
@@ -968,6 +996,30 @@ func appendBytes(dst, value []byte) []byte {
 // in encoding alongside the frame primitives.
 func appendTag(dst []byte, tag crdt.Tag) []byte { return frame.AppendTag(dst, tag) }
 
-func readTag(data []byte, pos, maxStringBytes int) (crdt.Tag, int, bool) {
-	return frame.ReadTag(data, pos, maxStringBytes)
+func readTag(data []byte, maxStringBytes int) (crdt.Tag, int, bool) {
+	return frame.ReadTag(data, 0, maxStringBytes)
+}
+
+const maxORSetInt = 1<<(strconv.IntSize-1) - 1
+
+func orSetLimit(value int) (uint64, bool) {
+	if value <= 0 {
+		return 0, false
+	}
+	// A positive int converts losslessly through its same-width unsigned form.
+	return uint64(uint(value)), true
+}
+
+func orSetCountAsUint64(value int) (uint64, bool) {
+	if value < 0 {
+		return 0, false
+	}
+	return uint64(uint(value)), true
+}
+
+func orSetMapCapacity(value uint64) (int, bool) {
+	if value > uint64(maxORSetInt) {
+		return 0, false
+	}
+	return int(value), true
 }

@@ -460,10 +460,12 @@ func (r *RGA[T]) TombstoneTags() []Position {
 	return positions
 }
 
-// CompactTombstones removes exactly requested tombstoned leaves. The caller
-// must first obtain exact authenticated acknowledgements for one epoch, save a
-// post-compaction checkpoint, and retire old deltas. Any retained child or
-// unresolved dependent blocks the entire request.
+// CompactTombstones removes exactly requested tombstoned leaves. For
+// replicated state, the caller must first obtain exact authenticated
+// acknowledgements for one epoch, save a post-compaction checkpoint, and
+// retire old deltas. tombstonegc.SimpleCollector may call it only for its
+// documented local-only lifecycle. Any retained child or unresolved dependent
+// blocks the entire request.
 func (r *RGA[T]) CompactTombstones(tags []Position) (int, error) {
 	if r == nil {
 		return 0, ErrNilList

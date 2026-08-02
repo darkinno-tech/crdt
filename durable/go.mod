@@ -3,8 +3,8 @@ module github.com/DarkInno/crdt/durable
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.32
-	github.com/DarkInno/crdt/telemetry v1.0.32
+	github.com/DarkInno/crdt v1.0.33
+	github.com/DarkInno/crdt/telemetry v1.0.33
 	github.com/coder/websocket v1.8.13
 	go.etcd.io/bbolt v1.3.10
 )

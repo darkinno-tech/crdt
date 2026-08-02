@@ -1,5 +1,5 @@
 // Package shared provides a small, Yjs-style document facade over the bounded
-// document-tree-v1 CRDT. It intentionally keeps authentication, authorization,
+// document-tree-v2 CRDT. It intentionally keeps authentication, authorization,
 // transport, durable outboxes, and recovery storage with the host application.
 package shared
 
@@ -59,7 +59,7 @@ func DefaultOptions() Options {
 type UpdateHandler func(update []byte)
 
 // Document owns named Map and Array roots plus local update subscriptions. It
-// is document-tree-v1, not a Yjs wire-compatible document. Its high-level
+// is document-tree-v2, not a Yjs wire-compatible document. Its high-level
 // methods intentionally hide delta construction; OnUpdate exposes the already
 // bounded canonical frame at the transport boundary.
 type Document struct {
@@ -140,7 +140,7 @@ func (d *Document) Options() Options {
 // It is guidance and protocol metadata only: the host still authenticates the
 // resulting manifest and authorizes every received update.
 func Profile() crdt.ReplicationProfile {
-	profile, _ := crdt.ReplicationProfileFor("document/tree-v1")
+	profile, _ := crdt.ReplicationProfileFor("document/tree-v2")
 	return profile
 }
 
@@ -206,6 +206,34 @@ func (d *Document) Array(name string) (*Array, error) {
 		return nil, err
 	}
 	return &Array{document: d, value: value}, nil
+}
+
+// LookupMap returns the current visible named Map without creating a root or
+// emitting a local update. It returns false for an absent, incomplete, or
+// Array root, and for invalid names.
+func (d *Document) LookupMap(name string) (*Map, bool) {
+	if d == nil || d.document == nil {
+		return nil, false
+	}
+	value, ok := d.document.RootMap(name)
+	if !ok {
+		return nil, false
+	}
+	return &Map{document: d, value: value}, true
+}
+
+// LookupArray returns the current visible named Array without creating a root
+// or emitting a local update. It returns false for an absent, incomplete, or
+// Map root, and for invalid names.
+func (d *Document) LookupArray(name string) (*Array, bool) {
+	if d == nil || d.document == nil {
+		return nil, false
+	}
+	value, ok := d.document.RootArray(name)
+	if !ok {
+		return nil, false
+	}
+	return &Array{document: d, value: value}, true
 }
 
 // ApplyUpdate validates and applies an untrusted canonical update frame. The

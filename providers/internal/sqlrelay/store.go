@@ -38,17 +38,23 @@ type Dialect struct {
 	MaxGroupIDBytes  int
 	MaxActorIDBytes  int
 	MaxEnvelopeBytes uint64
-	Schema           []string
-	AppendOptions    sql.TxOptions
-	ReplayOptions    sql.TxOptions
-	InsertGroup      string
-	LockGroup        string
-	ReadDot          string
-	InsertEvent      string
-	InsertDot        string
-	UpdateGroup      string
-	ReadHighWater    string
-	ReadEvents       string
+	// ValidateGroupID and ValidateActorID provide a provider-specific final
+	// identifier check after the common non-empty and byte-limit guards. They
+	// are useful for stores whose indexed text keys have a second constraint,
+	// such as a UTF-16 code-unit limit. Nil keeps the common checks only.
+	ValidateGroupID func(string) bool
+	ValidateActorID func(string) bool
+	Schema          []string
+	AppendOptions   sql.TxOptions
+	ReplayOptions   sql.TxOptions
+	InsertGroup     string
+	LockGroup       string
+	ReadDot         string
+	InsertEvent     string
+	InsertDot       string
+	UpdateGroup     string
+	ReadHighWater   string
+	ReadEvents      string
 }
 
 type pool interface {
@@ -350,11 +356,18 @@ func (store *Store) Replay(groupID string, after, maxEvents, maxBytes uint64, ma
 }
 
 func (store *Store) validGroupID(groupID string) bool {
-	return strings.TrimSpace(groupID) != "" && len(groupID) <= store.dialect.MaxGroupIDBytes
+	return validIdentifier(groupID, store.dialect.MaxGroupIDBytes, store.dialect.ValidateGroupID)
 }
 
 func (store *Store) validActor(actor string) bool {
-	return strings.TrimSpace(actor) != "" && len(actor) <= store.dialect.MaxActorIDBytes
+	return validIdentifier(actor, store.dialect.MaxActorIDBytes, store.dialect.ValidateActorID)
+}
+
+func validIdentifier(value string, maxBytes int, validate func(string) bool) bool {
+	if strings.TrimSpace(value) == "" || len(value) > maxBytes {
+		return false
+	}
+	return validate == nil || validate(value)
 }
 
 var _ durable.Log = (*Store)(nil)

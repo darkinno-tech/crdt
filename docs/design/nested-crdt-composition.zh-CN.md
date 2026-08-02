@@ -12,11 +12,12 @@ RGA Array 两种原语，子容器由其整合操作的不可变 ID 唯一命名
 协议、Yjs 兼容层或“所有 CRDT 类型均可相互嵌套”的承诺。它已经覆盖有限乱序暂存、
 重复投递、快照恢复、别名/循环拒绝和三副本 shuffled simulation。
 
-此前的准入门槛现已由独立的 Go `documenttree` 协议满足：它使用新 TypeID
-`27/28`、语义版本 `1` 和独立 Manifest，包含有界对象表、Map、RGA Array 和
-子文档引用。规范见 [document-tree-v1](../protocol/document-tree-v1.md)，架构与
-子文档加载/授权边界见 [document-tree v1](document-tree-v1.md)。它仍不改变
-`native-ts-nested-v1` 的隔离合同，也绝不把其更新当作 Go frame。
+当前准入门槛由独立的 Go `documenttree` v2 协议满足：它使用 TypeID `31/32`、
+语义版本 `2` 和独立 Manifest。整棵有界对象表、Map 与 RGA Array 都位于同一
+state/delta frame；不存在子文档惰性加载、GUID 或跨组内容指针。规范见
+[document-tree-v2](../protocol/document-tree-v2.md)，架构见
+[document-tree v2](document-tree-v2.md)。它仍不改变 `native-ts-nested-v1` 的隔离
+合同，也绝不把其更新当作 Go frame。
 
 ## 事实与外部对照
 
@@ -37,9 +38,9 @@ RGA Array 两种原语，子容器由其整合操作的不可变 ID 唯一命名
 | 递归 JSON 放入现有 LWW/RGA 值 | 子节点是原子替换，不能独立合并；容易误导调用方 | 编码简单但整块复制/冲突放大 | 保持为原子值，不称为嵌套 CRDT |
 | 一个 Manifest 混用任意 TypeID | 破坏当前协议、codec 与快照的一对一绑定 | 需要动态分派与更多恢复状态 | 拒绝 |
 | 以不可变整合 ID 命名的单所有者子容器 | 能验证父子类型、拒绝别名/循环，并允许乱序重放 | 路径查找和元数据线性受限于容器数 | `native-ts-nested-v1` 已采用 |
-| 新建 Go `document-tree-v1` 协议 | 可把对象表、类型表和根声明纳入同一有界、可版本化快照 | 必须先测量对象表、pending 队列和批量编解码 | 后续唯一可接受的 Go 路径 |
+| 新建 Go `document-tree-v2` 协议 | 可把完整对象表、类型表和根声明纳入同一有界、可版本化快照 | 必须从最大完整树测量对象表、pending 队列和批量编解码 | 后续唯一可接受的 Go 路径 |
 
-## Go `document-tree-v1` 的必要不变量
+## Go `document-tree-v2` 的必要不变量
 
 若启动该协议，必须新分配 state/delta TypeID、语义版本、规范向量和独立 Manifest；
 不得改写既有 frame 的含义。最低设计为一个带稳定 `ObjectID` 的对象表：根声明、对象
@@ -57,10 +58,13 @@ RGA Array 两种原语，子容器由其整合操作的不可变 ID 唯一命名
    与任何已保存 ID 重叠。
 7. 宿主仍负责认证、授权、body-size 限制、重放窗口、加密与持久化事务；校验和或
    TypeID 不是身份认证。
+8. 每个可达对象必须和父树一起存在于同一复制组、state 和 checkpoint。需要不同权限、
+   留存或按需加载时，必须在产品边界建立独立复制组；不得插入 GUID/ID 后宣称目标内容
+   已被当前帧覆盖。
 
 ## 验证与性能门槛
 
-在发布 `document-tree-v1` 前，至少需要以下独立证据：
+在发布 `document-tree-v2` 前，至少需要以下独立证据：
 
 - **正确性**：每种 kind 的状态/增量规范向量；两、三、五副本的随机交错、乱序、重复、
   离线恢复、删除竞争和父后到达模拟；同种子可复现的状态/前沿一致性断言。

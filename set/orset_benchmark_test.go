@@ -71,6 +71,24 @@ func BenchmarkORSetMarshalBinary(b *testing.B) {
 	}
 }
 
+func BenchmarkORSetUnmarshalBinary(b *testing.B) {
+	value, _ := benchmarkORSets(b)
+	encoded, err := value.MarshalBinary()
+	if err != nil {
+		b.Fatal(err)
+	}
+	codec := stringCodec{id: "example.com/benchmark-string/v1"}
+	target := benchmarkNewORSet(b, "benchmark-target", codec)
+	b.SetBytes(int64(len(encoded)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := target.UnmarshalBinary(encoded); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkORSetMarshalBinaryTombstoneHeavy(b *testing.B) {
 	value, _ := benchmarkORSets(b)
 	for element := 0; element < benchmarkORSetElements; element++ {

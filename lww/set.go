@@ -298,11 +298,13 @@ func (s *Set[T]) TombstoneTags() []crdt.Tag {
 	return tags
 }
 
-// CompactTombstones removes exactly requested deleted entries. Call it only
-// after every active member has acknowledged the exact tags in one
-// authenticated membership epoch, a post-compaction snapshot is durable, and
-// old deltas have been retired. Unknown tags are ignored; attempting to remove
-// a live entry or passing an invalid tag leaves the set unchanged.
+// CompactTombstones removes exactly requested deleted entries. For replicated
+// state, call it only after every active member has acknowledged the exact
+// tags in one authenticated membership epoch, a post-compaction snapshot is
+// durable, and old deltas have been retired. tombstonegc.SimpleCollector may
+// call it only for its documented local-only lifecycle. Unknown tags are
+// ignored; attempting to remove a live entry or passing an invalid tag leaves
+// the set unchanged.
 func (s *Set[T]) CompactTombstones(tags []crdt.Tag) (int, error) {
 	if s == nil {
 		return 0, ErrNilSet

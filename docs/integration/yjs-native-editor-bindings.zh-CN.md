@@ -1,4 +1,4 @@
-# 原生 Yjs 增量编辑器绑定
+# 原生 Yjs 编辑器绑定
 
 `@darkinno/crdt-client/yjs` 是面向**原生 Yjs 文档**的可选浏览器绑定。它把
 `Y.TextEvent.delta` 映射为 CodeMirror 6 的变更集；远端改一个字符只会修改对应区间，
@@ -20,7 +20,8 @@
 | 手动传输 | `onLocalUpdate` / `onLocalAwarenessUpdate` 是同步交给应用自有 outbox 的边界；回调抛错或本地出站字节超限会锁存对应路径并报告稳定错误码。 |
 | 手动 V1 sync | `createSyncProtocol` 只读写一条有界、无 y-websocket 外层包装的 y-protocols SyncStep1/2 或 update。V2 继续使用 state-vector/diff API。 |
 | Presence | 直接使用 `y-protocols/awareness` 的 encode/apply API。Yjs client ID 仅用于路由，不是已认证用户身份。 |
-| 富文本 | 此绑定不支持 format 或 embed。一旦检测到就停止投影，绝不静默扁平化；富文本必须使用带 schema 的 Yjs 绑定。 |
+| 纯文本富格式 | `YjsTextBinding` 故意只支持纯文本；检测到 format 或 embed 就停止投影，绝不静默扁平化。 |
+| Quill 2 富文本 | `YjsRichTextBinding` 和 `bindYjsQuillRichText` 直接传递经批准的原生 `Y.Text` Delta。format 和单键 embed 是有界 room schema；远端未知内容会冻结投影。 |
 
 Go 侧的 `extensions.YJSHandler` 已兼容 y-websocket/y-protocols 外层，能够转发
 这些原生字节；配置 YJSStore 后可获得持久的 state-vector 恢复。它并不会把 Go
@@ -89,6 +90,44 @@ renderRemoteCursors(binding.remoteCursors());
 change。单区间本地 CodeMirror 更新同样增量；旧 adapter 或多区间本地更新会走显式的
 原子文本 fallback，而不是发送残缺的 Yjs 事务。
 
+## Quill 2 富文本接入
+
+`@darkinno/crdt-client/yjs-richtext` 是 Quill 原生 Delta 模型的可选绑定。它不会内置
+Quill 或 y-quill；应用自己负责 Quill 版本、module、provider、文档生命周期和 schema。
+绑定只接受字符串 insert、已批准的标量属性，以及已批准的单键标量 embed；HTML、任意嵌套
+对象、custom module state、DOM 引用、cursor 和授权信息都不属于这个 Delta 契约。
+
+```ts
+import * as Y from "yjs";
+import { bindYjsQuillRichText } from "@darkinno/crdt-client/yjs-richtext";
+
+const document = new Y.Doc();
+const text = document.getText("content");
+const binding = bindYjsQuillRichText(document, text, quill, {
+  updateFormat: "v1", // 必须与 YJSRoom / YJSStore 一致。
+  maxUpdateBytes: 1 << 20,
+  maxTextUTF16: 1 << 20,
+  maxDeltaOperations: 512,
+  maxAttributesPerOperation: 8,
+  maxAttributeKeyBytes: 64,
+  maxAttributeValueBytes: 1024,
+  maxEmbedBytes: 4096,
+  allowedAttributes: ["bold", "italic", "header", "link"],
+  allowedEmbeds: ["image"],
+  // 标准 y-websocket-compatible provider 拥有该 Y.Doc 时不要配置此项。
+  onLocalUpdate: (update) => durableOutbox.append(update),
+});
+```
+
+默认 `initialContent: "document"` 会用已验证的 `Y.Text` Delta 替换 Quill 初始内容。
+仅在初始化空 `Y.Text` 时使用 `initialContent: "editor"`；非空文档会被拒绝，避免加入中的
+编辑器制造并发 seed。一个文档在标准 y-websocket-compatible provider 与同步
+`onLocalUpdate` 交接之间只能二选一。
+
+本地 Delta 不符合 schema 时，Quill adapter 会恢复最后一个已验证的 Y.Text 投影；远端 Delta
+不符合 schema 时，Y.Doc 保持已合并但富文本投影冻结。应修复已认证的 schema 准入并按 room
+既有 state-vector/checkpoint 流程恢复，不能删除 format/embed 后继续展示。
+
 ## 手动回调失败与恢复
 
 `onLocal*` 回调只是**同步交接**，不是持久回执，也不能证明对端已应用 update。若产品要求
@@ -150,6 +189,12 @@ history 释放路径清除 undo/redo 栈，再记录本次编辑。不能仅删�
   授权。服务端必须像 `YJSHandler` 一样把 client ID 绑定到已认证连接。
 - 收到 `YjsBindingError("unsupported_text")` 表示渲染边界，底层 Yjs 文档仍有效。应卸载
   plain-text view 并改用带 schema 的富文本 surface，不能删除 format/embed 后继续显示。
+- `YjsRichTextBinding` 独立限制 Delta 操作数、文本、每个 format key/value 和每个 embed；
+  `allowedAttributes` / `allowedEmbeds` 是编辑器 schema 白名单，不是授权策略。远端 schema
+  违例产生 `YjsBindingError("unsupported_rich_text")` 并冻结富文本视图，绝不把富内容降级为纯文本。
+- Quill selection、cursor、comment、clipboard sanitisation、图片上传、链接请求、custom module
+  state 和本地 undo grouping 仍由应用负责。presence payload 必须绑定已认证 room，且不能进入
+  YJSStore snapshot 或授权决策。
 
 ## 验证与性能范围
 
@@ -158,11 +203,14 @@ make typescript-test
 node --test clients/typescript/test/yjs.test.mjs
 make typescript-yjs-core-benchmark
 make typescript-yjs-bindings-benchmark
+make typescript-yjs-richtext-benchmark
 ```
 
 重点测试使用 JSDOM 下的真实 CodeMirror 6 view，覆盖远端区间更新、V1/V2、state-vector、
 相对位置/awareness、格式拒绝、有界 undo history、深层观察、V1 SyncStep1/2、手动回调失败
-锁存以及三副本
-延迟/重复/乱序模拟。性能脚本只记录本地进程工作量和 editor write 形状，不能当作浏览器
-渲染、WebSocket、TLS、WAN、持久化或服务容量结论；记录见
-[性能基线](../operations/yjs-native-editor-bindings-2026-08-01.md)。
+锁存以及三副本延迟/重复/乱序模拟。富文本测试使用真实 Yjs 文档与确定性的 Quill-shaped Delta
+port，覆盖批准 format/embed 收敛、本地恢复、远端投影冻结、本地交接锁存、Delta source-cursor
+语义和 256 个畸形 Delta 的原子拒绝。该端口是 Quill 契约模拟，不是特定 Quill 浏览器构建的
+验收声明。性能脚本只记录本地进程工作量和 editor write 形状，不能当作浏览器渲染、WebSocket、
+TLS、WAN、持久化或服务容量结论；记录见[性能基线](../operations/yjs-native-editor-bindings-2026-08-01.md)
+与 [Quill Delta 基线](../operations/yjs-richtext-binding-benchmark-2026-08-03.md)。

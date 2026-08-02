@@ -76,6 +76,36 @@ jobs:
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report stable tag
         run: 'echo "Stable tag result: ${{ steps.tag.outputs.tag }}"'
+      # Tags pushed with the repository GITHUB_TOKEN do not start a second
+      # workflow run. Publish the release in this protected promotion job so a
+      # preprod -> main merge cannot leave a stable tag without its release.
+      - name: Create stable GitHub Release
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "${TAG}" == "skipped-stale" ]]; then
+            echo "Skipping release for a stale main merge"
+            exit 0
+          fi
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a stable vMAJOR.MINOR.PATCH tag, got: ${TAG}" >&2
+            exit 1
+          fi
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "GitHub Release already exists for ${TAG}"
+            exit 0
+          fi
+          if ! gh release create "${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --generate-notes --title "${TAG}"; then
+            # A separately authenticated tag push can race this idempotent
+            # promotion path. Succeed only if that actor created the release.
+            if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "GitHub Release was created concurrently for ${TAG}"
+              exit 0
+            fi
+            exit 1
+          fi
 
   publish-notes:
     if: >-

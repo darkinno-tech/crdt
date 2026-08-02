@@ -243,6 +243,10 @@ replica ID 产生不安全的 HLC 标签。一次编辑事务超过 64 KiB 或 1
 `TombstoneTags()` 确认时，才可使用 `tombstonegc.Coordinator`。已退役成员必须从
 压缩后的快照重新引导才能回归。
 
+对于可丢弃的本地缓存，或能够从权威源重建且永远不会合并延迟操作的服务端默认值，可
+显式使用 `tombstonegc.SimpleCollector` 做有界的仅本地回收。它不会放宽上述复制流程；
+选择前请阅读 [tombstone GC 模式选择](tombstone-gc.zh-CN.md)。
+
 仓库集成测试也是可执行参考：它验证三副本 delta 投递、批处理、恢复，以及 Merkle
 反熵差异后的最终收敛。
 

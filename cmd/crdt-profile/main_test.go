@@ -33,7 +33,7 @@ func TestRunListsProfilesForHumans(t *testing.T) {
 		t.Fatalf("run exit code = %d, stderr=%q", exitCode, stderr.String())
 	}
 	output := stdout.String()
-	for _, want := range []string{"counter/grow-only", "set/add-wins", "text/run-v2", "text/packed-v3", "document/tree-v1", "host must:"} {
+	for _, want := range []string{"counter/grow-only", "set/add-wins", "text/run-v2", "text/packed-v3", "document/tree-v2", "host must:"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("text output missing %q:\n%s", want, output)
 		}

@@ -16,11 +16,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(feature = "ffi")]
 mod ffi;
+mod lww_map;
+
+pub use lww_map::{LwwMap, LwwMapDelta, LwwMapLimits};
 
 /// Stable run-v2 state-frame TypeID.
 pub const RGA_RUN_STATE_TYPE_ID: u64 = 19;
 /// Stable run-v2 delta-frame TypeID.
 pub const RGA_RUN_DELTA_TYPE_ID: u64 = 20;
+/// Stable LWW-Map v1 state-frame TypeID.
+pub const LWW_MAP_STATE_TYPE_ID: u64 = 9;
+/// Stable LWW-Map v1 delta-frame TypeID.
+pub const LWW_MAP_DELTA_TYPE_ID: u64 = 10;
 const FORMAT_VERSION: u64 = 1;
 const BLOCK_NODE: u64 = 0;
 const BLOCK_CHAIN: u64 = 1;
