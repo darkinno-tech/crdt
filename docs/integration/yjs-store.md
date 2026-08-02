@@ -50,15 +50,20 @@ export YJS_STORE_MAX_UPDATE_BYTES=1048576
 export YJS_STORE_MAX_STATE_VECTOR_BYTES=65536
 export YJS_STORE_MAX_SNAPSHOT_BYTES=16777216
 export YJS_STORE_MAX_MERGE_UPDATES=256
+export YJS_STORE_MAX_CONCURRENT_REQUESTS=4
+export YJS_STORE_REQUEST_TIMEOUT_MS=10000
 node --no-experimental-webstorage yjsstore/runtime/server.mjs
 ```
 
 The data directory must be a non-symlink `0700` directory. Each record is
 written as a `0600` temporary file, fsynced, renamed, and followed by a
-directory fsync. A checksum detects accidental corruption; it is not an
-encryption or a defense against an attacker that can already write the data
-directory. Use encrypted storage and OS/container isolation when that threat
-exists.
+directory fsync. The runtime checks this directory both while loading its
+configuration and immediately before it starts listening, so embedding code
+cannot bypass the boundary by constructing a server directly or by changing
+permissions between loading and listening. A checksum detects accidental
+corruption; it is not an encryption or a defense against an attacker that can
+already write the data directory. Use encrypted storage and OS/container
+isolation when that threat exists.
 
 The bundled Node runtime is deliberately not a public service: it has one
 bearer token, adds no CORS policy, and accepts only the literal loopback
@@ -68,6 +73,22 @@ rate controls, secret rotation, and an application-owned service boundary. Do
 not expose its token to browsers. The Go client also rejects every HTTP
 redirect: its configured endpoint is a bearer-token trust boundary, not a
 service-discovery URL.
+
+The sidecar admits at most `YJS_STORE_MAX_CONCURRENT_REQUESTS` active HTTP
+requests (default `4`, range `1..64`) before application code starts collecting
+their bodies. A request beyond that budget receives `503 {"code":"unavailable"}`
+and makes no durable change; the caller must use bounded backoff and state-vector
+recovery rather than retrying an editor mutation. Set this value to the
+intentional maximum concurrent durable workload--for example, a controlled
+16-writer test sets it to `16`--and size the Node heap/container for that many
+materialized Yjs documents. It is not a substitute for gateway rate limits.
+
+`YJS_STORE_REQUEST_TIMEOUT_MS` defaults to 10 seconds and accepts `1000..120000`.
+The server also limits incomplete headers to the smaller of that value and five
+seconds, then checks incomplete connections every second. A timed-out partial
+body receives Node's `408` response and releases its admission slot without
+reaching Yjs or the durable record. Set the timeout only after measuring the
+chosen local disk, update size, and Go-client deadline; do not disable it.
 
 Run exactly one bundled runtime process for each data directory. Its keyed
 lock serializes requests within that process; independent processes sharing a
@@ -155,6 +176,12 @@ payload that happens to parse.
 - Set a Node heap/container memory ceiling and ingress rate limit as well.
   A raw byte cap limits but cannot prove a Yjs update's decoded structure has a
   low allocation cost.
+- Keep sidecar request admission and receive timeouts bounded. The active
+  request limit covers application-level body collection and Yjs
+  materialization; excess work receives `unavailable` before its body is
+  collected. The HTTP receive deadline releases a partially uploaded request.
+  Choose both limits together with the maximum snapshot size and the Go
+  client's deadline.
 - Treat a sidecar `unavailable` or `corrupt_store` error as a failed durable
   operation. Do not relay that update optimistically or advance an application
   outbox cursor.
@@ -174,8 +201,9 @@ make yjs-store-benchmark
 ```
 
 `yjs-store-test` runs direct real-Yjs V1/V2, nested shared-type, state-vector,
-merge, restart, duplicate, concurrent-writer, malformed-input, and corrupted
-record scenarios. It then starts the Node sidecar and verifies the Go HTTP
-client against it. `yjs-store-benchmark` measures a loopback durable apply,
+merge, restart, duplicate, concurrent-writer, malformed-input, corrupted
+record, permission-drift, saturated-request, and partial-body-timeout
+scenarios. It then starts the Node sidecar and verifies the Go HTTP client
+against it. `yjs-store-benchmark` measures a loopback durable apply,
 state-vector diff, and snapshot workload; it is not a TLS, WAN, browser,
 authorization, or fan-out capacity claim.

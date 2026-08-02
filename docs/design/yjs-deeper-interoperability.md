@@ -73,7 +73,8 @@ not a hidden enhancement to Go CRDT rooms:
 ```text
 authenticated Yjs room
   -> transport-size and rate limits
-  -> YJSStore (Yjs-aware runtime, V1/V2 mode pinned per room)
+  -> YJSStore (Yjs-aware runtime, V1/V2 mode pinned per room,
+               bounded active requests + receive deadline)
        Apply(update)
        StateVector()
        Diff(remoteVector)
@@ -94,10 +95,14 @@ cursor only after that write succeeds.
 The bundled runtime is a loopback-only, single-process sidecar for one data
 directory. Its request lock has process scope, so an HA deployment must assign
 each document directory to one writer or provide a different store with
-cross-process serialization. The Go client never follows a redirect from the
-configured bearer-token endpoint, and a handler permits one store-backed room
-per exact durable document identity; both rules prevent trust-boundary drift or
-live fan-out split-brain.
+cross-process serialization. Before a request body is collected, the runtime
+admits only a configured bounded number of semantic requests; an excess request
+returns `unavailable`, and incomplete headers/bodies expire under its receive
+deadline. This constrains local heap and lock pressure but does not replace
+gateway rate limits or a Node heap/container ceiling. The Go client never
+follows a redirect from the configured bearer-token endpoint, and a handler
+permits one store-backed room per exact durable document identity; both rules
+prevent trust-boundary drift or live fan-out split-brain.
 
 Tenant, room, epoch, schema label, and V1/V2 format form the immutable durable
 identity. The schema label is a fencing/version field, not a claim that the
@@ -115,7 +120,8 @@ the concrete configuration and recovery contract.
   them.
 - **Security:** authenticate identity independently of Yjs client IDs; bind
   room/tenant/epoch/schema; cap raw frame, decoded update, state vector,
-  document, queue, and fan-out work; enforce read/write/presence authorization
+  document, active request, queue, and fan-out work; enforce short nonzero
+  request/header receive deadlines and read/write/presence authorization
   continuously; disable unsafe compression at the public boundary; audit
   update admission without logging document contents.
 - **Performance:** measure state-vector diff bytes, update merge/compaction
