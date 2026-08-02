@@ -268,16 +268,18 @@ jobs:
           if [[ -f "${baseline_dir}/examples/go.mod" ]]; then
             (
               cd "${baseline_dir}"
-              GOMAXPROCS=1 GOWORK=off go test "${benchmark_args[@]:0:8}" ./counter ./text
+              # The checkout was moved outside the candidate before this
+              # command, so its own go.work cannot resolve candidate code.
+              GOMAXPROCS=1 go test "${benchmark_args[@]:0:8}" ./counter ./text
             ) > .benchmark-results/baseline.txt
             (
               cd "${baseline_dir}/examples"
-              GOMAXPROCS=1 GOWORK=off go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
+              GOMAXPROCS=1 go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
             ) >> .benchmark-results/baseline.txt
           else
             (
               cd "${baseline_dir}"
-              GOMAXPROCS=1 GOWORK=off go test "${benchmark_args[@]}"
+              GOMAXPROCS=1 go test "${benchmark_args[@]}"
             ) > .benchmark-results/baseline.txt
           fi
           GOMAXPROCS=1 go test "${benchmark_args[@]:0:8}" ./counter ./text > .benchmark-results/candidate.txt

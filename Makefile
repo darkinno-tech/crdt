@@ -103,9 +103,11 @@ yjs-store-benchmark:
 	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 16
 	$(NPM) --prefix yjsstore/runtime run bench -- --receivers 64
 
-# BENCHMARK_BASE must be a checkout of the commit to compare against. The
-# candidate and baseline run consecutively with one logical processor so their
-# medians are comparable; this detects regressions, not production capacity.
+# BENCHMARK_BASE must be an isolated checkout of the commit to compare against.
+# Each checkout resolves its own go.work, so split modules use the baseline
+# source rather than an unpublished module version. The candidate and baseline
+# run consecutively with one logical processor so their medians are comparable;
+# this detects regressions, not production capacity.
 benchmark-regression:
 	@test -n "$(BENCHMARK_BASE)" || (echo "set BENCHMARK_BASE to a baseline checkout" >&2; exit 2)
 	@mkdir -p .tmp/benchmark-results
