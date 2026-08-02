@@ -1,4 +1,4 @@
-.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify formal-rga wasm wasm-v1 wasm-v1-test wasm-packed wasm-packed-test wasm-packed-v2 wasm-packed-v2-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark typescript-yjs-core-benchmark typescript-yjs-bindings-benchmark typescript-tiptap-richtext-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
+.PHONY: fmt-check generate generate-check test test-unit test-integration test-extreme race vet fuzz fuzz-list fuzz-smoke coverage benchmark benchmark-regression yjs-store-test yjs-store-benchmark docker-test staticcheck lint verify formal-rga wasm wasm-v1 wasm-v1-test wasm-packed wasm-packed-test wasm-packed-v2 wasm-packed-v2-test typescript-test wasm-test typescript-benchmark typescript-native-benchmark typescript-browser-benchmark typescript-bindings-benchmark typescript-yjs-core-benchmark typescript-yjs-bindings-benchmark typescript-yjs-richtext-benchmark typescript-tiptap-richtext-benchmark wasm-benchmark wasm-browser-benchmark wasm-bindings-benchmark rust-test rust-benchmark python-test swift-test cpp-test cpp-benchmark sync-main
 
 STATICCHECK ?= $(shell command -v staticcheck 2>/dev/null || printf '%s/bin/staticcheck' "$$(go env GOPATH)")
 GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || printf '%s/bin/golangci-lint' "$$(go env GOPATH)")
@@ -175,6 +175,9 @@ typescript-yjs-core-benchmark:
 
 typescript-yjs-bindings-benchmark:
 	$(NPM) --prefix clients/typescript run bench:yjs-bindings
+
+typescript-yjs-richtext-benchmark:
+	$(NPM) --prefix clients/typescript run bench:yjs-richtext
 
 typescript-blocknote-benchmark:
 	$(NPM) --prefix clients/typescript run bench:blocknote
