@@ -98,6 +98,74 @@ func TestYJSHandlerNativeYWebsocketNodeIntegration(t *testing.T) {
 	}
 }
 
+// TestYJSAgentPeerNativeYWebsocketNodeIntegration verifies the server-side
+// peer path against both the pinned semantic store and a fresh standard
+// y-websocket client. The client starts after the agent write, so it can only
+// observe the update through durable state-vector recovery rather than a live
+// broadcast or a same-process BroadcastChannel.
+func TestYJSAgentPeerNativeYWebsocketNodeIntegration(t *testing.T) {
+	store := startYJSStoreNodeSidecar(t, true)
+	room, err := NewYJSRoom(YJSRoomConfig{
+		Name:                "notes",
+		MaxUpdateBytes:      4096,
+		MaxStateVectorBytes: 1024,
+		MaxSyncBytes:        32768,
+		Store:               store,
+		Document:            testYJSDocument(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewYJSHandler(YJSConfig{
+		Rooms: []*YJSRoom{room},
+		Authenticate: func(request *http.Request) (Peer, error) {
+			cookie, err := request.Cookie("yjs_session")
+			if err != nil || cookie.Value != "native-yjs-editor" {
+				return Peer{}, ErrUnauthorized
+			}
+			return Peer{ID: "native-yjs-editor"}, nil
+		},
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		MaxMessageBytes:       32768 + maxYJSWireOverhead,
+		MaxQueuedMessages:     64,
+		MaxQueuedBytes:        32768 + maxYJSWireOverhead,
+		MaxAwarenessClients:   16,
+		StoreTimeout:          5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := handler.OpenYJSAgentPeer(Peer{ID: "agent:copy-editor:run-7"}, "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := agent.Publish(context.Background(), yjsHelloUpdate)
+	if err != nil || !published.Applied || published.Cursor != 1 {
+		t.Fatalf("agent Publish = %#v, %v", published, err)
+	}
+	retry, err := agent.Publish(context.Background(), yjsHelloUpdate)
+	if err != nil || retry.Applied || retry.Cursor != published.Cursor {
+		t.Fatalf("agent duplicate Publish = %#v, %v", retry, err)
+	}
+	delta, err := agent.Diff(context.Background(), []byte{0}) // Y.encodeStateVector(new Y.Doc()).
+	if err != nil || len(delta) == 0 {
+		t.Fatalf("agent Diff = %x, %v", delta, err)
+	}
+
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	runtime := yjsStoreNodeRuntime(t, true)
+	context, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command := exec.CommandContext(context, "node", "--no-experimental-webstorage", "agent_peer.integration.mjs", "ws"+strings.TrimPrefix(server.URL, "http"))
+	command.Dir = runtime
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native y-websocket agent-peer recovery: %v\n%s", err, output)
+	}
+}
+
 func startYJSStoreNodeSidecar(t *testing.T, needYWebsocket bool) YJSStore {
 	t.Helper()
 	runtime := yjsStoreNodeRuntime(t, needYWebsocket)
