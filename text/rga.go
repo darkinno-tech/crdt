@@ -1180,9 +1180,11 @@ func (r *RGA) CompactTombstones(tags []Position) (int, error) {
 // deleted ancestors, so a fully deleted chain can compact in one call.
 //
 // It remains deliberately fail-closed for unresolved state: any pending node
-// returns ErrUnsafeCompaction without changing the RGA. Callers still need an
-// authenticated exact-acknowledgement epoch, a durable post-compaction
-// checkpoint, and retirement of old deltas before using this method.
+// returns ErrUnsafeCompaction without changing the RGA. For replicated state,
+// callers still need an authenticated exact-acknowledgement epoch, a durable
+// post-compaction checkpoint, and retirement of old deltas. tombstonegc.
+// SimpleCollector may use this structural operation only for its documented
+// local-only lifecycle.
 func (r *RGA) CompactEligibleTombstones(tags []Position) (int, error) {
 	if r == nil {
 		return 0, ErrNilText

@@ -330,11 +330,12 @@ func (t *ORTree) TombstoneTags() []NodeID {
 	return sortedTreeTombstoneIDs(t.tombstones)
 }
 
-// CompactTombstones removes exactly the requested tombstoned leaf nodes.
-// Call it only after the current membership epoch has durably recorded exact
-// acknowledgements, a post-compaction checkpoint, and retirement of old
-// deltas. Any known child makes a deleted node a structural anchor, so the
-// operation is all-or-nothing for that request.
+// CompactTombstones removes exactly the requested tombstoned leaf nodes. For
+// replicated state, call it only after the current membership epoch has
+// durably recorded exact acknowledgements, a post-compaction checkpoint, and
+// retirement of old deltas. tombstonegc.SimpleCollector may call it only for
+// its documented local-only lifecycle. Any known child makes a deleted node a
+// structural anchor, so the operation is all-or-nothing for that request.
 func (t *ORTree) CompactTombstones(tags []NodeID) (int, error) {
 	if t == nil {
 		return 0, ErrNilTree
@@ -386,9 +387,10 @@ func (t *ORTree) CompactTombstones(tags []NodeID) (int, error) {
 // one call. A retained child that is not part of the batch remains a structural
 // anchor and prevents its parent from being removed.
 //
-// Callers must first authenticate exact acknowledgements for the current
-// membership epoch, durably persist the post-compaction checkpoint, and retire
-// old-epoch frames. This method does not establish any of those conditions.
+// For replicated state, callers must first authenticate exact acknowledgements
+// for the current membership epoch, durably persist the post-compaction
+// checkpoint, and retire old-epoch frames. tombstonegc.SimpleCollector may use
+// this structural operation only for its documented local-only lifecycle.
 func (t *ORTree) CompactEligibleTombstones(tags []NodeID) (int, error) {
 	if t == nil {
 		return 0, ErrNilTree

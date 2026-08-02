@@ -233,10 +233,12 @@ func (s *ORSet[T]) Compact(stableFrontier map[string]crdt.Tag) (int, error) {
 	return removed, nil
 }
 
-// CompactTombstones removes exactly the supplied tombstones. It is safe for a
-// coordinator that has independently proved acknowledgement for each tag; a
-// tag that is not currently a tombstone is ignored. The input is completely
-// validated before s is modified.
+// CompactTombstones removes exactly the supplied tombstones. For replicated
+// state, use it only through a coordinator that has independently proved
+// acknowledgement for each tag. tombstonegc.SimpleCollector may call it only
+// for its documented local-only lifecycle. A tag that is not currently a
+// tombstone is ignored. The input is completely validated before s is
+// modified.
 func (s *ORSet[T]) CompactTombstones(acknowledged []crdt.Tag) (int, error) {
 	if s == nil {
 		return 0, ErrNilORSet

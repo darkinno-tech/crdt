@@ -22,11 +22,14 @@ func (d *Document) TombstoneTags() []crdt.Tag {
 }
 
 // CompactTombstones removes an exact, structurally-safe text tombstone batch
-// and any selected attribute-removal tombstones. It is all-or-nothing for text
-// structure: an unresolved, unknown, or non-leaf text tombstone returns
-// ErrUnsafeCompaction without changing text or formatting metadata. Formatting
-// attached to a text position is removed only when that position was retained
-// before and is no longer retained after successful RGA compaction.
+// and any selected attribute-removal tombstones. For replicated state, callers
+// must establish exact acknowledgement before calling it. tombstonegc.
+// SimpleCollector may call it only for its documented local-only lifecycle. It
+// is all-or-nothing for text structure: an unresolved, unknown, or non-leaf
+// text tombstone returns ErrUnsafeCompaction without changing text or
+// formatting metadata. Formatting attached to a text position is removed only
+// when that position was retained before and is no longer retained after
+// successful RGA compaction.
 func (d *Document) CompactTombstones(tags []crdt.Tag) (int, error) {
 	return d.compactTombstones(tags, false)
 }
@@ -36,7 +39,8 @@ func (d *Document) CompactTombstones(tags []crdt.Tag) (int, error) {
 // before their deleted ancestors; a non-leaf text tombstone cannot prevent
 // independent attribute-removal tombstones or structurally safe descendants
 // from compacting. It remains fail-closed while the nested RGA has pending
-// dependencies.
+// dependencies. tombstonegc.SimpleCollector may call it only for its
+// documented local-only lifecycle.
 func (d *Document) CompactEligibleTombstones(tags []crdt.Tag) (int, error) {
 	return d.compactTombstones(tags, true)
 }

@@ -1,7 +1,13 @@
-// Package tombstonegc coordinates safe, automatic tombstone collection.
-// It deliberately does not provide membership discovery, authentication, or
+// Package tombstonegc coordinates tombstone collection.
+//
+// Coordinator is the default collector for replicated or durable data. It
+// deliberately does not provide membership discovery, authentication, or
 // persistence; applications must supply an authoritative membership view and
 // authenticate acknowledgement messages before passing them to Coordinator.
+//
+// SimpleCollector is a separately opt-in, local-only bounded collector for
+// disposable state. It is not safe for replicated state, durable outboxes, or
+// any target that can later receive an old delta.
 package tombstonegc
 
 import (
@@ -44,8 +50,9 @@ type AcknowledgementStats struct {
 }
 
 // TombstoneTarget is a CRDT whose tombstones can be enumerated and compacted.
-// Coordinator only establishes exact acknowledgement eligibility; targets must
-// enforce their own structural compaction rules.
+// TombstoneTags must return a caller-owned, unique, canonically sorted
+// snapshot. Coordinator only establishes exact acknowledgement eligibility;
+// targets must enforce their own structural compaction rules.
 type TombstoneTarget interface {
 	TombstoneTags() []crdt.Tag
 	CompactTombstones([]crdt.Tag) (int, error)
