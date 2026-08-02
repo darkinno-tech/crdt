@@ -263,6 +263,86 @@ func (index *sequenceIndex) insertLinearMarkersAfter(anchor *sequenceMarker, mar
 	index.root = mergeMarkers(mergeMarkers(left, markerTree(markers)), right)
 }
 
+// insertLinearPairsAfter is the resolved-run counterpart to
+// insertLinearMarkersAfter. Pairs already occupy one retained backing array,
+// so walking that array directly avoids building a second, transient slice of
+// marker pointers solely to restore their deterministic enter/exit order.
+func (index *sequenceIndex) insertLinearPairsAfter(anchor *sequenceMarker, pairs []sequencePair) {
+	if anchor == nil || len(pairs) == 0 {
+		return
+	}
+	next := anchor.next
+	previous := anchor
+	for pairIndex := range pairs {
+		marker := &pairs[pairIndex].entry
+		previous.next, marker.prev = marker, previous
+		previous = marker
+	}
+	for pairIndex := len(pairs) - 1; pairIndex >= 0; pairIndex-- {
+		marker := &pairs[pairIndex].exit
+		previous.next, marker.prev = marker, previous
+		previous = marker
+	}
+	previous.next = next
+	if next != nil {
+		next.prev = previous
+	}
+
+	left, right := splitMarkers(index.root, markerRank(anchor)+1)
+	for pairIndex := range pairs {
+		pair := &pairs[pairIndex]
+		index.pairs[pair.position] = pair
+	}
+	index.root = mergeMarkers(mergeMarkers(left, markerTreeForLinearPairs(pairs)), right)
+}
+
+// markerTreeForLinearPairs constructs the Cartesian marker tree in the same
+// enter-forward/exit-reverse order as markerTree. The parent links form the
+// current monotonic right spine, so they replace a temporary []*sequenceMarker
+// stack. A marker is refreshed only when it leaves that spine, at which point
+// both of its subtrees are complete. This keeps the operation linear without
+// a per-marker transient pointer allocation.
+func markerTreeForLinearPairs(pairs []sequencePair) *sequenceMarker {
+	var top *sequenceMarker
+	for pairIndex := range pairs {
+		appendLinearMarkerToTree(&top, &pairs[pairIndex].entry)
+	}
+	for pairIndex := len(pairs) - 1; pairIndex >= 0; pairIndex-- {
+		appendLinearMarkerToTree(&top, &pairs[pairIndex].exit)
+	}
+
+	var root *sequenceMarker
+	for top != nil {
+		parent := top.parent
+		refreshMarker(top)
+		root = top
+		top = parent
+	}
+	return root
+}
+
+// appendLinearMarkerToTree extends a Cartesian tree whose right spine is
+// stored in top. Popping a marker finalizes it: its future in-order successors
+// cannot become children after a higher-priority marker replaces it.
+func appendLinearMarkerToTree(top **sequenceMarker, marker *sequenceMarker) {
+	marker.left, marker.right, marker.parent = nil, nil, nil
+	var left *sequenceMarker
+	for *top != nil && (*top).priority < marker.priority {
+		left = *top
+		*top = left.parent
+		refreshMarker(left)
+	}
+	marker.left = left
+	if left != nil {
+		left.parent = marker
+	}
+	if *top != nil {
+		(*top).right = marker
+		marker.parent = *top
+	}
+	*top = marker
+}
+
 // markerTree builds the max-priority Cartesian tree for an already ordered
 // marker sequence in linear time. mergeMarkers would build the same tree, but
 // repeatedly merging a long resolved run would retrace the existing index for

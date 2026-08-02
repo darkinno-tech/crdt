@@ -965,14 +965,9 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 	// This path is only reached after resolvedLinearRunLocked has established
 	// the parent-before-child chain and canonical order.
 	pairs := make([]sequencePair, len(ids))
-	markers := make([]*sequenceMarker, 0, len(ids)*2)
 	for index, id := range ids {
 		_, deleted := r.tombstones[id]
 		initializeSequencePair(&pairs[index], id, !deleted)
-		markers = append(markers, &pairs[index].entry)
-	}
-	for index := len(ids) - 1; index >= 0; index-- {
-		markers = append(markers, &markers[index].pair.exit)
 	}
 	var anchor *sequenceMarker
 	for index, id := range ids {
@@ -980,12 +975,12 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 		r.nodes[id] = item
 		parent := r.sequence.pair(item.parent)
 		if index > 0 {
-			parent = markers[index-1].pair
+			parent = &pairs[index-1]
 		}
 		if parent == nil {
 			panic("text: integrating resolved linear run without integrated parent")
 		}
-		previous, hasPrevious := r.children.insert(parent, markers[index].pair)
+		previous, hasPrevious := r.children.insert(parent, &pairs[index])
 		if index == 0 {
 			anchor = &parent.entry
 			if hasPrevious {
@@ -993,7 +988,7 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 			}
 		}
 	}
-	r.sequence.insertLinearMarkersAfter(anchor, markers, len(ids))
+	r.sequence.insertLinearPairsAfter(anchor, pairs)
 	changed := len(ids) > 0
 	if r.integrateReady() {
 		changed = true
