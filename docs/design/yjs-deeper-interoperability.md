@@ -90,7 +90,10 @@ state vector, obtains a semantic diff for a client Step 1, and submits every
 Step 2/update to `YJSStore.Apply` before live fan-out. The store materializes a
 fresh `Y.Doc` with Yjs GC enabled, writes the resulting merged snapshot and
 state vector through an fsync + rename transaction, and advances its recovery
-cursor only after that write succeeds.
+cursor only after that write succeeds. Its duplicate decision uses the Yjs
+transaction's delete set plus before/after client clocks--the same condition
+Yjs uses before emitting an update--not a state-vector equality shortcut, so a
+delete-only update remains durable even though it has no clock advance.
 
 The bundled runtime is a loopback-only, single-process sidecar for one data
 directory. Its request lock has process scope, so an HA deployment must assign

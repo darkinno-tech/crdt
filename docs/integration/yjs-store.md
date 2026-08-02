@@ -29,6 +29,15 @@ history; it must not be used to reset a document in place.
 | `Snapshot()` | Returns a merged recovery update, state vector, and cursor observed together. | Read-only. |
 | `Merge(updates)` | Uses Yjs V1 or V2 merge helpers. | Read-only; it does not modify a document. |
 
+`Apply` determines whether it must advance the durable cursor from the pinned
+Yjs transaction itself: a nonempty delete set or a client clock change is a
+mutation. This is intentionally stronger than comparing state vectors, because
+a pure Yjs deletion changes the document without advancing a client clock. A
+duplicate has neither condition and returns the already verified stored vector
+without writing a new record. The sidecar still materializes and validates the
+record before making that decision; it does not retain a process-wide document
+cache or trust an unchecked on-disk vector.
+
 The sidecar starts a fresh `Y.Doc` with Yjs GC enabled for each durable
 operation and persists the materialized update, rather than retaining an
 unbounded update log. That is a recovery snapshot under the selected Yjs
