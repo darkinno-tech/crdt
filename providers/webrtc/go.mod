@@ -3,8 +3,8 @@ module github.com/DarkInno/crdt/providers/webrtc
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.32
-	github.com/DarkInno/crdt/durable v1.0.32
+	github.com/DarkInno/crdt v1.0.33
+	github.com/DarkInno/crdt/durable v1.0.33
 )
 
 require (

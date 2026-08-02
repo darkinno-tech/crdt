@@ -3,8 +3,8 @@ module github.com/DarkInno/crdt/extensions
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.32
-	github.com/DarkInno/crdt/telemetry v1.0.32
+	github.com/DarkInno/crdt v1.0.33
+	github.com/DarkInno/crdt/telemetry v1.0.33
 	github.com/coder/websocket v1.8.13
 	google.golang.org/grpc v1.67.3
 	google.golang.org/protobuf v1.34.2
