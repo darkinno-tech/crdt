@@ -45,6 +45,7 @@ be committed.
 
 - [CRDT extension design](design/crdt-extension.md)
 - [Durable transport reference design](design/durable-transport.md)
+- [Durable storage provider evaluation](design/durable-storage-provider-evaluation.md)
 - [G-Set and MV-Register design](design/gset-mvregister.md)
 - [Membership protocol](protocol/membership.md)
 - [LWW Set and Map v1 wire protocol](protocol/lww-v1.md)
