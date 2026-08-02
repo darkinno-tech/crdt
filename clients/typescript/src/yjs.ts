@@ -28,6 +28,8 @@ export type YjsBindingErrorCode =
   | "invalid_options"
   | "invalid_selection"
   | "invalid_update"
+  | "local_awareness_failed"
+  | "local_update_failed"
   | "observer_failed"
   | "resource_limit"
   | "sync_mismatch"
@@ -120,13 +122,20 @@ export interface YjsTextBindingOptions {
   readonly maxCursorBytes: number;
   /** Optional field name for this binding's JSON awareness cursor payload. */
   readonly cursorField?: string;
-  /** Receives local Yjs document updates when this binding owns transport. */
+  /**
+   * Receives local Yjs document updates when this binding owns transport.
+   * It must synchronously make an application-owned retry record when durable
+   * delivery is required. A thrown error latches this local-update path.
+   */
   readonly onLocalUpdate?: (update: Uint8Array) => void;
-  /** Receives local y-protocols awareness updates when this binding owns transport. */
+  /**
+   * Receives local y-protocols awareness updates when this binding owns
+   * transport. A thrown error latches this local-awareness path.
+   */
   readonly onLocalAwarenessUpdate?: (update: Uint8Array) => void;
   /** Receives incremental remote or external Y.Text changes. */
   readonly onTextChanges?: (changes: readonly YjsTextChange[]) => void;
-  /** Reports a boundedness or unsupported-text failure without exposing document bytes. */
+  /** Reports a boundedness, callback, or unsupported-text failure without exposing document bytes. */
   readonly onError?: (error: YjsBindingError) => void;
 }
 
@@ -145,6 +154,8 @@ interface YjsDeltaOperation {
 
 const defaultCursorField = "crdt.yjs.cursor.v1";
 const defaultUndoStackItems = 256;
+type YjsLocalUpdateFailureCode = Extract<YjsBindingErrorCode, "local_update_failed" | "resource_limit">;
+type YjsLocalAwarenessFailureCode = Extract<YjsBindingErrorCode, "local_awareness_failed" | "resource_limit">;
 
 /**
  * Binds one already-integrated Y.Text to incremental editor changes and the
@@ -164,6 +175,8 @@ export class YjsTextBinding {
   #closed = false;
   #projectingText = true;
   #textObserved = false;
+  #localUpdateFailure: YjsLocalUpdateFailureCode | undefined;
+  #localAwarenessFailure: YjsLocalAwarenessFailureCode | undefined;
   readonly #undoManagers = new Set<YjsTextUndoManager>();
 
   constructor(
@@ -294,6 +307,7 @@ export class YjsTextBinding {
       this.#localTextOrigin,
       options,
       () => this.#assertTextProjection(),
+      () => this.#assertLocalUpdatePath(),
       (released) => this.#undoManagers.delete(released),
     );
     this.#undoManagers.add(manager);
@@ -340,12 +354,14 @@ export class YjsTextBinding {
     if (this.awareness === undefined || !validSelection(selection, this.text.length)) {
       throw new YjsBindingError("invalid_selection");
     }
+    this.#assertLocalAwarenessPath();
     const cursor: EncodedYjsCursor = {
       version: 1,
       anchor: this.createRelativePosition(selection.anchor).encoded,
       head: this.createRelativePosition(selection.head).encoded,
     };
     this.awareness.setLocalStateField(this.cursorField, cursor);
+    this.#assertLocalAwarenessPath();
   }
 
   /** Clears only this binding's cursor field; other host-owned awareness fields remain intact. */
@@ -354,7 +370,9 @@ export class YjsTextBinding {
     if (this.awareness === undefined) {
       throw new YjsBindingError("invalid_options");
     }
+    this.#assertLocalAwarenessPath();
     this.awareness.setLocalStateField(this.cursorField, undefined);
+    this.#assertLocalAwarenessPath();
   }
 
   /** Resolves all valid peer cursors against this exact Y.Text, skipping malformed foreign state. */
@@ -383,6 +401,7 @@ export class YjsTextBinding {
    */
   applyLocalReplacement(change: YjsTextChange): void {
     this.#assertTextProjection();
+    this.#assertLocalUpdatePath();
     if (!validTextChange(change, this.text.length)) {
       throw new YjsBindingError("invalid_selection");
     }
@@ -401,6 +420,11 @@ export class YjsTextBinding {
         this.text.insert(change.from, change.insert);
       }
     }, this.#localTextOrigin);
+    // Yjs emits document updates after committing this transaction. If the
+    // caller-owned manual outbox rejects that update synchronously, surface a
+    // stable error rather than the callback's arbitrary exception. The caller
+    // must recover or resync because this transaction cannot be rolled back.
+    this.#assertLocalUpdatePath();
   }
 
   /** Stops listeners without destroying caller-owned Y.Doc, Y.Text, or Awareness instances. */
@@ -447,14 +471,23 @@ export class YjsTextBinding {
   }
 
   #handleDocumentUpdate(update: Uint8Array, origin: unknown): void {
-    if (this.#closed || origin === this.#remoteUpdateOrigin || this.options.onLocalUpdate === undefined) {
+    if (
+      this.#closed
+      || this.#localUpdateFailure !== undefined
+      || origin === this.#remoteUpdateOrigin
+      || this.options.onLocalUpdate === undefined
+    ) {
       return;
     }
     if (update.byteLength > this.options.maxUpdateBytes) {
-      this.#report("resource_limit");
+      this.#failLocalUpdate("resource_limit");
       return;
     }
-    this.options.onLocalUpdate(update.slice());
+    try {
+      this.options.onLocalUpdate(update.slice());
+    } catch {
+      this.#failLocalUpdate("local_update_failed");
+    }
   }
 
   #handleAwarenessUpdate(origin: unknown): void {
@@ -463,13 +496,18 @@ export class YjsTextBinding {
     }
     // Every local awareness update, including a heartbeat, is transportable.
     // Remote updates use a distinct origin and never echo into a manual outbox.
-    if (this.options.onLocalAwarenessUpdate !== undefined) {
+    if (this.#localAwarenessFailure !== undefined || this.options.onLocalAwarenessUpdate === undefined) {
+      return;
+    }
+    try {
       const update = encodeAwarenessUpdate(this.awareness, [this.awareness.clientID]);
-      if (update.byteLength <= this.options.maxAwarenessBytes) {
-        this.options.onLocalAwarenessUpdate(update.slice());
-      } else {
-        this.#report("resource_limit");
+      if (update.byteLength > this.options.maxAwarenessBytes) {
+        this.#failLocalAwareness("resource_limit");
+        return;
       }
+      this.options.onLocalAwarenessUpdate(update.slice());
+    } catch {
+      this.#failLocalAwareness("local_awareness_failed");
     }
   }
 
@@ -486,6 +524,34 @@ export class YjsTextBinding {
     }
   }
 
+  #assertLocalUpdatePath(): void {
+    if (this.#localUpdateFailure !== undefined) {
+      throw new YjsBindingError(this.#localUpdateFailure);
+    }
+  }
+
+  #assertLocalAwarenessPath(): void {
+    if (this.#localAwarenessFailure !== undefined) {
+      throw new YjsBindingError(this.#localAwarenessFailure);
+    }
+  }
+
+  #failLocalUpdate(code: YjsLocalUpdateFailureCode): void {
+    if (this.#localUpdateFailure !== undefined) {
+      return;
+    }
+    this.#localUpdateFailure = code;
+    this.#report(code);
+  }
+
+  #failLocalAwareness(code: YjsLocalAwarenessFailureCode): void {
+    if (this.#localAwarenessFailure !== undefined) {
+      return;
+    }
+    this.#localAwarenessFailure = code;
+    this.#report(code);
+  }
+
   #stopTextProjection(code: Extract<YjsBindingErrorCode, "editor_update_failed" | "resource_limit" | "unsupported_text">): void {
     this.#projectingText = false;
     if (this.#textObserved) {
@@ -496,7 +562,11 @@ export class YjsTextBinding {
   }
 
   #report(code: YjsBindingErrorCode): void {
-    this.options.onError?.(new YjsBindingError(code));
+    try {
+      this.options.onError?.(new YjsBindingError(code));
+    } catch {
+      // Error reporting must not re-enter a synchronous Yjs observer loop.
+    }
   }
 }
 
@@ -515,6 +585,7 @@ export class YjsTextUndoManager {
     localOrigin: unknown,
     options: YjsTextUndoManagerOptions,
     private readonly assertActive: () => void,
+    private readonly assertLocalUpdatePath: () => void,
     private readonly release: (manager: YjsTextUndoManager) => void,
   ) {
     this.maxStackItems = options.maxStackItems ?? defaultUndoStackItems;
@@ -538,13 +609,19 @@ export class YjsTextUndoManager {
   /** Applies a compensating Yjs transaction for the latest captured local edit. */
   undo(): boolean {
     this.#assertActive();
-    return this.#manager.undo() !== null;
+    this.assertLocalUpdatePath();
+    const changed = this.#manager.undo() !== null;
+    this.assertLocalUpdatePath();
+    return changed;
   }
 
   /** Reapplies the latest locally undone edit as a new Yjs transaction. */
   redo(): boolean {
     this.#assertActive();
-    return this.#manager.redo() !== null;
+    this.assertLocalUpdatePath();
+    const changed = this.#manager.redo() !== null;
+    this.assertLocalUpdatePath();
+    return changed;
   }
 
   /** Starts a new capture group before the next local editor replacement. */
