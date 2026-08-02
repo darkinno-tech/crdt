@@ -1555,6 +1555,20 @@ func validateDelta(delta Delta) error {
 	return nil
 }
 
+// singleDecodedRunChainAcyclic proves acyclicity for the only decoder shape
+// that does not need the general graph walk: one complete chain block. The
+// decoder has already established that every node after the first points to
+// its immediate predecessor, so the sole edge that can return into this
+// frame is the first node's parent. Callers must use it only after decoding
+// the whole single chain; every other shape keeps using acyclicAgainst.
+func singleDecodedRunChainAcyclic(nodes map[Position]node, firstParent Position) bool {
+	if !firstParent.Valid() {
+		return true
+	}
+	_, loopsIntoChain := nodes[firstParent]
+	return !loopsIntoChain
+}
+
 // acyclicAgainst permits a parent that has not arrived yet (out-of-order
 // delivery), but rejects every cycle formed by incoming and already pending
 // nodes. Integrated nodes are deliberately not traversed: their parent closure

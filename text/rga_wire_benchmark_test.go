@@ -162,6 +162,59 @@ func BenchmarkRGAReceiveCanonicalLinearFrames(b *testing.B) {
 	}
 }
 
+// BenchmarkRGADecodeCanonicalLinearFrames isolates bounded canonical-frame
+// decoding for a large initial sync. It excludes RGA installation and all
+// transport or persistence work so CPU changes in input validation are not
+// hidden by retained-document allocation.
+func BenchmarkRGADecodeCanonicalLinearFrames(b *testing.B) {
+	const runes = 100_000
+	delta := benchmarkLinearRGADelta(b, runes)
+	limits := frame.DefaultLimits()
+	for _, protocol := range []struct {
+		name      string
+		marshal   func(Delta) ([]byte, error)
+		unmarshal func([]byte) (Delta, error)
+	}{
+		{
+			name: "run-v2",
+			marshal: func(value Delta) ([]byte, error) {
+				return value.MarshalRunBinaryWithLimits(limits)
+			},
+			unmarshal: func(data []byte) (Delta, error) {
+				return UnmarshalRGARunDeltaWithLimits(data, limits)
+			},
+		},
+		{
+			name: "packed-v3",
+			marshal: func(value Delta) ([]byte, error) {
+				return value.MarshalPackedBinaryWithLimits(limits)
+			},
+			unmarshal: func(data []byte) (Delta, error) {
+				return UnmarshalRGAPackedDeltaWithLimits(data, limits)
+			},
+		},
+	} {
+		b.Run(protocol.name, func(b *testing.B) {
+			encoded, err := protocol.marshal(delta)
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(int64(len(encoded)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for index := 0; index < b.N; index++ {
+				decoded, err := protocol.unmarshal(encoded)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(decoded.nodes) != runes {
+					b.Fatalf("decoded nodes = %d, want %d", len(decoded.nodes), runes)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkRGASmallDeltaFrameV2Encoders measures the local interactive edit
 // path separately from the large-paste benchmark above. It is an encoder-only
 // allocation baseline, not an end-to-end network or provider-latency claim.

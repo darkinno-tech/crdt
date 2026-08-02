@@ -4,6 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/DarkInno/crdt"
+	frame "github.com/DarkInno/crdt/encoding"
 )
 
 func TestRGAResolvedLinearRunPreservesTombstonesAndPendingReplay(t *testing.T) {
@@ -210,6 +213,81 @@ func TestRGADecodedDeltaCachesVerifiedCanonicalOrder(t *testing.T) {
 			}
 			if got := target.String(); got != source.String() {
 				t.Fatalf("decoded cached delta text = %q, want %q", got, source.String())
+			}
+		})
+	}
+}
+
+func TestRGASingleDecodedRunChainCycleFramesReject(t *testing.T) {
+	first := Position{ReplicaID: "cycle", WallTime: 1}
+	second := Position{ReplicaID: "cycle", WallTime: 2}
+	blocks := [][]runNode{{
+		{id: first, item: node{parent: second, rune: 'a'}},
+		{id: second, item: node{parent: first, rune: 'b'}},
+	}}
+	limits := frame.DefaultLimits()
+
+	runPayload, err := marshalRunPayload(blocks, nil, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runFrame, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDRGARunDelta, Payload: runPayload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnmarshalRGARunDelta(runFrame); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("cyclic run-v2 frame = %v, want %v", err, frame.ErrInvalidFrame)
+	}
+
+	packedPayload, err := marshalPackedRunPayload(makePackedRunBlocksFromRunBlocks(blocks), nil, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packedFrame, err := frame.MarshalFrame(frame.Frame{TypeID: crdt.TypeIDRGAPackedDelta, Payload: packedPayload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnmarshalRGAPackedDelta(packedFrame); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("cyclic packed-v3 frame = %v, want %v", err, frame.ErrInvalidFrame)
+	}
+}
+
+func TestRGASingleDecodedRunChainAllowsExternalParent(t *testing.T) {
+	source := mustRGA(t, "source")
+	base, err := source.Insert(0, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, err := source.Insert(1, strings.Repeat("x", resolvedRunFastPathMinNodes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, protocol := range []struct {
+		name      string
+		marshal   func() ([]byte, error)
+		unmarshal func([]byte) (Delta, error)
+	}{
+		{name: "run-v2", marshal: change.MarshalRunBinary, unmarshal: UnmarshalRGARunDelta},
+		{name: "packed-v3", marshal: change.MarshalPackedBinary, unmarshal: UnmarshalRGAPackedDelta},
+	} {
+		t.Run(protocol.name, func(t *testing.T) {
+			encoded, err := protocol.marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := protocol.unmarshal(encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := mustRGA(t, "target")
+			if err := target.ApplyDelta(base); err != nil {
+				t.Fatal(err)
+			}
+			if err := target.ApplyDelta(decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := target.String(), source.String(); got != want {
+				t.Fatalf("decoded external-parent chain = %q, want %q", got, want)
 			}
 		})
 	}

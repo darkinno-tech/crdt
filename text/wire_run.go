@@ -752,6 +752,8 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 	}
 	position = next
 	nodes := make(map[Position]node)
+	singleChain := blockCount == 1
+	var singleChainParent Position
 	for blockIndex := uint64(0); blockIndex < blockCount; blockIndex++ {
 		kind, next, ok := frame.ReadUvarint(decoded.Payload, position)
 		if !ok || kind > runBlockChain {
@@ -759,6 +761,7 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 		}
 		position = next
 		if kind == runBlockNode {
+			singleChain = false
 			id, item, next, ok := readRunNode(decoded.Payload, position, limits)
 			if !ok || len(nodes) >= limits.MaxElements {
 				return nil, nil, frame.ErrInvalidFrame
@@ -793,6 +796,9 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 				return nil, nil, frame.ErrInvalidFrame
 			}
 			position = next
+		}
+		if singleChain {
+			singleChainParent = parent
 		}
 		for index := uint64(0); index < count; index++ {
 			wallTime, next, ok := frame.ReadUvarint(decoded.Payload, position)
@@ -837,7 +843,11 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 		}
 		tombstones[id], position = struct{}{}, next
 	}
-	if position != len(decoded.Payload) || validateDelta(Delta{nodes: nodes, tombstones: tombstones}) != nil || !acyclicAgainst(nodes, nil) || (complete && !hasCompleteParents(nodes)) {
+	acyclic := singleChain && singleDecodedRunChainAcyclic(nodes, singleChainParent)
+	if !acyclic {
+		acyclic = acyclicAgainst(nodes, nil)
+	}
+	if position != len(decoded.Payload) || validateDelta(Delta{nodes: nodes, tombstones: tombstones}) != nil || !acyclic || (complete && !hasCompleteParents(nodes)) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	blocks, ids := makeRunBlocksWithCanonicalIDs(nodes)
