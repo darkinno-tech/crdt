@@ -527,7 +527,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decodedNodes, decodedTombstones, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, limits, true)
+	decodedNodes, decodedTombstones, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, limits, true, nil)
 	if err != nil || len(decodedNodes) != len(nodes) || len(decodedTombstones) != 1 {
 		t.Fatalf("packed state decode = nodes=%d tombstones=%d err=%v", len(decodedNodes), len(decodedTombstones), err)
 	}
@@ -536,7 +536,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 	}
 	decodeLimited := limits
 	decodeLimited.MaxElements = 1
-	if _, _, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, decodeLimited, true); !errors.Is(err, frame.ErrInvalidFrame) {
+	if _, _, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, decodeLimited, true, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("packed decode limit = %v", err)
 	}
 	pending := mustRGA(t, "packed-pending")
@@ -559,7 +559,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+			if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 				t.Fatalf("unmarshal invalid packed = %v", err)
 			}
 		})
@@ -574,7 +574,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+	if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("invalid packed chain parent flag = %v", err)
 	}
 }

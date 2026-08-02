@@ -150,6 +150,71 @@ func TestRGAResolvedLinearRunBatchIndexPreservesSiblingOrder(t *testing.T) {
 	assertRGASequenceMatchesBuild(t, target, allNodes, allTombstones)
 }
 
+func TestRGAResolvedLinearRunBatchIndexSupportsEligibleCompaction(t *testing.T) {
+	const count = resolvedRunFastPathMinNodes * 2
+	delta, ids := linearRunDeltaForTest(count)
+	for _, id := range ids {
+		delta.tombstones[id] = struct{}{}
+	}
+
+	target := mustRGA(t, "target")
+	if err := target.ApplyDelta(delta); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := target.CompactEligibleTombstones(ids)
+	if err != nil || removed != count {
+		t.Fatalf("CompactEligibleTombstones() = %d, %v; want %d, nil", removed, err, count)
+	}
+	if state := target.State(); state.ElementCount != 0 || state.TombstoneCount != 0 {
+		t.Fatalf("state after compacting batch-indexed run = %#v", state)
+	}
+}
+
+func TestRGADecodedDeltaCachesVerifiedCanonicalOrder(t *testing.T) {
+	const count = resolvedRunFastPathMinNodes * 2
+	source := mustRGA(t, "source")
+	change, err := source.Insert(0, strings.Repeat("x", count))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := change.NodePositions()
+	for _, protocol := range []struct {
+		name      string
+		marshal   func() ([]byte, error)
+		unmarshal func([]byte) (Delta, error)
+	}{
+		{name: "run-v2", marshal: change.MarshalRunBinary, unmarshal: UnmarshalRGARunDelta},
+		{name: "packed-v3", marshal: change.MarshalPackedBinary, unmarshal: UnmarshalRGAPackedDelta},
+	} {
+		t.Run(protocol.name, func(t *testing.T) {
+			encoded, err := protocol.marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := protocol.unmarshal(encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, cached := decoded.cachedCanonicalNodeIDs()
+			if !cached || len(got) != len(want) {
+				t.Fatalf("decoded canonical order = %d IDs, %t; want %d, true", len(got), cached, len(want))
+			}
+			for index := range want {
+				if got[index] != want[index] {
+					t.Fatalf("canonical ID %d = %#v, want %#v", index, got[index], want[index])
+				}
+			}
+			target := mustRGA(t, "target")
+			if err := target.ApplyDelta(decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := target.String(); got != source.String() {
+				t.Fatalf("decoded cached delta text = %q, want %q", got, source.String())
+			}
+		})
+	}
+}
+
 func linearRunDeltaForTest(count int) (Delta, []Position) {
 	return linearRunDeltaFromParentForTest(count, Position{})
 }

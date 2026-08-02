@@ -321,7 +321,15 @@ func writePackedRunPayload(payload []byte, blocks []packedRunBlock, tombstones [
 }
 
 func makePackedRunBlocks(nodes map[Position]node) []packedRunBlock {
-	return makePackedRunBlocksFromRunBlocks(makeRunBlocks(nodes))
+	blocks, _ := makePackedRunBlocksWithCanonicalIDs(nodes)
+	return blocks
+}
+
+// makePackedRunBlocksWithCanonicalIDs preserves the sorted IDs established by
+// packed-v3 canonical validation for the receiver's later ApplyDelta call.
+func makePackedRunBlocksWithCanonicalIDs(nodes map[Position]node) ([]packedRunBlock, []Position) {
+	blocks, ids := makeRunBlocksWithCanonicalIDs(nodes)
+	return makePackedRunBlocksFromRunBlocks(blocks), ids
 }
 
 func makePackedRunBlocksFromSortedItems(items []runNode) []packedRunBlock {
@@ -436,11 +444,12 @@ func UnmarshalRGAPackedDelta(data []byte) (Delta, error) {
 // UnmarshalRGAPackedDeltaWithLimits decodes one compact RGA v3 delta with
 // caller-selected resource limits.
 func UnmarshalRGAPackedDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, error) {
-	nodes, tombstones, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false)
+	var canonicalNodeIDs []Position
+	nodes, tombstones, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false, &canonicalNodeIDs)
 	if err != nil {
 		return Delta{}, err
 	}
-	return Delta{nodes: nodes, tombstones: tombstones}, nil
+	return Delta{nodes: nodes, tombstones: tombstones, canonicalNodeIDs: canonicalNodeIDs}, nil
 }
 
 // UnmarshalPackedBinary installs one complete compact RGA v3 state frame.
@@ -454,14 +463,17 @@ func (r *RGA) UnmarshalPackedBinaryWithLimits(data []byte, limits frame.DecoderL
 	if r == nil || r.clock == nil {
 		return ErrNilText
 	}
-	nodes, tombstones, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedState, limits, true)
+	nodes, tombstones, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedState, limits, true, nil)
 	if err != nil {
 		return err
 	}
 	return r.installState(nodes, tombstones)
 }
 
-func unmarshalRGAPacked(data []byte, expectedType uint64, limits frame.DecoderLimits, complete bool) (map[Position]node, map[Position]struct{}, error) {
+// unmarshalRGAPacked records canonicalNodeIDs only after input limits,
+// semantic validation, and the exact canonical-byte comparison all succeed.
+// The private cache is revalidated by ApplyDelta before it can affect work.
+func unmarshalRGAPacked(data []byte, expectedType uint64, limits frame.DecoderLimits, complete bool, canonicalNodeIDs *[]Position) (map[Position]node, map[Position]struct{}, error) {
 	decoded, err := frame.UnmarshalFrame(data, limits)
 	if err != nil {
 		return nil, nil, err
@@ -536,9 +548,13 @@ func unmarshalRGAPacked(data []byte, expectedType uint64, limits frame.DecoderLi
 	if position != len(decoded.Payload) || validateDelta(Delta{nodes: nodes, tombstones: tombstones}) != nil || !acyclicAgainst(nodes, nil) || (complete && !hasCompleteParents(nodes)) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
-	canonical, err := marshalPackedRunPayload(makePackedRunBlocks(nodes), sortedTombstoneIDs(tombstones), limits)
+	blocks, ids := makePackedRunBlocksWithCanonicalIDs(nodes)
+	canonical, err := marshalPackedRunPayload(blocks, sortedTombstoneIDs(tombstones), limits)
 	if err != nil || !bytes.Equal(canonical, decoded.Payload) {
 		return nil, nil, frame.ErrInvalidFrame
+	}
+	if canonicalNodeIDs != nil {
+		*canonicalNodeIDs = ids
 	}
 	return nodes, tombstones, nil
 }

@@ -211,9 +211,9 @@ func rgaSnapshotState(base snapshot.Snapshot, limits frame.DecoderLimits) (uint6
 	case crdt.TypeIDRGAState:
 		nodes, tombstones, err = unmarshalRGA(data, crdt.TypeIDRGAState, limits, true)
 	case crdt.TypeIDRGARunState:
-		nodes, tombstones, err = unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true)
+		nodes, tombstones, err = unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true, nil)
 	case crdt.TypeIDRGAPackedState:
-		nodes, tombstones, err = unmarshalRGAPacked(data, crdt.TypeIDRGAPackedState, limits, true)
+		nodes, tombstones, err = unmarshalRGAPacked(data, crdt.TypeIDRGAPackedState, limits, true, nil)
 	default:
 		return 0, nil, nil, ErrInvalidSnapshot
 	}

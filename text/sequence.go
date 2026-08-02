@@ -56,13 +56,18 @@ func newSequencePair(position Position, visible bool) *sequencePair {
 // the pointer in both its map and marker tree.
 func initializeSequencePair(pair *sequencePair, position Position, visible bool) {
 	*pair = sequencePair{position: position}
-	pair.entry = sequenceMarker{pair: pair, visible: visible, priority: markerPriority(position, false)}
-	pair.exit = sequenceMarker{pair: pair, priority: markerPriority(position, true)}
+	entryPriority, exitPriority := markerPriorities(position)
+	pair.entry = sequenceMarker{pair: pair, visible: visible, priority: entryPriority}
+	pair.exit = sequenceMarker{pair: pair, priority: exitPriority}
 	refreshMarker(&pair.entry)
 	refreshMarker(&pair.exit)
 }
 
-func markerPriority(position Position, exit bool) uint64 {
+// markerPriorities derives the entry and exit priorities from one Position
+// hash. A sequence pair always owns both markers, so hashing the replica ID
+// twice would only add work to large linear runs. The mixing remains exactly
+// the same as markerPriority's prior per-marker calculation.
+func markerPriorities(position Position) (uint64, uint64) {
 	// A stable, well-mixed priority keeps the treap independent of arrival
 	// order. It affects only internal shape; RGA ordering is always tag based.
 	value := uint64(0x9e3779b97f4a7c15)
@@ -72,14 +77,26 @@ func markerPriority(position Position, exit bool) uint64 {
 	}
 	value ^= position.WallTime + 0x9e3779b97f4a7c15 + (value << 6) + (value >> 2)
 	value ^= position.Logical + 0x9e3779b97f4a7c15 + (value << 6) + (value >> 2)
-	if exit {
-		value ^= 0xd6e8feb86659fd93
-	}
+	return mixMarkerPriority(value), mixMarkerPriority(value ^ 0xd6e8feb86659fd93)
+}
+
+func mixMarkerPriority(value uint64) uint64 {
 	value ^= value >> 30
 	value *= 0xbf58476d1ce4e5b9
 	value ^= value >> 27
 	value *= 0x94d049bb133111eb
 	return value ^ (value >> 31)
+}
+
+// markerPriority keeps the single-marker helper available to sequence tests
+// and callers within this package while pair construction uses the shared
+// hashing path above.
+func markerPriority(position Position, exit bool) uint64 {
+	entryPriority, exitPriority := markerPriorities(position)
+	if exit {
+		return exitPriority
+	}
+	return entryPriority
 }
 
 func markerCount(marker *sequenceMarker) int {

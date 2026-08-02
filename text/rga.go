@@ -1012,20 +1012,25 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 	for index, id := range ids {
 		item := delta.nodes[id]
 		r.nodes[id] = item
-		parent := r.sequence.pair(item.parent)
-		if index > 0 {
-			parent = &pairs[index-1]
-		}
-		if parent == nil {
-			panic("text: integrating resolved linear run without integrated parent")
-		}
-		previous, hasPrevious := r.children.insert(parent, &pairs[index])
 		if index == 0 {
+			parent := r.sequence.pair(item.parent)
+			if parent == nil {
+				panic("text: integrating resolved linear run without integrated parent")
+			}
+			previous, hasPrevious := r.children.insert(parent, &pairs[index])
 			anchor = &parent.entry
 			if hasPrevious {
 				anchor = &previous.exit
 			}
+			continue
 		}
+		// resolvedLinearRunLocked proved that every non-first node is a
+		// new child of the preceding pair. Those parents cannot yet have a
+		// sibling, so writing their inline child index directly avoids an
+		// otherwise redundant branches-map lookup for every rune in a paste
+		// or initial-sync run. The first node still uses childIndex.insert to
+		// preserve deterministic placement among existing siblings.
+		pairs[index-1].singleChild = &pairs[index]
 	}
 	r.sequence.insertLinearPairsAfter(anchor, pairs)
 	changed := len(ids) > 0
