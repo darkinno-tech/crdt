@@ -48,6 +48,27 @@ func (r *RGA) MarshalPackedBinaryWithLimits(limits frame.DecoderLimits) ([]byte,
 	return marshalRGAPackedState(state, limits)
 }
 
+// MarshalPackedFrameV2 encodes complete packed RGA v3 state in the separately
+// negotiated compression-aware outer frame v2. It preserves the packed-v3
+// payload and scalar Position semantics; only the outer representation changes.
+func (r *RGA) MarshalPackedFrameV2() ([]byte, error) {
+	return r.MarshalPackedFrameV2WithLimits(frame.DefaultLimits())
+}
+
+// MarshalPackedFrameV2WithLimits encodes complete packed RGA v3 state in a
+// bounded outer frame v2. Peers must negotiate frame.FormatVersionV2 before
+// accepting it.
+func (r *RGA) MarshalPackedFrameV2WithLimits(limits frame.DecoderLimits) ([]byte, error) {
+	if r == nil {
+		return nil, ErrNilText
+	}
+	state, _, err := r.captureRunState(false)
+	if err != nil {
+		return nil, err
+	}
+	return marshalRGAPackedStateFrameV2(state, limits)
+}
+
 // MarshalPackedBinary encodes one delta with compact dense local HLC chains.
 // Its TypeID is distinct from stable run-v2 and requires PackedFrameType.
 func (d Delta) MarshalPackedBinary() ([]byte, error) {
@@ -59,7 +80,31 @@ func (d Delta) MarshalPackedBinaryWithLimits(limits frame.DecoderLimits) ([]byte
 	return marshalRGAPacked(crdt.TypeIDRGAPackedDelta, d.nodes, d.tombstones, limits)
 }
 
+// MarshalPackedFrameV2 encodes a packed-v3 delta in the separately negotiated
+// compression-aware outer frame v2. The decoded payload remains canonical
+// packed-v3 bytes.
+func (d Delta) MarshalPackedFrameV2() ([]byte, error) {
+	return d.MarshalPackedFrameV2WithLimits(frame.DefaultLimits())
+}
+
+// MarshalPackedFrameV2WithLimits encodes a bounded packed-v3 delta in outer
+// frame v2. It may select a raw v2 payload for a small edit, so callers must
+// negotiate v2 even when DEFLATE is not selected.
+func (d Delta) MarshalPackedFrameV2WithLimits(limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGAPackedFrameV2(crdt.TypeIDRGAPackedDelta, d.nodes, d.tombstones, limits)
+}
+
+type packedRunBlockEncoder func(uint64, []packedRunBlock, []Position, frame.DecoderLimits) ([]byte, error)
+
 func marshalRGAPacked(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGAPackedWithEncoder(typeID, nodes, tombstones, limits, marshalPackedRunBlocks)
+}
+
+func marshalRGAPackedFrameV2(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGAPackedWithEncoder(typeID, nodes, tombstones, limits, marshalPackedRunFrameV2Blocks)
+}
+
+func marshalRGAPackedWithEncoder(typeID uint64, nodes map[Position]node, tombstones map[Position]struct{}, limits frame.DecoderLimits, encode packedRunBlockEncoder) ([]byte, error) {
 	delta := Delta{nodes: nodes, tombstones: tombstones}
 	if err := validateDelta(delta); err != nil {
 		return nil, err
@@ -70,10 +115,18 @@ func marshalRGAPacked(typeID uint64, nodes map[Position]node, tombstones map[Pos
 	if len(nodes) > limits.MaxElements || len(nodes) > limits.MaxTags || len(tombstones) > limits.MaxTags-len(nodes) {
 		return nil, frame.ErrFrameLimit
 	}
-	return marshalPackedRunBlocks(typeID, makePackedRunBlocks(nodes), sortedTombstoneIDs(tombstones), limits)
+	return encode(typeID, makePackedRunBlocks(nodes), sortedTombstoneIDs(tombstones), limits)
 }
 
 func marshalRGAPackedState(state rgaRunState, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGAPackedStateWithEncoder(state, limits, marshalPackedRunBlocks)
+}
+
+func marshalRGAPackedStateFrameV2(state rgaRunState, limits frame.DecoderLimits) ([]byte, error) {
+	return marshalRGAPackedStateWithEncoder(state, limits, marshalPackedRunFrameV2Blocks)
+}
+
+func marshalRGAPackedStateWithEncoder(state rgaRunState, limits frame.DecoderLimits, encode packedRunBlockEncoder) ([]byte, error) {
 	if len(state.nodes) > limits.MaxElements || len(state.nodes) > limits.MaxTags || len(state.tombstones) > limits.MaxTags-len(state.nodes) {
 		return nil, frame.ErrFrameLimit
 	}
@@ -86,7 +139,7 @@ func marshalRGAPackedState(state rgaRunState, limits frame.DecoderLimits) ([]byt
 	if _, err := validateCompleteRunState(state); err != nil {
 		return nil, err
 	}
-	return marshalPackedRunBlocks(crdt.TypeIDRGAPackedState, makePackedRunBlocksFromSortedItems(state.nodes), state.tombstones, limits)
+	return encode(crdt.TypeIDRGAPackedState, makePackedRunBlocksFromSortedItems(state.nodes), state.tombstones, limits)
 }
 
 func marshalPackedRunBlocks(typeID uint64, blocks []packedRunBlock, tombstones []Position, limits frame.DecoderLimits) ([]byte, error) {
@@ -95,6 +148,19 @@ func marshalPackedRunBlocks(typeID uint64, blocks []packedRunBlock, tombstones [
 		return nil, err
 	}
 	return frame.MarshalFrameWithPayloadAndLimits(typeID, "", payloadSize, limits, func(payload []byte) error {
+		return writePackedRunPayload(payload, blocks, tombstones)
+	})
+}
+
+// marshalPackedRunFrameV2Blocks writes the canonical packed-v3 payload
+// directly into the outer-v2 encoder. This keeps the compressed initial-sync
+// path bounded without constructing an intermediate v1 envelope.
+func marshalPackedRunFrameV2Blocks(typeID uint64, blocks []packedRunBlock, tombstones []Position, limits frame.DecoderLimits) ([]byte, error) {
+	payloadSize, err := packedRunPayloadSize(blocks, tombstones, limits)
+	if err != nil {
+		return nil, err
+	}
+	return frame.MarshalFrameV2WithPayloadAndLimits(typeID, "", payloadSize, limits, func(payload []byte) error {
 		return writePackedRunPayload(payload, blocks, tombstones)
 	})
 }
@@ -658,6 +724,30 @@ func (r *RGA) SnapshotPackedCurrentStateWithLimits(limits frame.DecoderLimits) (
 		return snapshot.Snapshot{}, err
 	}
 	state, err := marshalRGAPackedState(captured, limits)
+	if err != nil {
+		return snapshot.Snapshot{}, err
+	}
+	return snapshot.NewWithClockState(state, frontierForRunState(captured), clockState)
+}
+
+// SnapshotPackedFrameV2CurrentState returns an HLC-backed packed-v3 snapshot
+// in the separately negotiated compression-aware outer frame v2.
+func (r *RGA) SnapshotPackedFrameV2CurrentState() (snapshot.Snapshot, error) {
+	return r.SnapshotPackedFrameV2CurrentStateWithLimits(frame.DefaultLimits())
+}
+
+// SnapshotPackedFrameV2CurrentStateWithLimits returns a bounded packed-v3
+// snapshot in outer frame v2. Persist its state, frontier, and clock atomically
+// before reusing the same replica ID.
+func (r *RGA) SnapshotPackedFrameV2CurrentStateWithLimits(limits frame.DecoderLimits) (snapshot.Snapshot, error) {
+	if r == nil || r.clock == nil {
+		return snapshot.Snapshot{}, ErrNilText
+	}
+	captured, clockState, err := r.captureRunState(true)
+	if err != nil {
+		return snapshot.Snapshot{}, err
+	}
+	state, err := marshalRGAPackedStateFrameV2(captured, limits)
 	if err != nil {
 		return snapshot.Snapshot{}, err
 	}

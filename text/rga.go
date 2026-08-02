@@ -450,6 +450,15 @@ func (r *RGA) InsertPackedBinaryWithLimits(offset int, value string, limits fram
 	return encoded, err
 }
 
+// InsertPackedFrameV2WithLimits inserts text and returns the same preflighted
+// packed-v3 delta in a separately negotiated outer frame v2. The RGA payload
+// is unchanged; DEFLATE is selected only when it reduces the final bounded
+// frame.
+func (r *RGA) InsertPackedFrameV2WithLimits(offset int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.insert(offset, value, &limits, Delta.MarshalPackedFrameV2WithLimits)
+	return encoded, err
+}
+
 // InsertRunFrameV2WithLimits inserts text and returns the same preflighted
 // run-v2 delta in a separately negotiated outer frame v2. The RGA payload is
 // unchanged; the outer representation may use DEFLATE only when it reduces
@@ -473,6 +482,14 @@ func (r *RGA) PrepareInsertRunBinaryWithLimits(offset int, value string, limits 
 // caller abandons the surrounding transaction.
 func (r *RGA) PrepareInsertPackedBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareInsert(offset, value, &limits, Delta.MarshalPackedBinaryWithLimits)
+}
+
+// PrepareInsertPackedFrameV2WithLimits returns a preflighted packed-v3
+// insertion delta in a separately negotiated outer frame v2 without applying
+// it. Reserved HLC tags remain safe to skip when a caller abandons the
+// surrounding transaction.
+func (r *RGA) PrepareInsertPackedFrameV2WithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareInsert(offset, value, &limits, Delta.MarshalPackedFrameV2WithLimits)
 }
 
 // PrepareInsertRunFrameV2WithLimits returns a preflighted run-v2 insertion
@@ -590,6 +607,14 @@ func (r *RGA) DeletePackedBinaryWithLimits(offset, count int, limits frame.Decod
 	return encoded, err
 }
 
+// DeletePackedFrameV2WithLimits deletes visible text and returns the same
+// preflighted packed-v3 tombstone delta in a separately negotiated outer frame
+// v2. Callers must bind frame.FormatVersionV2 in their manifest.
+func (r *RGA) DeletePackedFrameV2WithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.delete(offset, count, &limits, Delta.MarshalPackedFrameV2WithLimits)
+	return encoded, err
+}
+
 // DeleteRunFrameV2WithLimits deletes visible text and returns the same
 // preflighted run-v2 tombstone delta in a separately negotiated outer frame
 // v2. Callers must bind frame.FormatVersionV2 in their manifest.
@@ -620,6 +645,13 @@ func (r *RGA) ReplaceRunBinaryWithLimits(offset, count int, value string, limits
 // compact RGA v3 delta. Frame or retention rejection leaves r unchanged.
 func (r *RGA) ReplacePackedBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
 	encoded, err := r.replace(offset, count, value, limits, Delta.MarshalPackedBinaryWithLimits)
+	return encoded, err
+}
+
+// ReplacePackedFrameV2WithLimits atomically replaces visible text and returns
+// one preflighted packed-v3 delta in a separately negotiated outer frame v2.
+func (r *RGA) ReplacePackedFrameV2WithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	encoded, err := r.replace(offset, count, value, limits, Delta.MarshalPackedFrameV2WithLimits)
 	return encoded, err
 }
 
@@ -667,6 +699,13 @@ func (r *RGA) PrepareDeleteRunBinaryWithLimits(offset, count int, limits frame.D
 // delta without mutating r.
 func (r *RGA) PrepareDeletePackedBinaryWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareDelete(offset, count, &limits, Delta.MarshalPackedBinaryWithLimits)
+}
+
+// PrepareDeletePackedFrameV2WithLimits returns a preflighted packed-v3
+// deletion delta in a separately negotiated outer frame v2 without applying
+// it.
+func (r *RGA) PrepareDeletePackedFrameV2WithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareDelete(offset, count, &limits, Delta.MarshalPackedFrameV2WithLimits)
 }
 
 // PrepareDeleteRunFrameV2WithLimits returns a preflighted run-v2 deletion
