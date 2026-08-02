@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import {
   CRDTRuntimeError,
   RGA_PROTOCOL_PACKED_V3,
+  RGA_PROTOCOL_PACKED_V3_V2,
   RGA_PROTOCOL_RUN_V2,
   RGA_PROTOCOL_V1,
   initRGAWasm,
@@ -49,7 +50,8 @@ function protocolForArtifact(value) {
   if (value === undefined || value === "run-v2") return RGA_PROTOCOL_RUN_V2;
   if (value === "v1") return RGA_PROTOCOL_V1;
   if (value === "packed-v3") return RGA_PROTOCOL_PACKED_V3;
-  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, or v1");
+  if (value === "packed-v3-v2") return RGA_PROTOCOL_PACKED_V3_V2;
+  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, packed-v3-v2, or v1");
 }
 
 async function startAssetServer(directory) {
