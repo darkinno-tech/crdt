@@ -110,6 +110,50 @@ target storage, TLS, identity provider, WAN loss, checkpoint latency, or
 production quota. It must not be used to set fleet capacity or durable receipt
 SLOs.
 
+## Follow-up: prove the single-chain graph shape before walking it
+
+A second receiver profile, taken after canonical-order reuse, still showed the
+general `acyclicAgainst` walk consuming 0.63 s (13.38% cumulative samples) on
+the canonical large-paste workload. That walk is necessary for a partial,
+branching, multi-block, or reordered delta. It is redundant for exactly one
+fully decoded chain block: the decoder has already checked every later node's
+implicit edge to its immediate predecessor, so the first node's parent is the
+only edge that can return to any node in the frame.
+
+The decoder now uses that O(1) proof only when the payload has exactly one
+chain block. It rejects the frame when the first parent is present in the
+decoded node set; an absent first parent remains a valid out-of-order delta.
+All node blocks, multi-block payloads, and any shape not proven single-chain
+continue through the former full `acyclicAgainst` traversal. Canonical-byte
+comparison, complete-state parent checks, and `ApplyDelta` validation remain
+unchanged.
+
+The test matrix adds both sides of the proof for run-v2 and packed-v3:
+
+- a byte-canonical two-node loop is rejected before returning a delta;
+- a valid single chain whose first parent is outside the delta decodes, then
+  converges after the retained parent arrives at the receiver.
+
+### Controlled before/after measurement
+
+This comparison used a clean detached worktree at `17728f3` for the baseline
+and the same host, Go version, limits, frame bytes, sample count, and benchmark
+code for the candidate. The detached worktree added only the decode benchmark
+and was removed after measurement. Values are five medians of three operations
+each for a canonical 100,000-rune linear frame.
+
+| Layer | Protocol | Baseline median | Candidate median | Time change | Baseline alloc/op | Candidate alloc/op | Allocation change |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Decode only | run-v2 | 36.245 ms | 23.474 ms | -35.2% | 54.12 MB | 32.37 MB | -21.76 MB (-40.2%) |
+| Decode only | packed-v3 | 36.300 ms | 24.042 ms | -33.8% | 55.04 MB | 32.73 MB | -22.31 MB (-40.5%) |
+| Decode + fresh install | run-v2 | 56.365 ms | 44.149 ms | -21.7% | 91.10 MB | 69.16 MB | -21.94 MB (-24.1%) |
+| Decode + fresh install | packed-v3 | 57.575 ms | 44.546 ms | -22.6% | 91.11 MB | 69.53 MB | -21.58 MB (-23.7%) |
+
+The candidate pprof contains no `acyclicAgainst` samples on either canonical
+single-chain benchmark. Canonical map sorting remains the intentional dominant
+cost because it is still the compatibility and input-normalization boundary;
+this change does not treat a sender's chain claim as trusted.
+
 ## Reproduction and follow-up
 
 Run the focused receiver benchmark, the multi-replica simulations, race test,
