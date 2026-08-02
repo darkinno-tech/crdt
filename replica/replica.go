@@ -244,9 +244,10 @@ func (f Frontier) valid() bool {
 // dot. The dot is a delivery/accounting identity, not a replacement for the
 // CRDT's own mutation tags inside the delta payload.
 type Change struct {
-	Dot      Dot
-	manifest Manifest
-	delta    []byte
+	Dot       Dot
+	manifest  Manifest
+	delta     []byte
+	validated bool
 }
 
 // NewChange validates that delta belongs to manifest's exact delta protocol
@@ -266,7 +267,10 @@ func NewChangeWithPolicy(manifest Manifest, dot Dot, delta []byte, policy crdt.P
 	if err != nil || decoded.Version() != manifest.Protocol.FrameFormatVersion() || decoded.TypeID != manifest.Protocol.DeltaID || decoded.CodecID != manifest.Protocol.CodecID {
 		return Change{}, ErrInvalidChange
 	}
-	return Change{Dot: dot, manifest: manifest, delta: append([]byte(nil), delta...)}, nil
+	// Change owns this copy and its private fields cannot be modified by callers
+	// outside this package. Receive still validates the dot and manifest on every
+	// delivery, but can avoid reparsing this already checked frame.
+	return Change{Dot: dot, manifest: manifest, delta: append([]byte(nil), delta...), validated: true}, nil
 }
 
 // Delta returns an owned copy of the canonical delta frame.
@@ -278,6 +282,9 @@ func (c Change) validate(manifest Manifest) error {
 	}
 	if err := manifest.Compatible(c.manifest); err != nil {
 		return err
+	}
+	if c.validated {
+		return nil
 	}
 	decoded, err := frame.UnmarshalFrame(c.delta, frame.DefaultLimits())
 	if err != nil || decoded.Version() != manifest.Protocol.FrameFormatVersion() || decoded.TypeID != manifest.Protocol.DeltaID || decoded.CodecID != manifest.Protocol.CodecID {

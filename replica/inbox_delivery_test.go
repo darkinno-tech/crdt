@@ -49,6 +49,34 @@ func TestInboxDeliveryClassifiesInstalledAndBufferedDuplicates(t *testing.T) {
 	}
 }
 
+func TestInboxRejectsUnvalidatedInternallyConstructedChange(t *testing.T) {
+	manifest, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
+		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1,
+	}, crdt.ProtocolPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	frontier, err := NewFrontier(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := NewInbox(manifest, frontier, 1, 1024, func([]byte) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := Change{
+		Dot:      Dot{Actor: "writer", Counter: 1},
+		manifest: manifest,
+		delta:    []byte("not a frame"),
+	}
+	if _, err := inbox.Receive(forged); err != ErrInvalidChange {
+		t.Fatalf("Receive(unvalidated forged change) = %v, want %v", err, ErrInvalidChange)
+	}
+	if got := inbox.Frontier().Counter("writer"); got != 0 {
+		t.Fatalf("forged change advanced frontier to %d", got)
+	}
+}
+
 func TestSimulatedInboxClassifiesDuplicatedOutOfOrderDelivery(t *testing.T) {
 	manifest, err := NewManifest("counter", "example.com/counter/v1", 1, Protocol{
 		StateID: crdt.TypeIDGCounterState, DeltaID: crdt.TypeIDGCounterDelta, SemanticsVersion: 1,
