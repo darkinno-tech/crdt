@@ -177,7 +177,7 @@ session on your behalf.
 Run the complete duplicate/reordered example:
 
 ```sh
-go run ./examples/shared-document
+(cd examples && go run ./shared-document)
 # title=Release plan
 # task=release-notes
 # done=false

@@ -49,6 +49,9 @@ func TestCompareHelpersAndInvalidArguments(t *testing.T) {
 	if protocol, err := parseProtocol(string(protocolPackedV3)); err != nil || protocol != protocolPackedV3 {
 		t.Fatalf("parseProtocol = %q, %v", protocol, err)
 	}
+	if protocol, err := parseProtocol(string(protocolPackedV3OuterV2)); err != nil || protocol != protocolPackedV3OuterV2 {
+		t.Fatalf("parseProtocol outer v2 = %q, %v", protocol, err)
+	}
 	if _, err := parseProtocol("unknown"); err == nil {
 		t.Fatal("parseProtocol accepted an unknown protocol")
 	}
@@ -73,6 +76,23 @@ func TestComparePackedProtocolReportsCompactFrames(t *testing.T) {
 	}
 	if reports[0].UpdateBytes >= reports[0].Runes*2 {
 		t.Fatalf("packed update = %d bytes for %d runes; expected compact dense frame", reports[0].UpdateBytes, reports[0].Runes)
+	}
+}
+
+func TestComparePackedOuterV2ReportsCompressedFrames(t *testing.T) {
+	var output bytes.Buffer
+	if err := run([]string{"-protocol", "packed-v3-v2", "-sizes", "4096", "-samples", "1", "-warmups", "0", "-iterations", "1"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var reports []report
+	if err := json.Unmarshal(output.Bytes(), &reports); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 || reports[0].Protocol != string(protocolPackedV3OuterV2) || reports[0].Implementation != protocolPackedV3OuterV2.implementation() {
+		t.Fatalf("packed outer-v2 reports = %#v", reports)
+	}
+	if reports[0].UpdateBytes >= reports[0].Runes {
+		t.Fatalf("packed outer-v2 update = %d bytes for %d runes; expected DEFLATE reduction", reports[0].UpdateBytes, reports[0].Runes)
 	}
 }
 

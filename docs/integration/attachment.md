@@ -8,8 +8,8 @@ Use the [runnable attachment collaboration example](../../examples/attachment-co
 for the complete text + attachment + manifest + snapshot + verification flow:
 
 ```sh
-go run ./examples/attachment-collaboration
-go test ./examples/attachment-collaboration
+(cd examples && go run ./attachment-collaboration)
+(cd examples && go test ./attachment-collaboration)
 ```
 
 ## What is replicated
@@ -99,5 +99,5 @@ go test ./attachment
 go test -race ./attachment
 go test -run=^$ -fuzz=FuzzUnmarshalDelta -fuzztime=250000x ./attachment
 go test -run=^$ -fuzz=FuzzReferenceVerify -fuzztime=250000x ./attachment
-go test ./examples/attachment-collaboration
+(cd examples && go test ./attachment-collaboration)
 ```

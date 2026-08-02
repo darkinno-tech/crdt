@@ -78,10 +78,11 @@ room 必须在启动时配置；不可信 URL 不能创建会被服务端保留�
 
 ```go
 room, err := extensions.NewYJSRoom(extensions.YJSRoomConfig{
-    Name:            "notes",
-    MaxUpdateBytes:  1 << 20,
-    MaxHistoryBytes: 8 << 20,
-    MaxUpdates:      256,
+    Name:                   "notes",
+    MaxUpdateBytes:         1 << 20,
+    MaxHistoryBytes:        8 << 20,
+    MaxUpdates:             256,
+    MaxAwarenessTombstones: 256, // 仅保留 clock；零值采用该默认值
 })
 if err != nil { return err }
 
@@ -106,9 +107,11 @@ mux.Handle("/yjs/", http.StripPrefix("/yjs", handler))
 ```
 
 handler 禁用 per-message compression，并限制 read、单消息、queue、history、update 和
-awareness client 数量。慢 peer 会被断开，不会造成无界应用内存队列。最新 awareness client ID
-绑定到已认证连接；其他连接转发的相同或更旧状态仍允许通过，因为 `y-websocket` 会主动重新广播
-它们；来自另一连接的更新 clock 则会关闭发送端。
+awareness client 数量。慢 peer 会被断开，不会造成无界应用内存队列。活跃 awareness client ID
+绑定到精确 WebSocket，而非仅绑定已认证主体，因此同一用户第二个浏览器 tab 不会因第一个 tab
+断开而被移除。relay 接受标准的同 clock `null` 下线状态，并只保留有上限的
+clock/owner tombstone（不保留 awareness JSON），以阻止延迟到达的旧状态复活 ghost cursor。
+相同或更旧的非空重传会被安全忽略；来自另一连接的当前竞争状态会关闭其发送端。
 
 ## 持久化和恢复边界
 
@@ -141,9 +144,9 @@ Yjs update bytes，因为二者恢复与授权契约不同。
 ## 验证和性能范围
 
 ```sh
-go test ./extensions -run 'TestYJS|FuzzUnmarshalYJSMessages'
-go test -race ./extensions -run 'TestYJS'
-go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s ./extensions
+(cd extensions && go test . -run 'TestYJS|FuzzUnmarshalYJSMessages')
+(cd extensions && go test -race . -run 'TestYJS')
+(cd extensions && go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s .)
 ```
 
 该 benchmark 仅测量本地 wire decode 和 duplicate-aware 内存 admission，不代表浏览器、TLS、WAN、

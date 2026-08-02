@@ -24,6 +24,14 @@ New browser groups use run-v2 by default. A large-text group may instead build
 semantics version `3`, and compatible resource limits. The artifact accepts
 only that one frame pair: it never falls back to v1 or run-v2.
 
+If initial snapshots dominate a dense, compressible text workload, build the
+separate `WASM_RGA_PROTOCOL=packed-v3-v2` artifact and pass
+`RGA_PROTOCOL_PACKED_V3_V2`. Its Manifest must additionally bind
+`WireFormatVersion: frame.FormatVersionV2`; it cannot exchange frames with the
+ordinary packed-v3 artifact. This is a transfer/persistence byte optimization,
+not an authentication, confidentiality, or network-capacity feature. Keep the
+existing input, transport, queue, and retained-state limits.
+
 ```ts
 const binding = bindQuillPlainText(document, quill, {
   initialContent: "editor", // explicit one-time import; default is document

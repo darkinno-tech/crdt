@@ -542,14 +542,23 @@ func runPayloadSizeWithTombstoneIDs(blocks [][]runNode, tombIDs []Position, limi
 }
 
 func makeRunBlocks(nodes map[Position]node) [][]runNode {
+	blocks, _ := makeRunBlocksWithCanonicalIDs(nodes)
+	return blocks
+}
+
+// makeRunBlocksWithCanonicalIDs returns the canonical tag order alongside the
+// canonical blocks. Decoders already need this order to reject non-canonical
+// wire payloads, so a successfully validated delta can reuse it as a private
+// ApplyDelta hint instead of sorting the same untrusted map a second time.
+func makeRunBlocksWithCanonicalIDs(nodes map[Position]node) ([][]runNode, []Position) {
 	ids := sortedNodeIDs(nodes)
 	if len(ids) == 0 {
-		return nil
+		return nil, ids
 	}
 	if block, ok := singleRunBlock(ids, nodes); ok {
-		return [][]runNode{block}
+		return [][]runNode{block}, ids
 	}
-	return makeRunBlocksFromSortedIDs(ids, nodes)
+	return makeRunBlocksFromSortedIDs(ids, nodes), ids
 }
 
 // singleRunBlock recognizes the common local-insert shape without building a
@@ -674,11 +683,12 @@ func UnmarshalRGARunDeltaWithLimits(data []byte, limits frame.DecoderLimits) (De
 }
 
 func unmarshalRGARunDeltaWithLimits(data []byte, limits frame.DecoderLimits) (Delta, error) {
-	nodes, tombstones, err := unmarshalRGARun(data, crdt.TypeIDRGARunDelta, limits, false)
+	var canonicalNodeIDs []Position
+	nodes, tombstones, err := unmarshalRGARun(data, crdt.TypeIDRGARunDelta, limits, false, &canonicalNodeIDs)
 	if err != nil {
 		return Delta{}, err
 	}
-	return Delta{nodes: nodes, tombstones: tombstones}, nil
+	return Delta{nodes: nodes, tombstones: tombstones, canonicalNodeIDs: canonicalNodeIDs}, nil
 }
 
 // UnmarshalRunBinary installs one complete run-v2 RGA state frame.
@@ -692,7 +702,7 @@ func (r *RGA) UnmarshalRunBinaryWithLimits(data []byte, limits frame.DecoderLimi
 	if r == nil || r.clock == nil {
 		return ErrNilText
 	}
-	nodes, tombstones, err := unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true)
+	nodes, tombstones, err := unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true, nil)
 	if err != nil {
 		return err
 	}
@@ -723,7 +733,11 @@ func (r *RGA) installState(nodes map[Position]node, tombstones map[Position]stru
 	return nil
 }
 
-func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimits, complete bool) (map[Position]node, map[Position]struct{}, error) {
+// unmarshalRGARun accepts an optional canonicalNodeIDs output only for deltas.
+// It is populated after the exact canonical-byte comparison and remains an
+// optimization hint: ApplyDelta validates both membership and ordering before
+// use, so decoded input never bypasses semantic or resource checks.
+func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimits, complete bool, canonicalNodeIDs *[]Position) (map[Position]node, map[Position]struct{}, error) {
 	decoded, err := frame.UnmarshalFrame(data, limits)
 	if err != nil {
 		return nil, nil, err
@@ -738,6 +752,8 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 	}
 	position = next
 	nodes := make(map[Position]node)
+	singleChain := blockCount == 1
+	var singleChainParent Position
 	for blockIndex := uint64(0); blockIndex < blockCount; blockIndex++ {
 		kind, next, ok := frame.ReadUvarint(decoded.Payload, position)
 		if !ok || kind > runBlockChain {
@@ -745,6 +761,7 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 		}
 		position = next
 		if kind == runBlockNode {
+			singleChain = false
 			id, item, next, ok := readRunNode(decoded.Payload, position, limits)
 			if !ok || len(nodes) >= limits.MaxElements {
 				return nil, nil, frame.ErrInvalidFrame
@@ -779,6 +796,9 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 				return nil, nil, frame.ErrInvalidFrame
 			}
 			position = next
+		}
+		if singleChain {
+			singleChainParent = parent
 		}
 		for index := uint64(0); index < count; index++ {
 			wallTime, next, ok := frame.ReadUvarint(decoded.Payload, position)
@@ -823,12 +843,20 @@ func unmarshalRGARun(data []byte, expectedType uint64, limits frame.DecoderLimit
 		}
 		tombstones[id], position = struct{}{}, next
 	}
-	if position != len(decoded.Payload) || validateDelta(Delta{nodes: nodes, tombstones: tombstones}) != nil || !acyclicAgainst(nodes, nil) || (complete && !hasCompleteParents(nodes)) {
+	acyclic := singleChain && singleDecodedRunChainAcyclic(nodes, singleChainParent)
+	if !acyclic {
+		acyclic = acyclicAgainst(nodes, nil)
+	}
+	if position != len(decoded.Payload) || validateDelta(Delta{nodes: nodes, tombstones: tombstones}) != nil || !acyclic || (complete && !hasCompleteParents(nodes)) {
 		return nil, nil, frame.ErrInvalidFrame
 	}
-	canonical, err := marshalRunPayload(makeRunBlocks(nodes), sortedTombstoneIDs(tombstones), limits)
+	blocks, ids := makeRunBlocksWithCanonicalIDs(nodes)
+	canonical, err := marshalRunPayload(blocks, sortedTombstoneIDs(tombstones), limits)
 	if err != nil || !bytes.Equal(canonical, decoded.Payload) {
 		return nil, nil, frame.ErrInvalidFrame
+	}
+	if canonicalNodeIDs != nil {
+		*canonicalNodeIDs = ids
 	}
 	return nodes, tombstones, nil
 }
@@ -930,6 +958,6 @@ func frontierForRunState(state rgaRunState) map[string]crdt.Tag {
 }
 
 func validateRGARunState(data []byte) error {
-	_, _, err := unmarshalRGARun(data, crdt.TypeIDRGARunState, frame.DefaultLimits(), true)
+	_, _, err := unmarshalRGARun(data, crdt.TypeIDRGARunState, frame.DefaultLimits(), true, nil)
 	return err
 }

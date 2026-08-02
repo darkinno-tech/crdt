@@ -19,8 +19,8 @@ go get github.com/DarkInno/crdt@latest
 git clone https://github.com/DarkInno/crdt.git
 cd crdt
 go version
-go run ./examples/getting-started
-go test ./examples/getting-started
+(cd examples && go run ./getting-started)
+(cd examples && go test ./getting-started)
 ```
 
 期望输出：
@@ -70,7 +70,7 @@ go test ./counter ./text ./replica
 故意重复/乱序投递更新，模拟分区中的 add-wins 冲突，并从快照恢复相同 OR-Set 副本 ID：
 
 ```sh
-go run ./examples/collaborative-board
+(cd examples && go run ./collaborative-board)
 ```
 
 预期最终状态：
@@ -83,7 +83,7 @@ open-tasks=[close-shift inspect-pump replace-filter]
 要运行包含 framed G-Set、MV-Register、重复投递和恢复的流程：
 
 ```sh
-go run ./examples/warehouse-replication
+(cd examples && go run ./warehouse-replication)
 ```
 
 ## 3. 区分本地修改与远端投递

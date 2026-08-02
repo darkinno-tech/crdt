@@ -17,6 +17,7 @@ import {
   CRDTRuntimeError,
   RICH_TEXT_PROTOCOL,
   RGA_PROTOCOL_PACKED_V3,
+  RGA_PROTOCOL_PACKED_V3_V2,
   RGA_PROTOCOL_RUN_V2,
   RGA_PROTOCOL_V1,
   RGA_WASM_GLOBAL,
@@ -51,7 +52,9 @@ after(async () => {
 test("TypeScript loader starts the real Go Wasm module over application/wasm", () => {
 	const document = loaderRuntime.create("loader");
 	const frame = document.insert(0, "loader local merge");
-  assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
+  if (artifactProtocol.wireFormatVersion === 1n) {
+    assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
+  }
   assert.equal(document.text(), "loader local merge");
 	assert.equal(document.close(), true);
 });
@@ -60,7 +63,9 @@ test("TypeScript wrapper atomically replaces text", () => {
 	const document = loaderRuntime.create("relative-position");
 	document.insert(0, "abc");
 	const frame = document.replace(1, 1, "XY");
-	assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
+	if (artifactProtocol.wireFormatVersion === 1n) {
+		assert.equal(decodeFrame(frame).typeID, artifactProtocol.deltaTypeID);
+	}
 	assert.equal(document.text(), "aXYc");
 	assert.equal(document.close(), true);
 });
@@ -88,6 +93,32 @@ test("Position/Tag anchors survive a concurrent insert and snapshot recovery", (
   assert.equal(alice.close(), true);
   assert.equal(bob.close(), true);
   assert.equal(restored.close(), true);
+});
+
+test("rich-text relative positions encode a durable selection/comment range outside CRDT frames", () => {
+  const alice = richTextRuntime.create("rich-anchor-alice");
+  const bob = richTextRuntime.create("rich-anchor-bob");
+  const seed = alice.applyEditorDelta([{ insert: "ab🙂cd" }]);
+  bob.applyDelta(seed);
+
+  const selection = alice.anchorRangeAt(4, 1);
+  const encoded = alice.marshalAnchorRange(selection);
+  assert.ok(encoded instanceof Uint8Array);
+  assert.ok(encoded.byteLength > 0 && encoded.byteLength <= alice.protocol.maxAnchorBytes);
+  assert.deepEqual(alice.unmarshalAnchorRange(encoded), selection);
+  assert.deepEqual(alice.unmarshalAnchor(alice.marshalAnchor(selection.start)), selection.start);
+
+  const remote = bob.applyEditorDelta([{ retain: 1 }, { insert: "X" }]);
+  alice.applyDelta(remote);
+  assert.deepEqual(alice.resolveAnchorRange(selection), { start: 5, end: 2 });
+  assert.deepEqual(bob.resolveAnchorRange(alice.unmarshalAnchorRange(encoded)), { start: 5, end: 2 });
+
+  const recovered = richTextRuntime.restore(alice.snapshot());
+  assert.deepEqual(recovered.resolveAnchorRange(selection), { start: 5, end: 2 });
+  assertRuntimeError(() => alice.unmarshalAnchor(new Uint8Array([1, 3, 0])), "invalid_anchor");
+  assert.equal(alice.close(), true);
+  assert.equal(bob.close(), true);
+  assert.equal(recovered.close(), true);
 });
 
 test("plain-text binding preserves a UTF-16 selection through a real remote RGA merge", () => {
@@ -408,11 +439,12 @@ test("TypeScript wrapper bounds persistence input before entering Go Wasm", () =
   assert.equal(document.close(), true);
 });
 
-test("actual Go Wasm emits the negotiated RGA frames accepted by the TypeScript decoder", () => {
+test("actual Go Wasm emits and applies the negotiated RGA frames", () => {
   const protocol = unwrap(rawAPI.protocol());
   assert.equal(protocol.stateTypeID, artifactProtocol.stateTypeID.toString());
   assert.equal(protocol.deltaTypeID, artifactProtocol.deltaTypeID.toString());
   assert.equal(protocol.semanticsVersion, artifactProtocol.semanticsVersion.toString());
+	assert.equal(protocol.wireFormatVersion, artifactProtocol.wireFormatVersion.toString());
   assert.equal(protocol.maxFrameBytes, 1 << 20);
   assert.equal(protocol.maxTags, 100_000);
   assert.equal(protocol.maxStringBytes, 64 << 10);
@@ -422,10 +454,12 @@ test("actual Go Wasm emits the negotiated RGA frames accepted by the TypeScript 
   const alice = create("alice");
   const bob = create("bob");
   const frame = copiedBytes(unwrap(rawAPI.insert(alice, 0, "hello")));
-  const decoded = decodeFrame(frame);
-  assert.equal(decoded.typeID, artifactProtocol.deltaTypeID);
-  assert.equal(decoded.codecID.length, 0);
-  assert.ok(decoded.payload.length > 0);
+  if (artifactProtocol.wireFormatVersion === 1n) {
+    const decoded = decodeFrame(frame);
+    assert.equal(decoded.typeID, artifactProtocol.deltaTypeID);
+    assert.equal(decoded.codecID.length, 0);
+    assert.ok(decoded.payload.length > 0);
+  }
 
   assert.equal(unwrap(rawAPI.applyDelta(bob, frame)), undefined);
   assert.equal(unwrap(rawAPI.text(bob)), "hello");
@@ -547,7 +581,10 @@ function protocolForArtifact(value) {
   if (value === "packed-v3") {
     return RGA_PROTOCOL_PACKED_V3;
   }
-  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, or v1");
+  if (value === "packed-v3-v2") {
+    return RGA_PROTOCOL_PACKED_V3_V2;
+  }
+  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, packed-v3-v2, or v1");
 }
 
 class TestTextPort {

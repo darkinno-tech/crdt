@@ -23,17 +23,19 @@
       import {
         BroadcastChannelNativeTransport,
         createBrowserReplicaID,
-        decodeFrame,
-        FrameType,
         IndexedDBRGAWasmPersistence,
-        initRGAWasm,
         openNativeBrowserDocument,
         openRGAWasmBrowserDocument,
-      } from "../dist/index.js";
+      } from "../dist/browser.js";
+      import { decodeFrame, FrameType } from "../dist/frame.js";
+      import { initRGAWasm } from "../dist/wasm.js";
 
       const status = document.querySelector("#status");
+      let phase = "initializing runtime";
+      const asynchronousErrors = [];
       try {
         const runtime = await initRGAWasm({ wasmURL: "/.tmp/crdt-rga-wasm/crdt-rga.wasm" });
+        phase = "validating RGA frame and snapshot";
         const alice = runtime.create("browser-alice");
         const bob = runtime.create("browser-bob");
         const delta = alice.insert(0, "browser local merge");
@@ -52,6 +54,7 @@
         bob.close();
         restored.close();
 
+        phase = "persisting native IndexedDB state";
         const documentID = `browser-native-${crypto.randomUUID()}`;
         const persisted = await openNativeBrowserDocument({
           documentID,
@@ -60,6 +63,7 @@
         persisted.getMap("metadata").set("title", "offline browser state");
         await persisted.flush();
         await persisted.close();
+        phase = "recovering native IndexedDB state";
         const recovered = await openNativeBrowserDocument({
           documentID,
           replicaID: createBrowserReplicaID(),
@@ -69,6 +73,7 @@
         }
         await recovered.close();
 
+        phase = "persisting Wasm RGA IndexedDB state";
         const rgaDocumentID = `browser-wasm-rga-${crypto.randomUUID()}`;
         const rgaReplicaID = createBrowserReplicaID("rga");
         const rgaPersistence = await IndexedDBRGAWasmPersistence.open(`browser-wasm-rga-db-${crypto.randomUUID()}`);
@@ -86,6 +91,7 @@
         }
         const rgaAppendMs = performance.now() - rgaAppendStarted;
         await rgaPersisted.close();
+        phase = "recovering Wasm RGA IndexedDB state";
         const rgaRecoveryStarted = performance.now();
         const rgaRecovered = await openRGAWasmBrowserDocument({
           documentID: rgaDocumentID,
@@ -100,6 +106,7 @@
         await rgaRecovered.close();
         rgaPersistence.close();
 
+        phase = "delivering BroadcastChannel update";
         const channelName = `browser-native-channel-${crypto.randomUUID()}`;
         const leftTransport = new BroadcastChannelNativeTransport(channelName);
         const rightTransport = new BroadcastChannelNativeTransport(channelName);
@@ -113,13 +120,23 @@
           replicaID: createBrowserReplicaID(),
           liveTransport: rightTransport,
         });
-        left.getArray("cards").push(["shared across tabs"]);
+        // Native roots are schema declarations, so both live peers must create
+        // the same named root before a mutation referring to it is delivered.
+        const leftCards = left.getArray("cards");
+        const rightCards = right.getArray("cards");
+        left.onError((error) => asynchronousErrors.push({ side: "left", ...errorDetails(error) }));
+        right.onError((error) => asynchronousErrors.push({ side: "right", ...errorDetails(error) }));
+        leftCards.push(["shared across tabs"]);
         await left.flush();
-        await waitFor(() => right.getArray("cards").get(0) === "shared across tabs");
+        phase = "waiting for BroadcastChannel update";
+        await waitFor(() => rightCards.length === 1 && rightCards.get(0) === "shared across tabs");
+        phase = "flushing BroadcastChannel receiver";
         await right.flush();
+        phase = "checking durable outbox boundary";
         if (left.pendingOutbox !== 1 || right.pendingOutbox !== 0) {
           throw new Error("BroadcastChannel must not acknowledge the durable outbox");
         }
+        phase = "closing BroadcastChannel documents";
         await left.close();
         await right.close();
         leftTransport.close();
@@ -134,9 +151,15 @@
         status.textContent = `PASS: ${text}; native + Wasm RGA IndexedDB recovery; BroadcastChannel`;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        window.__crdtWasmResult = { ok: false, error: message };
-        console.error(message);
-        status.textContent = `FAIL: ${message}`;
+        window.__crdtWasmResult = { ok: false, phase, error: message, asynchronousErrors };
+        console.error(`${phase}: ${message}`);
+        status.textContent = `FAIL: ${phase}: ${message}`;
+      }
+
+      function errorDetails(error) {
+        return error instanceof Error
+          ? { name: error.name, message: error.message, code: error.code, stack: error.stack }
+          : { message: String(error) };
       }
 
       async function waitFor(predicate) {

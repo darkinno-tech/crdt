@@ -30,6 +30,46 @@ func TestFrameRoundTripAndRejectsTampering(t *testing.T) {
 	}
 }
 
+func TestPeekFrameFormatVersionSelectsOnlySupportedOuterVersions(t *testing.T) {
+	limits := DefaultLimits()
+	v1, err := MarshalFrame(Frame{TypeID: 1, Payload: []byte("state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := MarshalFrameV2(Frame{TypeID: 1, Payload: []byte(strings.Repeat("state", 64))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		input []byte
+		want  uint64
+	}{
+		{name: "v1", input: v1, want: FormatVersion},
+		{name: "v2", input: v2, want: FormatVersionV2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := PeekFrameFormatVersion(test.input, limits)
+			if err != nil || got != test.want {
+				t.Fatalf("PeekFrameFormatVersion() = %d, %v; want %d, nil", got, err, test.want)
+			}
+		})
+	}
+	if _, err := PeekFrameFormatVersion([]byte("bad"), limits); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("short peek error = %v, want %v", err, ErrFrameLimit)
+	}
+	unknown := append([]byte(nil), v1...)
+	unknown[4] = 3
+	if _, err := PeekFrameFormatVersion(unknown, limits); !errors.Is(err, ErrInvalidFrame) {
+		t.Fatalf("unknown version peek error = %v, want %v", err, ErrInvalidFrame)
+	}
+	tooLarge := limits
+	tooLarge.MaxFrameBytes = len(v1) - 1
+	if _, err := PeekFrameFormatVersion(v1, tooLarge); !errors.Is(err, ErrFrameLimit) {
+		t.Fatalf("over-limit peek error = %v, want %v", err, ErrFrameLimit)
+	}
+}
+
 func TestMarshalFrameWithPayloadMatchesFrameAndRejectsWriterFailures(t *testing.T) {
 	t.Parallel()
 	payload := []byte("state")
@@ -290,6 +330,26 @@ func TestFrameV2RawAndDeflateDecoderBoundaries(t *testing.T) {
 	}
 	if _, ok := uint64AsInt(uint64(maxIntValue) + 1); ok {
 		t.Fatal("uint64AsInt accepted an overflowing length")
+	}
+	for _, test := range []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "codec length",
+			body: append(append(append([]byte("CRDT"), AppendUvarint(nil, FormatVersion)...), AppendUvarint(nil, 1)...), AppendUvarint(nil, uint64(maxIntValue)+1)...),
+		},
+		{
+			name: "payload length",
+			body: append(append(append(append([]byte("CRDT"), AppendUvarint(nil, FormatVersion)...), AppendUvarint(nil, 1)...), AppendUvarint(nil, 0)...), AppendUvarint(nil, uint64(maxIntValue)+1)...),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded := binary.BigEndian.AppendUint32(test.body, crc32.Checksum(test.body[4:], castagnoliTable))
+			if _, err := UnmarshalFrame(encoded, DefaultLimits()); !errors.Is(err, ErrFrameLimit) {
+				t.Fatalf("overflowing length error = %v, want ErrFrameLimit", err)
+			}
+		})
 	}
 	if _, err := inflatePayload([]byte("not-deflate"), 1); !errors.Is(err, ErrInvalidFrame) {
 		t.Fatalf("invalid deflate error = %v", err)

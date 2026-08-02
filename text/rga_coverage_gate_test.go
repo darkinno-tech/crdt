@@ -101,7 +101,7 @@ func TestRGARunWireFailureAndLimitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decodedNodes, decodedTombstones, err := unmarshalRGARun(complete, crdt.TypeIDRGARunState, limits, true)
+	decodedNodes, decodedTombstones, err := unmarshalRGARun(complete, crdt.TypeIDRGARunState, limits, true, nil)
 	if err != nil || len(decodedNodes) != len(completeNodes) || len(decodedTombstones) != 1 {
 		t.Fatalf("mixed run state decode = nodes=%d tombstones=%d err=%v", len(decodedNodes), len(decodedTombstones), err)
 	}
@@ -117,7 +117,7 @@ func TestRGARunWireFailureAndLimitPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := unmarshalRGARun(data, crdt.TypeIDRGARunDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+			if _, _, err := unmarshalRGARun(data, crdt.TypeIDRGARunDelta, limits, false, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 				t.Fatalf("unmarshal invalid run = %v", err)
 			}
 		})
@@ -132,7 +132,7 @@ func TestRGARunWireFailureAndLimitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := unmarshalRGARun(data, crdt.TypeIDRGARunDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+	if _, _, err := unmarshalRGARun(data, crdt.TypeIDRGARunDelta, limits, false, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("invalid chain parent flag = %v", err)
 	}
 }

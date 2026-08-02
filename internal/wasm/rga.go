@@ -63,15 +63,21 @@ const (
 
 // RGAProtocol identifies the framed RGA semantics exported by one runtime.
 type RGAProtocol struct {
-	StateTypeID      uint64
-	DeltaTypeID      uint64
-	SemanticsVersion uint64
+	StateTypeID       uint64
+	DeltaTypeID       uint64
+	SemanticsVersion  uint64
+	WireFormatVersion uint64
 }
 
 func (p RGAProtocol) valid() bool {
-	return p == (RGAProtocol{StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion}) ||
-		p == (RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion}) ||
-		p == (RGAProtocol{StateTypeID: RGAPackedStateTypeID, DeltaTypeID: RGAPackedDeltaTypeID, SemanticsVersion: RGAPackedSemanticsVersion})
+	if p.WireFormatVersion != frame.FormatVersion && p.WireFormatVersion != frame.FormatVersionV2 {
+		return false
+	}
+	if p.StateTypeID == RGAStateTypeID && p.DeltaTypeID == RGADeltaTypeID && p.SemanticsVersion == RGASemanticsVersion {
+		return p.WireFormatVersion == frame.FormatVersion
+	}
+	return (p.StateTypeID == RGARunStateTypeID && p.DeltaTypeID == RGARunDeltaTypeID && p.SemanticsVersion == RGARunSemanticsVersion) ||
+		(p.StateTypeID == RGAPackedStateTypeID && p.DeltaTypeID == RGAPackedDeltaTypeID && p.SemanticsVersion == RGAPackedSemanticsVersion)
 }
 
 // RGAOptions bounds both externally received frames and retained document
@@ -83,6 +89,7 @@ type RGAOptions struct {
 	MaxLocalEditRunes int
 	MaxLocalEditBytes int
 	WireFormat        RGAWireFormat
+	WireFormatVersion uint64
 }
 
 // DefaultRGAOptions returns the legacy scalar-v1 browser/WebView runtime
@@ -112,6 +119,7 @@ func DefaultRGAOptions() RGAOptions {
 		MaxLocalEditRunes: 16 << 10,
 		MaxLocalEditBytes: 64 << 10,
 		WireFormat:        RGAWireFormatV1,
+		WireFormatVersion: frame.FormatVersion,
 	}
 }
 
@@ -133,14 +141,30 @@ func DefaultPackedRGAOptions() RGAOptions {
 	return options
 }
 
+// DefaultPackedRGAFrameV2Options returns browser/WebView limits for an
+// explicitly negotiated packed-v3 group using compression-aware outer frame
+// v2. It is not wire-compatible with the default packed-v3 artifact.
+func DefaultPackedRGAFrameV2Options() RGAOptions {
+	options := DefaultPackedRGAOptions()
+	options.WireFormatVersion = frame.FormatVersionV2
+	return options
+}
+
+func (o RGAOptions) frameFormatVersion() uint64 {
+	if o.WireFormatVersion == 0 {
+		return frame.FormatVersion
+	}
+	return o.WireFormatVersion
+}
+
 func (o RGAOptions) protocol() RGAProtocol {
 	switch o.WireFormat {
 	case RGAWireFormatV1:
-		return RGAProtocol{StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion}
+		return RGAProtocol{StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion, WireFormatVersion: o.frameFormatVersion()}
 	case RGAWireFormatRunV2:
-		return RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion}
+		return RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion, WireFormatVersion: o.frameFormatVersion()}
 	case RGAWireFormatPackedV3:
-		return RGAProtocol{StateTypeID: RGAPackedStateTypeID, DeltaTypeID: RGAPackedDeltaTypeID, SemanticsVersion: RGAPackedSemanticsVersion}
+		return RGAProtocol{StateTypeID: RGAPackedStateTypeID, DeltaTypeID: RGAPackedDeltaTypeID, SemanticsVersion: RGAPackedSemanticsVersion, WireFormatVersion: o.frameFormatVersion()}
 	default:
 		return RGAProtocol{}
 	}
@@ -156,6 +180,7 @@ func (o RGAOptions) valid() bool {
 		o.Decoder.MaxCodecID <= o.Decoder.MaxFrameBytes &&
 		o.MaxLocalEditRunes > 0 && o.MaxLocalEditRunes <= o.Text.MaxNodes &&
 		o.MaxLocalEditBytes > 0 && o.MaxLocalEditBytes <= o.Decoder.MaxFrameBytes &&
+		(o.WireFormatVersion == 0 || o.WireFormatVersion == frame.FormatVersion || o.WireFormatVersion == frame.FormatVersionV2) &&
 		o.protocol().valid()
 }
 
@@ -231,7 +256,7 @@ func (r *Runtime) Restore(saved RGASnapshot) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if decoded.TypeID != r.Protocol().StateTypeID {
+	if decoded.Version() != r.Protocol().WireFormatVersion || decoded.TypeID != r.Protocol().StateTypeID {
 		return 0, frame.ErrInvalidFrame
 	}
 	validated, err := snapshot.NewWithClockState(saved.State, saved.Frontier, saved.Clock)
@@ -284,8 +309,14 @@ func (r *Runtime) Insert(handle uint64, offset int, value string) ([]byte, error
 	case RGAWireFormatV1:
 		return document.InsertBinaryWithLimits(offset, value, r.options.Decoder)
 	case RGAWireFormatRunV2:
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			return document.InsertRunFrameV2WithLimits(offset, value, r.options.Decoder)
+		}
 		return document.InsertRunBinaryWithLimits(offset, value, r.options.Decoder)
 	case RGAWireFormatPackedV3:
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			return document.InsertPackedFrameV2WithLimits(offset, value, r.options.Decoder)
+		}
 		return document.InsertPackedBinaryWithLimits(offset, value, r.options.Decoder)
 	default:
 		return nil, ErrInvalidOptions
@@ -303,8 +334,14 @@ func (r *Runtime) Delete(handle uint64, offset, count int) ([]byte, error) {
 	case RGAWireFormatV1:
 		return document.DeleteBinaryWithLimits(offset, count, r.options.Decoder)
 	case RGAWireFormatRunV2:
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			return document.DeleteRunFrameV2WithLimits(offset, count, r.options.Decoder)
+		}
 		return document.DeleteRunBinaryWithLimits(offset, count, r.options.Decoder)
 	case RGAWireFormatPackedV3:
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			return document.DeletePackedFrameV2WithLimits(offset, count, r.options.Decoder)
+		}
 		return document.DeletePackedBinaryWithLimits(offset, count, r.options.Decoder)
 	default:
 		return nil, ErrInvalidOptions
@@ -326,8 +363,14 @@ func (r *Runtime) Replace(handle uint64, offset, count int, value string) ([]byt
 	case RGAWireFormatV1:
 		return document.ReplaceBinaryWithLimits(offset, count, value, r.options.Decoder)
 	case RGAWireFormatRunV2:
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			return document.ReplaceRunFrameV2WithLimits(offset, count, value, r.options.Decoder)
+		}
 		return document.ReplaceRunBinaryWithLimits(offset, count, value, r.options.Decoder)
 	case RGAWireFormatPackedV3:
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			return document.ReplacePackedFrameV2WithLimits(offset, count, value, r.options.Decoder)
+		}
 		return document.ReplacePackedBinaryWithLimits(offset, count, value, r.options.Decoder)
 	default:
 		return nil, ErrInvalidOptions
@@ -340,6 +383,9 @@ func (r *Runtime) Replace(handle uint64, offset, count int, value string) ([]byt
 func (r *Runtime) ApplyDelta(handle uint64, encoded []byte) error {
 	document, err := r.document(handle)
 	if err != nil {
+		return err
+	}
+	if err := r.requireFrameFormatVersion(encoded); err != nil {
 		return err
 	}
 	var delta text.Delta
@@ -457,9 +503,17 @@ func (r *Runtime) Snapshot(handle uint64) (RGASnapshot, error) {
 	case RGAWireFormatV1:
 		saved, err = document.SnapshotCurrentStateWithLimits(r.options.Decoder)
 	case RGAWireFormatRunV2:
-		saved, err = document.SnapshotRunCurrentStateWithLimits(r.options.Decoder)
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			saved, err = document.SnapshotRunFrameV2CurrentStateWithLimits(r.options.Decoder)
+		} else {
+			saved, err = document.SnapshotRunCurrentStateWithLimits(r.options.Decoder)
+		}
 	case RGAWireFormatPackedV3:
-		saved, err = document.SnapshotPackedCurrentStateWithLimits(r.options.Decoder)
+		if r.Protocol().WireFormatVersion == frame.FormatVersionV2 {
+			saved, err = document.SnapshotPackedFrameV2CurrentStateWithLimits(r.options.Decoder)
+		} else {
+			saved, err = document.SnapshotPackedCurrentStateWithLimits(r.options.Decoder)
+		}
 	default:
 		return RGASnapshot{}, ErrInvalidOptions
 	}
@@ -484,6 +538,17 @@ func (r *Runtime) document(handle uint64) (*text.RGA, error) {
 		return nil, ErrUnknownDocument
 	}
 	return document, nil
+}
+
+func (r *Runtime) requireFrameFormatVersion(encoded []byte) error {
+	version, err := frame.PeekFrameFormatVersion(encoded, r.options.Decoder)
+	if err != nil {
+		return err
+	}
+	if version != r.Protocol().WireFormatVersion {
+		return frame.ErrInvalidFrame
+	}
+	return nil
 }
 
 func (r *Runtime) validateSnapshotBounds(saved RGASnapshot) error {

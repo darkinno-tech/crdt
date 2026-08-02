@@ -41,7 +41,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.merge_commit_sha }}
-      - name: Create stable tag
+      - name: Create stable module tags
         id: tag
         shell: bash
         env:
@@ -70,21 +70,9 @@ jobs:
           fi
           tag="v${major}.${minor}.$((10#${patch} + 1))"
 
-          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
-            tagged_commit="$(git rev-list -n 1 "${tag}")"
-            if [[ "${tagged_commit}" == "${CANDIDATE_SHA}" ]]; then
-              echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-              echo "Release tag already exists for this commit: ${tag}"
-              exit 0
-            fi
-            echo "Refusing to replace ${tag}, which points to ${tagged_commit}" >&2
-            exit 1
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag --annotate "${tag}" "${CANDIDATE_SHA}" --message "Release ${tag}"
-          git push origin "${tag}"
+          ./scripts/tag-go-modules.sh "${tag}" "${CANDIDATE_SHA}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
       - name: Report stable tag
         run: 'echo "Stable tag result: ${{ steps.tag.outputs.tag }}"'

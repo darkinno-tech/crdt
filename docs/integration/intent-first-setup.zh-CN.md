@@ -90,7 +90,7 @@ manifest := builder.Manifest()
 Manifest 的 delta，并进行一次有界的重复投递：
 
 ```sh
-go run ./examples/intent-first-setup
+(cd examples && go run ./intent-first-setup)
 # profile=counter/grow-only
 # state_type=1
 # delta_type=3

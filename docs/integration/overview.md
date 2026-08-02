@@ -28,7 +28,7 @@ Requirements: Go 1.21 or later and a local checkout. From the repository root:
 
 ```sh
 go test ./...
-go run ./examples/collaborative-board
+(cd examples && go run ./collaborative-board)
 ```
 
 Expected output:

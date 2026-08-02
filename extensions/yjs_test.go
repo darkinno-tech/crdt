@@ -109,6 +109,94 @@ func TestYJSHandlerAwarenessOwnershipAndDisconnect(t *testing.T) {
 	}
 }
 
+func TestYJSAwarenessPreservesStandardNullClockAndTombstoneOrdering(t *testing.T) {
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "awareness-order", MaxUpdateBytes: 64, MaxHistoryBytes: 64, MaxUpdates: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := Peer{ID: "owner"}
+	if !room.applyAwareness(owner, []yjsAwarenessEntry{{clientID: 41, clock: 7, state: []byte(`{"user":"owner"}`)}}, 2) {
+		t.Fatal("initial awareness state was rejected")
+	}
+	// y-protocols uses the same clock when a remote state is declared offline.
+	// It must clear the live state and retain only its clock so a delayed copy of
+	// the old state cannot resurrect a ghost cursor.
+	if !room.applyAwareness(owner, []yjsAwarenessEntry{{clientID: 41, clock: 7, state: []byte("null")}}, 2) {
+		t.Fatal("equal-clock awareness removal was rejected")
+	}
+	if !room.applyAwareness(owner, []yjsAwarenessEntry{{clientID: 41, clock: 7, state: []byte(`{"user":"delayed"}`)}}, 2) {
+		t.Fatal("delayed awareness retry closed the owner")
+	}
+	room.mu.Lock()
+	_, active := room.awareness[41]
+	tombstone, removed := room.awarenessTombstones[41]
+	room.mu.Unlock()
+	if active || !removed || tombstone.clock != 7 {
+		t.Fatalf("equal-clock removal state active=%t tombstone=%#v present=%t", active, tombstone, removed)
+	}
+	if room.applyAwareness(Peer{ID: "forged"}, []yjsAwarenessEntry{{clientID: 41, clock: 8, state: []byte(`{"user":"forged"}`)}}, 2) {
+		t.Fatal("different connection claimed a tombstoned client ID")
+	}
+	if !room.applyAwareness(owner, []yjsAwarenessEntry{{clientID: 41, clock: 8, state: []byte(`{"user":"owner"}`)}}, 2) {
+		t.Fatal("newer owner awareness state was rejected")
+	}
+	room.mu.Lock()
+	state, active := room.awareness[41]
+	room.mu.Unlock()
+	if !active || state.clock != 8 || string(state.state) != `{"user":"owner"}` {
+		t.Fatalf("newer awareness state = %#v active=%t", state, active)
+	}
+}
+
+func TestYJSAwarenessDisconnectIsScopedToOneConnection(t *testing.T) {
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "awareness-tabs", MaxUpdateBytes: 64, MaxHistoryBytes: 64, MaxUpdates: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := Peer{ID: "same-account"}
+	first := &yjsSubscriber{}
+	second := &yjsSubscriber{}
+	if !room.applyAwarenessFrom(first, peer, []yjsAwarenessEntry{{clientID: 1, clock: 1, state: []byte(`{"tab":1}`)}}, 2) ||
+		!room.applyAwarenessFrom(second, peer, []yjsAwarenessEntry{{clientID: 2, clock: 1, state: []byte(`{"tab":2}`)}}, 2) {
+		t.Fatal("same-account tabs could not publish independent awareness")
+	}
+	room.remove(first, peer)
+	room.mu.Lock()
+	_, firstActive := room.awareness[1]
+	secondState, secondActive := room.awareness[2]
+	room.mu.Unlock()
+	if firstActive || !secondActive || secondState.owner.subscriber != second {
+		t.Fatalf("disconnect removed another tab: first=%t second=%#v active=%t", firstActive, secondState, secondActive)
+	}
+}
+
+func TestYJSAwarenessTombstonesStayWithinConfiguredCapacity(t *testing.T) {
+	room, err := NewYJSRoom(YJSRoomConfig{
+		Name:                   "awareness-tombstones",
+		MaxUpdateBytes:         64,
+		MaxHistoryBytes:        64,
+		MaxUpdates:             1,
+		MaxAwarenessTombstones: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := Peer{ID: "owner"}
+	for _, clientID := range []uint64{1, 2} {
+		if !room.applyAwareness(owner, []yjsAwarenessEntry{{clientID: clientID, clock: 1, state: []byte(`{}`)}}, 1) ||
+			!room.applyAwareness(owner, []yjsAwarenessEntry{{clientID: clientID, clock: 1, state: []byte("null")}}, 1) {
+			t.Fatalf("client %d did not create and remove awareness", clientID)
+		}
+	}
+	room.mu.Lock()
+	_, retained := room.awarenessTombstones[2]
+	count := len(room.awarenessTombstones)
+	room.mu.Unlock()
+	if count != 1 || !retained {
+		t.Fatalf("tombstone bound count=%d retained=%t", count, retained)
+	}
+}
+
 func TestYJSWireRejectsMalformedAndOverlargeInputBeforeMutation(t *testing.T) {
 	if _, err := unmarshalYJSMessages([]byte{0, 0}, 1024, 8); !errors.Is(err, errInvalidWireMessage) {
 		t.Fatalf("truncated sync error = %v", err)
@@ -126,6 +214,9 @@ func TestYJSWireRejectsMalformedAndOverlargeInputBeforeMutation(t *testing.T) {
 	}
 	if _, err := NewYJSRoom(YJSRoomConfig{Name: "notes", MaxUpdateBytes: 64, MaxHistoryBytes: 63, MaxUpdates: 1}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("invalid room limits error = %v", err)
+	}
+	if _, err := NewYJSRoom(YJSRoomConfig{Name: "notes", MaxUpdateBytes: 64, MaxHistoryBytes: 64, MaxUpdates: 1, MaxAwarenessTombstones: maxYJSAwarenessClients + 1}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("invalid awareness tombstone limit error = %v", err)
 	}
 	room, err := NewYJSRoom(YJSRoomConfig{Name: "bounded", MaxUpdateBytes: 64, MaxHistoryBytes: 64, MaxUpdates: 1})
 	if err != nil {

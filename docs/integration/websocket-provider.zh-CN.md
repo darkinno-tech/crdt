@@ -26,8 +26,8 @@ outbox、反熵协议、成员权威来源或墓碑 GC 策略。TLS、身份、�
 ## 运行完整参考流程
 
 ```sh
-go run ./examples/websocket-provider
-go test -race ./examples/websocket-provider/...
+(cd examples && go run ./websocket-provider)
+(cd examples && go test -race ./websocket-provider/...)
 ```
 
 命令会启动进程内 HTTP/WebSocket 端点，连接两个 Go 副本，先发送第 2 个 dot、

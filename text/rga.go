@@ -450,6 +450,15 @@ func (r *RGA) InsertPackedBinaryWithLimits(offset int, value string, limits fram
 	return encoded, err
 }
 
+// InsertPackedFrameV2WithLimits inserts text and returns the same preflighted
+// packed-v3 delta in a separately negotiated outer frame v2. The RGA payload
+// is unchanged; DEFLATE is selected only when it reduces the final bounded
+// frame.
+func (r *RGA) InsertPackedFrameV2WithLimits(offset int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.insert(offset, value, &limits, Delta.MarshalPackedFrameV2WithLimits)
+	return encoded, err
+}
+
 // InsertRunFrameV2WithLimits inserts text and returns the same preflighted
 // run-v2 delta in a separately negotiated outer frame v2. The RGA payload is
 // unchanged; the outer representation may use DEFLATE only when it reduces
@@ -473,6 +482,14 @@ func (r *RGA) PrepareInsertRunBinaryWithLimits(offset int, value string, limits 
 // caller abandons the surrounding transaction.
 func (r *RGA) PrepareInsertPackedBinaryWithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareInsert(offset, value, &limits, Delta.MarshalPackedBinaryWithLimits)
+}
+
+// PrepareInsertPackedFrameV2WithLimits returns a preflighted packed-v3
+// insertion delta in a separately negotiated outer frame v2 without applying
+// it. Reserved HLC tags remain safe to skip when a caller abandons the
+// surrounding transaction.
+func (r *RGA) PrepareInsertPackedFrameV2WithLimits(offset int, value string, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareInsert(offset, value, &limits, Delta.MarshalPackedFrameV2WithLimits)
 }
 
 // PrepareInsertRunFrameV2WithLimits returns a preflighted run-v2 insertion
@@ -590,6 +607,14 @@ func (r *RGA) DeletePackedBinaryWithLimits(offset, count int, limits frame.Decod
 	return encoded, err
 }
 
+// DeletePackedFrameV2WithLimits deletes visible text and returns the same
+// preflighted packed-v3 tombstone delta in a separately negotiated outer frame
+// v2. Callers must bind frame.FormatVersionV2 in their manifest.
+func (r *RGA) DeletePackedFrameV2WithLimits(offset, count int, limits frame.DecoderLimits) ([]byte, error) {
+	_, encoded, err := r.delete(offset, count, &limits, Delta.MarshalPackedFrameV2WithLimits)
+	return encoded, err
+}
+
 // DeleteRunFrameV2WithLimits deletes visible text and returns the same
 // preflighted run-v2 tombstone delta in a separately negotiated outer frame
 // v2. Callers must bind frame.FormatVersionV2 in their manifest.
@@ -620,6 +645,13 @@ func (r *RGA) ReplaceRunBinaryWithLimits(offset, count int, value string, limits
 // compact RGA v3 delta. Frame or retention rejection leaves r unchanged.
 func (r *RGA) ReplacePackedBinaryWithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
 	encoded, err := r.replace(offset, count, value, limits, Delta.MarshalPackedBinaryWithLimits)
+	return encoded, err
+}
+
+// ReplacePackedFrameV2WithLimits atomically replaces visible text and returns
+// one preflighted packed-v3 delta in a separately negotiated outer frame v2.
+func (r *RGA) ReplacePackedFrameV2WithLimits(offset, count int, value string, limits frame.DecoderLimits) ([]byte, error) {
+	encoded, err := r.replace(offset, count, value, limits, Delta.MarshalPackedFrameV2WithLimits)
 	return encoded, err
 }
 
@@ -667,6 +699,13 @@ func (r *RGA) PrepareDeleteRunBinaryWithLimits(offset, count int, limits frame.D
 // delta without mutating r.
 func (r *RGA) PrepareDeletePackedBinaryWithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
 	return r.prepareDelete(offset, count, &limits, Delta.MarshalPackedBinaryWithLimits)
+}
+
+// PrepareDeletePackedFrameV2WithLimits returns a preflighted packed-v3
+// deletion delta in a separately negotiated outer frame v2 without applying
+// it.
+func (r *RGA) PrepareDeletePackedFrameV2WithLimits(offset, count int, limits frame.DecoderLimits) (Delta, []byte, error) {
+	return r.prepareDelete(offset, count, &limits, Delta.MarshalPackedFrameV2WithLimits)
 }
 
 // PrepareDeleteRunFrameV2WithLimits returns a preflighted run-v2 deletion
@@ -965,35 +1004,35 @@ func (r *RGA) applyResolvedLinearRunLocked(delta Delta, ids []Position) error {
 	// This path is only reached after resolvedLinearRunLocked has established
 	// the parent-before-child chain and canonical order.
 	pairs := make([]sequencePair, len(ids))
-	markers := make([]*sequenceMarker, 0, len(ids)*2)
 	for index, id := range ids {
 		_, deleted := r.tombstones[id]
 		initializeSequencePair(&pairs[index], id, !deleted)
-		markers = append(markers, &pairs[index].entry)
-	}
-	for index := len(ids) - 1; index >= 0; index-- {
-		markers = append(markers, &markers[index].pair.exit)
 	}
 	var anchor *sequenceMarker
 	for index, id := range ids {
 		item := delta.nodes[id]
 		r.nodes[id] = item
-		parent := r.sequence.pair(item.parent)
-		if index > 0 {
-			parent = markers[index-1].pair
-		}
-		if parent == nil {
-			panic("text: integrating resolved linear run without integrated parent")
-		}
-		previous, hasPrevious := r.children.insert(parent, markers[index].pair)
 		if index == 0 {
+			parent := r.sequence.pair(item.parent)
+			if parent == nil {
+				panic("text: integrating resolved linear run without integrated parent")
+			}
+			previous, hasPrevious := r.children.insert(parent, &pairs[index])
 			anchor = &parent.entry
 			if hasPrevious {
 				anchor = &previous.exit
 			}
+			continue
 		}
+		// resolvedLinearRunLocked proved that every non-first node is a
+		// new child of the preceding pair. Those parents cannot yet have a
+		// sibling, so writing their inline child index directly avoids an
+		// otherwise redundant branches-map lookup for every rune in a paste
+		// or initial-sync run. The first node still uses childIndex.insert to
+		// preserve deterministic placement among existing siblings.
+		pairs[index-1].singleChild = &pairs[index]
 	}
-	r.sequence.insertLinearMarkersAfter(anchor, markers, len(ids))
+	r.sequence.insertLinearPairsAfter(anchor, pairs)
 	changed := len(ids) > 0
 	if r.integrateReady() {
 		changed = true
@@ -1514,6 +1553,20 @@ func validateDelta(delta Delta) error {
 		}
 	}
 	return nil
+}
+
+// singleDecodedRunChainAcyclic proves acyclicity for the only decoder shape
+// that does not need the general graph walk: one complete chain block. The
+// decoder has already established that every node after the first points to
+// its immediate predecessor, so the sole edge that can return into this
+// frame is the first node's parent. Callers must use it only after decoding
+// the whole single chain; every other shape keeps using acyclicAgainst.
+func singleDecodedRunChainAcyclic(nodes map[Position]node, firstParent Position) bool {
+	if !firstParent.Valid() {
+		return true
+	}
+	_, loopsIntoChain := nodes[firstParent]
+	return !loopsIntoChain
 }
 
 // acyclicAgainst permits a parent that has not arrived yet (out-of-order

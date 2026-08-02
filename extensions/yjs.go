@@ -49,6 +49,10 @@ type YJSRoomConfig struct {
 	MaxUpdateBytes  int
 	MaxHistoryBytes int
 	MaxUpdates      int
+	// MaxAwarenessTombstones bounds clock-only metadata retained after a
+	// client becomes offline. Zero uses a conservative default. It never
+	// retains awareness JSON and prevents delayed state resurrection.
+	MaxAwarenessTombstones int
 	// MaxStateVectorBytes and MaxSyncBytes are required with Store. They bound
 	// the semantic handshake independently from one client-authored update.
 	MaxStateVectorBytes int
@@ -64,14 +68,15 @@ type YJSRoomConfig struct {
 // It is intentionally isolated from Group: y-protocols and this module's
 // framed CRDT protocols have incompatible state and recovery semantics.
 type YJSRoom struct {
-	name                string
-	maxUpdateBytes      int
-	maxHistoryBytes     int
-	maxUpdates          int
-	maxStateVectorBytes int
-	maxSyncBytes        int
-	store               YJSStore
-	document            YJSDocument
+	name                   string
+	maxUpdateBytes         int
+	maxHistoryBytes        int
+	maxUpdates             int
+	maxStateVectorBytes    int
+	maxSyncBytes           int
+	maxAwarenessTombstones int
+	store                  YJSStore
+	document               YJSDocument
 
 	// storeMu makes a state-vector bootstrap atomic with respect to an Apply.
 	// It never holds mu while a sidecar call is in flight, except for the short
@@ -83,19 +88,40 @@ type YJSRoom struct {
 	history   int
 	peers     map[*yjsSubscriber]Peer
 	awareness map[uint64]yjsAwarenessState
+	// awarenessTombstones retains just enough protocol metadata to reject a
+	// delayed pre-removal awareness state. It never retains awareness JSON and
+	// is capped independently of the live-state limit.
+	awarenessTombstones map[uint64]yjsAwarenessTombstone
 }
 
 type yjsAwarenessState struct {
 	clock uint64
-	state []byte // Canonical JSON text, including the literal null.
-	peer  string
+	state []byte // Canonical non-null JSON object text.
+	owner yjsAwarenessOwner
+}
+
+// yjsAwarenessOwner binds a client-selected Yjs client ID to one WebSocket,
+// rather than to a reusable authenticated principal. One user can have two
+// browser tabs; closing either one must not remove the other tab's presence.
+// Direct room tests have no subscriber and deliberately use peer as a
+// deterministic fallback owner.
+type yjsAwarenessOwner struct {
+	subscriber *yjsSubscriber
+	peer       string
+}
+
+type yjsAwarenessTombstone struct {
+	clock     uint64
+	owner     yjsAwarenessOwner
+	removedAt time.Time
 }
 
 // NewYJSRoom creates one room. The zero value is deliberately not usable:
 // room names and every retained-resource boundary must be selected by the
 // embedding application.
 func NewYJSRoom(config YJSRoomConfig) (*YJSRoom, error) {
-	if strings.TrimSpace(config.Name) != config.Name || config.Name == "" || strings.Contains(config.Name, "/") || config.MaxUpdateBytes <= 0 {
+	if strings.TrimSpace(config.Name) != config.Name || config.Name == "" || strings.Contains(config.Name, "/") || config.MaxUpdateBytes <= 0 ||
+		config.MaxAwarenessTombstones < 0 || config.MaxAwarenessTombstones > maxYJSAwarenessClients {
 		return nil, invalidConfig("extensions.new_yjs_room", ErrInvalidConfig)
 	}
 	if config.Store == nil && (config.MaxHistoryBytes < config.MaxUpdateBytes || config.MaxUpdates <= 0) {
@@ -106,18 +132,24 @@ func NewYJSRoom(config YJSRoomConfig) (*YJSRoom, error) {
 		(config.Document.Format != YJSStoreFormatV1 && config.Document.Format != YJSStoreFormatV2)) {
 		return nil, invalidConfig("extensions.new_yjs_room", ErrInvalidConfig)
 	}
+	maxAwarenessTombstones := config.MaxAwarenessTombstones
+	if maxAwarenessTombstones == 0 {
+		maxAwarenessTombstones = defaultMaxYJSAwarenessTombstones
+	}
 	return &YJSRoom{
-		name:                config.Name,
-		maxUpdateBytes:      config.MaxUpdateBytes,
-		maxHistoryBytes:     config.MaxHistoryBytes,
-		maxUpdates:          config.MaxUpdates,
-		maxStateVectorBytes: config.MaxStateVectorBytes,
-		maxSyncBytes:        config.MaxSyncBytes,
-		store:               config.Store,
-		document:            config.Document,
-		peers:               make(map[*yjsSubscriber]Peer),
-		hashes:              make(map[[sha256.Size]byte]struct{}),
-		awareness:           make(map[uint64]yjsAwarenessState),
+		name:                   config.Name,
+		maxUpdateBytes:         config.MaxUpdateBytes,
+		maxHistoryBytes:        config.MaxHistoryBytes,
+		maxUpdates:             config.MaxUpdates,
+		maxStateVectorBytes:    config.MaxStateVectorBytes,
+		maxSyncBytes:           config.MaxSyncBytes,
+		maxAwarenessTombstones: maxAwarenessTombstones,
+		store:                  config.Store,
+		document:               config.Document,
+		peers:                  make(map[*yjsSubscriber]Peer),
+		hashes:                 make(map[[sha256.Size]byte]struct{}),
+		awareness:              make(map[uint64]yjsAwarenessState),
+		awarenessTombstones:    make(map[uint64]yjsAwarenessTombstone),
 	}, nil
 }
 
@@ -320,7 +352,7 @@ func (handler *YJSHandler) readLoop(subscriber *yjsSubscriber, room *YJSRoom, pe
 					return
 				}
 			case YJSAwareness:
-				if !room.applyAwareness(peer, message.awareness, handler.maxAwarenessClients) {
+				if !room.applyAwarenessFrom(subscriber, peer, message.awareness, handler.maxAwarenessClients) {
 					return
 				}
 			case yjsAwarenessQuery:
@@ -395,11 +427,14 @@ func (room *YJSRoom) remove(subscriber *yjsSubscriber, peer Peer) {
 	delete(room.peers, subscriber)
 	removed := make([]yjsAwarenessEntry, 0)
 	for clientID, state := range room.awareness {
-		if state.peer != peer.ID {
+		if !state.owner.matches(subscriber, peer) {
 			continue
 		}
 		delete(room.awareness, clientID)
-		removed = append(removed, yjsAwarenessEntry{clientID: clientID, clock: state.clock + 1, state: []byte("null")})
+		room.rememberAwarenessTombstoneLocked(clientID, yjsAwarenessTombstone{clock: state.clock, owner: state.owner, removedAt: time.Now()})
+		// y-protocols clears a remote awareness state with the same clock. A
+		// larger clock is reserved for the originating client's own next state.
+		removed = append(removed, yjsAwarenessEntry{clientID: clientID, clock: state.clock, state: []byte("null")})
 	}
 	room.mu.Unlock()
 	for _, entry := range removed {
@@ -461,42 +496,114 @@ func (room *YJSRoom) replyDiff(ctx context.Context, subscriber *yjsSubscriber, r
 	return subscriber.enqueue(marshalYJSSync(yjsWireSyncStep2, delta))
 }
 
+// applyAwareness retains the direct-room helper used by unit tests. A live
+// WebSocket uses applyAwarenessFrom so ownership is scoped to its connection.
 func (room *YJSRoom) applyAwareness(peer Peer, incoming []yjsAwarenessEntry, maxClients int) bool {
+	return room.applyAwarenessFrom(nil, peer, incoming, maxClients)
+}
+
+func (room *YJSRoom) applyAwarenessFrom(subscriber *yjsSubscriber, peer Peer, incoming []yjsAwarenessEntry, maxClients int) bool {
+	owner := yjsAwarenessOwner{subscriber: subscriber, peer: peer.ID}
 	room.mu.Lock()
 	next := make(map[uint64]yjsAwarenessState, len(room.awareness)+len(incoming))
 	for clientID, state := range room.awareness {
 		next[clientID] = state
 	}
+	nextTombstones := make(map[uint64]yjsAwarenessTombstone, len(room.awarenessTombstones)+len(incoming))
+	for clientID, tombstone := range room.awarenessTombstones {
+		nextTombstones[clientID] = tombstone
+	}
 	changed := make([]yjsAwarenessEntry, 0, len(incoming))
 	for _, entry := range incoming {
-		previous, exists := next[entry.clientID]
-		if exists && entry.clock <= previous.clock {
-			// y-websocket deliberately re-broadcasts received awareness
-			// updates. An equal/older forwarded state is harmless and must
-			// not be mistaken for a second connection taking ownership.
+		previous, active := next[entry.clientID]
+		tombstone, removed := nextTombstones[entry.clientID]
+		present := string(entry.state) != "null"
+		knownClock := uint64(0)
+		knownOwner := yjsAwarenessOwner{}
+		if active {
+			knownClock, knownOwner = previous.clock, previous.owner
+		} else if removed {
+			knownClock, knownOwner = tombstone.clock, tombstone.owner
+		}
+
+		// This is the y-protocols acceptance rule: an equal clock is an
+		// idempotent state update, except that an equal-clock null clears an
+		// active remote state. Checking staleness before ownership also lets a
+		// harmless duplicate forwarded by y-websocket pass without taking over
+		// the connection's record.
+		if entry.clock < knownClock || (entry.clock == knownClock && present) || (!active && !removed && entry.clock == 0) {
 			continue
 		}
-		if exists && previous.peer != peer.ID {
+		if (active || removed) && !knownOwner.matches(subscriber, peer) {
 			room.mu.Unlock()
 			return false
 		}
-		if string(entry.state) == "null" {
-			delete(next, entry.clientID)
-		} else {
-			if !exists && len(next) >= maxClients {
-				room.mu.Unlock()
-				return false
+
+		if !present {
+			if !active {
+				// A later null can advance an existing tombstone for peers that
+				// still have an older state. Unknown nulls allocate no metadata.
+				if removed && entry.clock > tombstone.clock {
+					nextTombstones[entry.clientID] = yjsAwarenessTombstone{clock: entry.clock, owner: knownOwner, removedAt: time.Now()}
+					changed = append(changed, copyYJSAwarenessEntry(entry))
+				}
+				continue
 			}
-			next[entry.clientID] = yjsAwarenessState{clock: entry.clock, state: append([]byte(nil), entry.state...), peer: peer.ID}
+			delete(next, entry.clientID)
+			rememberYJSAwarenessTombstone(nextTombstones, entry.clientID, yjsAwarenessTombstone{clock: entry.clock, owner: previous.owner, removedAt: time.Now()}, room.maxAwarenessTombstones)
+			changed = append(changed, copyYJSAwarenessEntry(entry))
+			continue
 		}
-		changed = append(changed, entry)
+
+		if !active && len(next) >= maxClients {
+			room.mu.Unlock()
+			return false
+		}
+		next[entry.clientID] = yjsAwarenessState{clock: entry.clock, state: append([]byte(nil), entry.state...), owner: owner}
+		delete(nextTombstones, entry.clientID)
+		changed = append(changed, copyYJSAwarenessEntry(entry))
 	}
 	room.awareness = next
+	room.awarenessTombstones = nextTombstones
 	room.mu.Unlock()
 	for _, entry := range changed {
 		room.broadcast(marshalYJSAwareness([]yjsAwarenessEntry{entry}))
 	}
 	return true
+}
+
+const defaultMaxYJSAwarenessTombstones = 256
+
+func (owner yjsAwarenessOwner) matches(subscriber *yjsSubscriber, peer Peer) bool {
+	if owner.subscriber != nil {
+		return owner.subscriber == subscriber
+	}
+	return owner.peer == peer.ID
+}
+
+func copyYJSAwarenessEntry(entry yjsAwarenessEntry) yjsAwarenessEntry {
+	return yjsAwarenessEntry{clientID: entry.clientID, clock: entry.clock, state: append([]byte(nil), entry.state...)}
+}
+
+func (room *YJSRoom) rememberAwarenessTombstoneLocked(clientID uint64, tombstone yjsAwarenessTombstone) {
+	rememberYJSAwarenessTombstone(room.awarenessTombstones, clientID, tombstone, room.maxAwarenessTombstones)
+}
+
+func rememberYJSAwarenessTombstone(tombstones map[uint64]yjsAwarenessTombstone, clientID uint64, tombstone yjsAwarenessTombstone, maximum int) {
+	if maximum <= 0 {
+		return
+	}
+	if _, exists := tombstones[clientID]; !exists && len(tombstones) >= maximum {
+		var oldestID uint64
+		var oldest time.Time
+		for candidateID, candidate := range tombstones {
+			if oldest.IsZero() || candidate.removedAt.Before(oldest) {
+				oldestID, oldest = candidateID, candidate.removedAt
+			}
+		}
+		delete(tombstones, oldestID)
+	}
+	tombstones[clientID] = tombstone
 }
 
 func (room *YJSRoom) awarenessMessages() [][]byte {

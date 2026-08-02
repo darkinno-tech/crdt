@@ -45,6 +45,26 @@ positions. These are engine operations, not properties that can be safely
 recreated by parsing only the outer WebSocket envelope. See the [Yjs update
 API](https://github.com/yjs/yjs#document-updates) and [sync internals](https://github.com/yjs/yjs/blob/main/INTERNALS.md).
 
+## Browser Yjs core capability boundary
+
+The optional `@darkinno/crdt-client/yjs` layer now fills the browser-side
+integration gaps that matter for a plain-text surface, while keeping the Yjs
+engine authoritative. It is not a second document model.
+
+| Yjs core surface | Integration decision | Boundary |
+| --- | --- | --- |
+| Shared `Y.Map` / `Y.Array` / `Y.Text` / XML types | Direct native Yjs API | No Go/native-ts translation or schema claim. |
+| Relative positions | Bounded `createRelativePosition` / `resolveRelativePosition` for the exact bound `Y.Text` | Position bytes are presence/UI metadata, not identity, authorization, or an RGA anchor. |
+| `observeDeep` | Bounded path + live-target projection with event/path caps and fail-closed callback handling | Do not retain raw lazy `Y.Event` objects or use observer output as a durable log. |
+| Selective undo/redo | Binding-scoped, capped `Y.UndoManager`, tracking only local editor-origin transactions | Undo creates a compensating shared update; it never rewinds a server log or silently undoes remote work. At its cap the binding safely clears complete local history before recording the new edit. |
+| Incremental synchronization | Standard V1 y-protocols SyncStep1/2 helper for manual transports; direct V1/V2 state-vector diff APIs remain available | y-websocket owns its outer envelope; room identity, auth, receipt, and retry stay above the helper. A throwing local manual callback latches its outbound path after the already-committed Yjs transaction, so the application must recover its outbox and resync rather than issue another edit. |
+| Rich text / editor schema | Use the maintained matching Yjs binding such as y-prosemirror, y-quill, or y-codemirror | The plain-text binding stops on formats/embeds rather than flattening them. |
+
+The V1 sync helper intentionally rejects V2. `y-protocols` SyncStep1/2 calls
+the V1 update APIs; a V2 room must use the format-pinned state-vector/diff
+methods in an explicitly negotiated outer protocol. This avoids silently
+coercing an update format merely to reuse a transport helper.
+
 ## Architecture for Level 1
 
 The safe future extension is an explicitly negotiated Yjs document service,
@@ -53,7 +73,8 @@ not a hidden enhancement to Go CRDT rooms:
 ```text
 authenticated Yjs room
   -> transport-size and rate limits
-  -> YJSStore (Yjs-aware runtime, V1/V2 mode pinned per room)
+  -> YJSStore (Yjs-aware runtime, V1/V2 mode pinned per room,
+               bounded active requests + receive deadline)
        Apply(update)
        StateVector()
        Diff(remoteVector)
@@ -69,15 +90,22 @@ state vector, obtains a semantic diff for a client Step 1, and submits every
 Step 2/update to `YJSStore.Apply` before live fan-out. The store materializes a
 fresh `Y.Doc` with Yjs GC enabled, writes the resulting merged snapshot and
 state vector through an fsync + rename transaction, and advances its recovery
-cursor only after that write succeeds.
+cursor only after that write succeeds. Its duplicate decision uses the Yjs
+transaction's delete set plus before/after client clocks--the same condition
+Yjs uses before emitting an update--not a state-vector equality shortcut, so a
+delete-only update remains durable even though it has no clock advance.
 
 The bundled runtime is a loopback-only, single-process sidecar for one data
 directory. Its request lock has process scope, so an HA deployment must assign
 each document directory to one writer or provide a different store with
-cross-process serialization. The Go client never follows a redirect from the
-configured bearer-token endpoint, and a handler permits one store-backed room
-per exact durable document identity; both rules prevent trust-boundary drift or
-live fan-out split-brain.
+cross-process serialization. Before a request body is collected, the runtime
+admits only a configured bounded number of semantic requests; an excess request
+returns `unavailable`, and incomplete headers/bodies expire under its receive
+deadline. This constrains local heap and lock pressure but does not replace
+gateway rate limits or a Node heap/container ceiling. The Go client never
+follows a redirect from the configured bearer-token endpoint, and a handler
+permits one store-backed room per exact durable document identity; both rules
+prevent trust-boundary drift or live fan-out split-brain.
 
 Tenant, room, epoch, schema label, and V1/V2 format form the immutable durable
 identity. The schema label is a fencing/version field, not a claim that the
@@ -95,14 +123,15 @@ the concrete configuration and recovery contract.
   them.
 - **Security:** authenticate identity independently of Yjs client IDs; bind
   room/tenant/epoch/schema; cap raw frame, decoded update, state vector,
-  document, queue, and fan-out work; enforce read/write/presence authorization
+  document, active request, queue, and fan-out work; enforce short nonzero
+  request/header receive deadlines and read/write/presence authorization
   continuously; disable unsafe compression at the public boundary; audit
   update admission without logging document contents.
 - **Performance:** measure state-vector diff bytes, update merge/compaction
   latency, memory per active room, durable flush time, reconnect p50/p95/p99,
-  slow-peer behavior, and fan-out at 1/4/16/64 receivers. The current relay
-  microbenchmark measures only outer-wrapper decode/admission and cannot set
-  these production limits.
+  slow-peer behavior, capped local-history reset cost, and fan-out at
+  1/4/16/64 receivers. The current relay microbenchmark measures only
+  outer-wrapper decode/admission and cannot set these production limits.
 - **Migration:** stop writes, take one source snapshot at a known cursor,
   validate/render it, export under explicit supported-schema rules, import to
   a new group and epoch, compare presentation plus allowed metadata, then

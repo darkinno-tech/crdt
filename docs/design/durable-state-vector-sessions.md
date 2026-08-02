@@ -108,10 +108,10 @@ persisted Frontier.
 Run the local gates with:
 
 ```sh
-go test ./durable
-go test -race ./durable
-go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x -parallel=1 ./durable
-go test -run='^$' -bench='BenchmarkDurableSameHostFanout' -benchmem -count=3 -cpu=1,4 ./durable
+(cd durable && go test .)
+(cd durable && go test -race .)
+(cd durable && go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x -parallel=1 .)
+(cd durable && go test -run='^$' -bench='BenchmarkDurableSameHostFanout' -benchmem -count=3 -cpu=1,4 .)
 ```
 
 These prove the bounded reference contract on loopback. They do not prove a

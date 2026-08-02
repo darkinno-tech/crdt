@@ -85,6 +85,26 @@ func (f Frame) Version() uint64 {
 	return f.formatVersion
 }
 
+// PeekFrameFormatVersion returns the declared outer frame version without
+// validating the checksum, codec, or payload. It is for a boundary that must
+// select an already-negotiated decoder before the full type-specific decode.
+// Callers MUST subsequently validate the complete frame with UnmarshalFrame or
+// an equivalent bounded decoder; this helper never authenticates or accepts a
+// frame by itself.
+func PeekFrameFormatVersion(data []byte, limits Limits) (uint64, error) {
+	if !limits.valid() || len(data) > limits.MaxFrameBytes || len(data) < 9 {
+		return 0, ErrFrameLimit
+	}
+	if string(data[:4]) != "CRDT" {
+		return 0, ErrInvalidFrame
+	}
+	version, _, ok := ReadUvarint(data, 4)
+	if !ok || (version != FormatVersion && version != FormatVersionV2) {
+		return 0, ErrInvalidFrame
+	}
+	return version, nil
+}
+
 // MarshalFrame returns the canonical v1 encoding of frame.
 func MarshalFrame(frame Frame) ([]byte, error) {
 	return MarshalFrameWithPayload(frame.TypeID, frame.CodecID, len(frame.Payload), func(payload []byte) error {
@@ -191,16 +211,26 @@ func UnmarshalFrameView(data []byte, limits Limits) (Frame, error) {
 	}
 	position = next
 	codecLength, next, ok := ReadUvarint(data[:len(data)-4], position)
-	if !ok || codecLength > uint64(limits.MaxCodecID) || codecLength > uint64(len(data)-4-next) {
+	if !ok {
+		return Frame{}, ErrFrameLimit
+	}
+	codecLengthInt, ok := uint64AsInt(codecLength)
+	remaining := len(data) - 4 - next
+	if !ok || codecLengthInt > limits.MaxCodecID || codecLengthInt > remaining {
 		return Frame{}, ErrFrameLimit
 	}
 	position = next
-	codecEnd := position + int(codecLength)
+	codecEnd := position + codecLengthInt
 	codecID := string(data[position:codecEnd])
 	position = codecEnd
 	if version == FormatVersion {
 		payloadLength, next, ok := ReadUvarint(data[:len(data)-4], position)
-		if !ok || payloadLength > uint64(limits.MaxPayload) || payloadLength != uint64(len(data)-4-next) {
+		if !ok {
+			return Frame{}, ErrFrameLimit
+		}
+		payloadLengthInt, ok := uint64AsInt(payloadLength)
+		remaining := len(data) - 4 - next
+		if !ok || payloadLengthInt > limits.MaxPayload || payloadLengthInt != remaining {
 			return Frame{}, ErrFrameLimit
 		}
 		payload := data[next : len(data)-4]
@@ -280,10 +310,14 @@ func ReadBytes(data []byte, position, max int) ([]byte, int, bool) {
 		return nil, position, false
 	}
 	length, next, ok := ReadUvarint(data, position)
-	if !ok || length > uint64(max) || length > uint64(len(data)-next) {
+	if !ok {
 		return nil, position, false
 	}
-	end := next + int(length)
+	lengthInt, ok := uint64AsInt(length)
+	if !ok || lengthInt > max || lengthInt > len(data)-next {
+		return nil, position, false
+	}
+	end := next + lengthInt
 	return data[next:end], end, true
 }
 

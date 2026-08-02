@@ -199,13 +199,29 @@ func (t *ORTree) ApplyDelta(delta Delta) error {
 		len(t.tombstones)+newTreeTombstones(delta.tombstones, t.tombstones) > t.options.MaxTombstones {
 		return ErrResourceLimit
 	}
-	if !acyclic(delta.nodes, t.nodes) {
+	// A locally generated subtree commonly arrives as one complete batch where
+	// every edge points to an earlier tag in the same batch (or the synthetic
+	// root). That strict ordering proves the batch acyclic without allocating
+	// the generic graph-walk state. Incomplete, cross-batch, or non-monotonic
+	// deltas deliberately retain the conservative validator below.
+	if !rootedMonotonicDeltaAcyclic(delta.nodes) && !acyclic(delta.nodes, t.nodes) {
 		return ErrInvalidDelta
 	}
 	if tag, ok := greatest(delta); ok {
 		if err := t.clock.Witness(tag); err != nil {
 			return err
 		}
+	}
+	// A first sync has no retained entries to preserve. Allocate exactly once
+	// after every rejecting operation (including clock advancement) has passed,
+	// rather than growing an initially empty map repeatedly for a large batch.
+	// Existing maps stay untouched so incremental delivery keeps its current
+	// amortized behavior and identity.
+	if len(t.nodes) == 0 && len(delta.nodes) > 0 {
+		t.nodes = make(map[NodeID]storedNode, len(delta.nodes))
+	}
+	if len(t.tombstones) == 0 && len(delta.tombstones) > 0 {
+		t.tombstones = make(map[NodeID]struct{}, len(delta.tombstones))
 	}
 	changed := false
 	for id, incoming := range delta.nodes {
@@ -520,6 +536,27 @@ func acyclic(incoming, existing map[NodeID]storedNode) bool {
 		}
 		for _, visited := range path {
 			state[visited] = complete
+		}
+	}
+	return true
+}
+
+// rootedMonotonicDeltaAcyclic proves one closed delta forest has no cycle.
+// Every non-root parent must be in incoming and compare strictly before its
+// child. Following parent edges therefore strictly decreases a finite ordered
+// set and can only terminate at the synthetic root. The condition intentionally
+// excludes incomplete and cross-batch deltas because those need acyclic's
+// combined incoming/existing graph walk.
+func rootedMonotonicDeltaAcyclic(incoming map[NodeID]storedNode) bool {
+	for id, item := range incoming {
+		if !item.parent.Valid() {
+			continue
+		}
+		if item.parent.Compare(id) >= 0 {
+			return false
+		}
+		if _, exists := incoming[item.parent]; !exists {
+			return false
 		}
 	}
 	return true

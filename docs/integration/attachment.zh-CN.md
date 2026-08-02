@@ -6,8 +6,8 @@
 完整的文本、附件、Manifest、快照和校验流程见[可运行附件协作示例](../../examples/attachment-collaboration)：
 
 ```sh
-go run ./examples/attachment-collaboration
-go test ./examples/attachment-collaboration
+(cd examples && go run ./attachment-collaboration)
+(cd examples && go test ./attachment-collaboration)
 ```
 
 ## 被复制的内容
@@ -84,5 +84,5 @@ go test ./attachment
 go test -race ./attachment
 go test -run=^$ -fuzz=FuzzUnmarshalDelta -fuzztime=250000x ./attachment
 go test -run=^$ -fuzz=FuzzReferenceVerify -fuzztime=250000x ./attachment
-go test ./examples/attachment-collaboration
+(cd examples && go test ./attachment-collaboration)
 ```
