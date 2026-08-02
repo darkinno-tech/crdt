@@ -59,11 +59,11 @@ jobs:
         with:
           go-version: "1.26.x"
       - name: Verify generated protocol registry
-        run: go generate ./... && git diff --exit-code -- type_ids_generated.go clients/typescript/src/type_ids.generated.ts
+        run: make generate && git diff --exit-code -- type_ids_generated.go clients/typescript/src/type_ids.generated.ts
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Run tests
-        run: go test ./...
+        run: make test
 
   wasm:
     name: wasm
@@ -112,7 +112,7 @@ jobs:
         with:
           go-version: "1.26.x"
       - name: Run race detector
-        run: go test -race ./...
+        run: make race
 
   vet:
     name: vet
@@ -134,7 +134,7 @@ jobs:
         with:
           go-version: "1.26.x"
       - name: Run vet
-        run: go vet ./...
+        run: make vet
 
   fuzz:
     name: fuzz
@@ -178,12 +178,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
-      - uses: dominikh/staticcheck-action@9716614d4101e79b4340dd97b10e54d68234e431 # v1.4.1
-        with:
-          version: "2026.1"
-          min-go-version: "1.26"
-          install-go: false
-          use-cache: false
+      - name: Run staticcheck across Go modules
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.1
+          make staticcheck
 
   coverage:
     name: coverage
@@ -265,11 +263,26 @@ jobs:
             ./text
             ./examples/websocket-provider/provider
           )
+          if [[ -f .benchmark-baseline/examples/go.mod ]]; then
+            (
+              cd .benchmark-baseline
+              GOMAXPROCS=1 go test "${benchmark_args[@]:0:8}" ./counter ./text
+            ) > .benchmark-results/baseline.txt
+            (
+              cd .benchmark-baseline/examples
+              GOMAXPROCS=1 go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
+            ) >> .benchmark-results/baseline.txt
+          else
+            (
+              cd .benchmark-baseline
+              GOMAXPROCS=1 go test "${benchmark_args[@]}"
+            ) > .benchmark-results/baseline.txt
+          fi
+          GOMAXPROCS=1 go test "${benchmark_args[@]:0:8}" ./counter ./text > .benchmark-results/candidate.txt
           (
-            cd .benchmark-baseline
-            GOMAXPROCS=1 go test "${benchmark_args[@]}"
-          ) > .benchmark-results/baseline.txt
-          GOMAXPROCS=1 go test "${benchmark_args[@]}" > .benchmark-results/candidate.txt
+            cd examples
+            GOMAXPROCS=1 go test -run='^$' -bench='^BenchmarkProviderEndToEndRelayFanout$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider
+          ) >> .benchmark-results/candidate.txt
           go run ./cmd/crdt-benchmark-check \
             -base .benchmark-results/baseline.txt \
             -candidate .benchmark-results/candidate.txt \
@@ -326,15 +339,17 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@0a35821d5c230e903fcfe077583637dea1b27b47 # v9.0.0
-        with:
-          version: v2.11
+      - name: Run golangci-lint across Go modules
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.0
+          make lint
 
   prerelease-tag:
     # Full checks are required by preprod branch protection. Tag only the
-    # freshly merged and still-current preprod candidate; no duplicate test
-    # run is needed after its source tree has already been validated.
+    # dependency-free root candidate here; the first split release publishes
+    # nested modules from the stable tag, where their pinned stable-root
+    # requirement is resolvable. No duplicate test run is needed after its
+    # source tree has already been validated.
     if: >-
       github.event_name == 'pull_request' &&
       github.event.action == 'closed' &&

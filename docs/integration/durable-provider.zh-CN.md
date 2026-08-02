@@ -4,6 +4,12 @@
 
 启用前请先阅读[设计与运行边界](../design/durable-transport.md)。特别是，只有在应用已将具体 CRDT 状态和投递 frontier 与游标放入同一持久事务后，重放游标才有效。
 
+按需安装该模块：
+
+```sh
+go get github.com/DarkInno/crdt/durable@latest
+```
+
 ## 传输保证
 
 ```text
@@ -57,7 +63,7 @@ if err != nil {
 mux.Handle("/crdt/durable/", http.StripPrefix("/crdt/durable", handler))
 ```
 
-服务端通过 `GET /ws` 暴露 `crdt-durable-v1` 子协议。`bbolt` 会对文件加独占锁，但部署仍必须保证一个持久卷只有一个 active pod/process；不要把同一文件挂到多副本。高可用需要替换为保留相同事务语义的存储实现。
+服务端通过 `GET /ws` 暴露 `crdt-durable-v1` 子协议。`bbolt` 会对文件加独占锁，但部署仍必须保证一个持久卷只有一个 active pod/process；不要把同一文件挂到多副本。高可用可使用保留相同事务语义的 Redis、PostgreSQL 或 MySQL 实现，具体边界见 [provider architecture](provider-architecture.md)。
 `MaxEvents` 与 `MaxBytes` 对每个 replication group 生效；多租户服务还需要在此前增加固定的每租户 group 配额。
 
 ## 持久接收与重连
@@ -69,10 +75,10 @@ mux.Handle("/crdt/durable/", http.StripPrefix("/crdt/durable", handler))
 ## 验证
 
 ```sh
-go test ./durable
-go test -race ./durable
-go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x ./durable
-go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect)' -benchmem ./durable
+(cd durable && go test .)
+(cd durable && go test -race .)
+(cd durable && go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x .)
+(cd durable && go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect)' -benchmem .)
 ```
 
 测试覆盖真实 loopback WebSocket、重启/重放、强制断线重连、重复/乱序模拟及本地文件存储。它们不证明线上 TLS、外部身份提供方、多节点存储、客户端 checkpoint 事务或墓碑 GC 策略。

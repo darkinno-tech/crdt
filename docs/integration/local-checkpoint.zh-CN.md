@@ -1,6 +1,6 @@
 # 本地 checkpoint Store 参考实现
 
-`persistence` 是本地 CRDT 恢复边界的参考实现。其 `Store` 契约将完整
+`persistence` 是按需模块 `github.com/DarkInno/crdt/persistence` 中的本地 CRDT 恢复边界参考实现。其 `Store` 契约将完整
 `snapshot.Snapshot`、该状态对应的 durable-relay 游标，以及应用自有的不透明 outbox
 作为一个持久化边界保存。`BoltStore` 使用 bbolt 事务，`FileStore` 使用私有文件原子替换。
 它补齐 CRDT 状态对象与 [`durable`](durable-provider.zh-CN.md) relay 之间的本地检查点，
@@ -10,7 +10,7 @@
 场景。可运行的 OR-Set 重启流程：
 
 ```sh
-go run ./examples/persistent-replica
+(cd examples && go run ./persistent-replica)
 # recovered=true cursor=41 outbox_bytes=24
 ```
 
@@ -206,11 +206,12 @@ bbolt 有可串行化 ACID 事务，但只有一个 writer。`FileStore` 每次�
 宿主提供的一致性卷快照。
 
 ```sh
-go test ./persistence ./examples/persistent-replica
-go test -race ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 ./persistence
-go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
+(cd persistence && go test .)
+(cd examples && go test ./persistent-replica)
+(cd persistence && go test -race .)
+(cd persistence && go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 .)
+(cd persistence && go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 .)
+(cd persistence && go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s .)
 ```
 
 这些检查覆盖本地重启、损坏拒绝、并发访问和 fuzz 解码；它们不证明宿主备份、磁盘写满、

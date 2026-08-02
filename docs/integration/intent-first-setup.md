@@ -103,7 +103,7 @@ manifest from the profile, validates a manifest-bound delta, and performs a
 bounded duplicate delivery:
 
 ```sh
-go run ./examples/intent-first-setup
+(cd examples && go run ./intent-first-setup)
 # profile=counter/grow-only
 # state_type=1
 # delta_type=3

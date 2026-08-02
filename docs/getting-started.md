@@ -22,8 +22,8 @@ Then inspect and run the smallest complete reference from a local checkout:
 git clone https://github.com/DarkInno/crdt.git
 cd crdt
 go version
-go run ./examples/getting-started
-go test ./examples/getting-started
+(cd examples && go run ./getting-started)
+(cd examples && go test ./getting-started)
 ```
 
 Expected output:
@@ -80,7 +80,7 @@ during a partition, then restores an OR-Set with the same replica ID from a
 snapshot:
 
 ```sh
-go run ./examples/collaborative-board
+(cd examples && go run ./collaborative-board)
 ```
 
 Its expected final state is:
@@ -94,7 +94,7 @@ For a framed G-Set and MV-Register flow, including duplicate delivery and
 recovery, run:
 
 ```sh
-go run ./examples/warehouse-replication
+(cd examples && go run ./warehouse-replication)
 ```
 
 ## 3. Follow the local-mutation and remote-delivery split

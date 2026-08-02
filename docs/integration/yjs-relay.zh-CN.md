@@ -144,9 +144,9 @@ Yjs update bytes，因为二者恢复与授权契约不同。
 ## 验证和性能范围
 
 ```sh
-go test ./extensions -run 'TestYJS|FuzzUnmarshalYJSMessages'
-go test -race ./extensions -run 'TestYJS'
-go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s ./extensions
+(cd extensions && go test . -run 'TestYJS|FuzzUnmarshalYJSMessages')
+(cd extensions && go test -race . -run 'TestYJS')
+(cd extensions && go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s .)
 ```
 
 该 benchmark 仅测量本地 wire decode 和 duplicate-aware 内存 admission，不代表浏览器、TLS、WAN、

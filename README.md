@@ -52,8 +52,11 @@ For a checkout:
 ```sh
 git clone https://github.com/DarkInno/crdt.git
 cd crdt
-go test ./...
+make test
 ```
+
+`go test ./...` at the repository root intentionally tests the dependency-free
+core only. `make test` traverses the core and every opt-in module.
 
 ## What is included
 
@@ -62,7 +65,7 @@ go test ./...
 - A local, bounded multi-type undo/redo command stack plus a content-addressed snapshot version DAG for browser history and branches; both remain outside replication frames and are host-persisted metadata.
 - RGA collaborative text with stable run-v2 frames by default, plus explicitly negotiated packed-v3 frames for dense HLC runs; stable bounded rich-text, observed-remove tree, and nested document-tree protocols; plus list and XML-fragment layers.
 - Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
-- A bounded live WebSocket provider, a separate bbolt-backed durable relay with cursor replay and optional state-vector catch-up, Redis/PostgreSQL durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
+- Opt-in modules for a bounded live WebSocket provider, a separate bbolt-backed durable relay with cursor replay and optional state-vector catch-up, Redis/PostgreSQL/MySQL/SQLite durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
 - [RGA diagnostic obfuscation](docs/integration/debug-obfuscation.md) that replaces text content while retaining an isolated debug timeline structure.
 
@@ -73,12 +76,12 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Goal | Read or run |
 | --- | --- |
 | Learn the basic APIs | [Getting started](docs/getting-started.md) and [runnable examples](examples) |
-| Use named shared Map/Array objects without CRDT plumbing | [Shared-document guide](docs/integration/shared-document.md) and `go run ./examples/shared-document` |
+| Use named shared Map/Array objects without CRDT plumbing | [Shared-document guide](docs/integration/shared-document.md) and `(cd examples && go run ./shared-document)` |
 | Choose a CRDT without hand-copying protocol IDs | [Intent-first setup](docs/integration/intent-first-setup.md) and `go run ./cmd/crdt-profile -format json` |
 | Build a complete client flow | [End-to-end integration](docs/integration/overview.md) |
-| Survive local restarts safely | [Local checkpoint Store references](docs/integration/local-checkpoint.md) and `go run ./examples/persistent-replica` |
+| Survive local restarts safely | [Local checkpoint Store references](docs/integration/local-checkpoint.md) and `(cd examples && go run ./persistent-replica)` |
 | Add replay and reconnect | [Durable relay reference](docs/integration/durable-provider.md) |
-| Choose browser, WebRTC, Redis, or PostgreSQL boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
+| Choose browser, WebRTC, Redis, PostgreSQL, MySQL, or SQLite boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
 | Use a bounded live relay | [WebSocket provider reference](docs/integration/websocket-provider.md) |
 | Connect stable Yjs/y-websocket clients | [Yjs / y-protocols compatibility relay](docs/integration/yjs-relay.md) |
 | Bind Quill Deltas with approved rich-text formatting | [Rich-text editor binding](docs/integration/richtext-editor-bindings.md) |
@@ -93,16 +96,38 @@ The [documentation index](docs/README.md) separates getting-started, integration
 
 ## Persistence and recovery
 
-State bytes alone are not a recoverable replica for HLC-backed CRDTs. Persist the state frame, HLC state, and application delivery frontier/outbox atomically before reusing a replica ID. The `persistence.Store` contract has bbolt and dependency-free file references for one typed CRDT schema and one active process; both validate concrete state before saving and on every load.
+State bytes alone are not a recoverable replica for HLC-backed CRDTs. Persist the state frame, HLC state, and application delivery frontier/outbox atomically before reusing a replica ID. The opt-in `persistence.Store` contract has bbolt and file references for one typed CRDT schema and one active process; both validate concrete state before saving and on every load.
 
 ```sh
-go run ./examples/persistent-replica
+(cd examples && go run ./persistent-replica)
 # recovered=true cursor=41 outbox_bytes=24
 ```
 
 It is not a clustered database, authenticated transport, or generic business transaction manager. The host still owns encryption at rest, backup/restore, remote authorization, tenant isolation, membership, and tombstone lifecycle.
 
 The `durable` package intentionally persists a relay operation log and replay cursor. Clients must persist their concrete CRDT checkpoint before advancing that cursor; read the [local checkpoint](docs/integration/local-checkpoint.md) and [durable relay](docs/integration/durable-provider.md) references together.
+
+## Modules and dependencies
+
+The published root module, `github.com/DarkInno/crdt`, has no non-standard-library module dependencies. Durable storage, transports, and database backends are independently versioned opt-in modules, so a core-only consumer does not resolve their dependency graphs.
+
+| Module | Opt-in capability |
+| --- | --- |
+| `github.com/DarkInno/crdt/durable` | bbolt durable relay and WebSocket reconnect client. |
+| `github.com/DarkInno/crdt/persistence` | bbolt and file checkpoint Stores. |
+| `github.com/DarkInno/crdt/telemetry` | Bounded telemetry and opt-in OpenTelemetry metrics adapter. |
+| `github.com/DarkInno/crdt/extensions` | WebSocket, HTTP/SSE, gRPC, and Yjs relay references. |
+| `github.com/DarkInno/crdt/providers/{redis,postgres,mysql,sqlite,webrtc}` | Durable-log and DataChannel backends. |
+| `github.com/DarkInno/crdt/examples` | Runnable examples, including WebSocket references. |
+
+For example, an application choosing MySQL installs only the core, durable
+contract, and MySQL provider modules (plus its own selected driver):
+
+```sh
+go get github.com/DarkInno/crdt@latest
+go get github.com/DarkInno/crdt/durable@latest
+go get github.com/DarkInno/crdt/providers/mysql@latest
+```
 
 ## Package map
 
@@ -113,10 +138,11 @@ The `durable` package intentionally persists a relay operation log and replay cu
 | `lww`, `tree`, `text`, `list`, `xml`, `richtext`, `documenttree` | HLC-backed and ordered collaborative structures. |
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
-| `persistence` | Local bounded bbolt and file CRDT checkpoint Store references. |
+| `github.com/DarkInno/crdt/persistence` | Opt-in local bounded bbolt and file CRDT checkpoint Store references. |
 | `history` | Local multi-scope undo/redo command stack and content-addressed snapshot version DAG. |
-| `config`, `telemetry` | Explicit layered host configuration and bounded payload-free operational telemetry. |
-| `durable`, `extensions`, `awareness`, `observe` | Durable relay, bounded live relay, ephemeral presence, and process-local observation. |
+| `config` | Explicit layered host configuration. |
+| `github.com/DarkInno/crdt/telemetry` | Opt-in bounded payload-free operational telemetry and OpenTelemetry adapter. |
+| `github.com/DarkInno/crdt/durable`, `github.com/DarkInno/crdt/extensions`, `awareness`, `observe` | Opt-in durable relay and live relay; core ephemeral presence and process-local observation. |
 | `attachment` | Immutable media-reference metadata; never raw media bytes. |
 
 ## Verify and measure
@@ -124,19 +150,20 @@ The `durable` package intentionally persists a relay operation log and replay cu
 Run focused checks while changing one package:
 
 ```sh
-go test ./persistence ./examples/persistent-replica
-go test -race ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 ./persistence
-go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
+(cd persistence && go test .)
+(cd examples && go test ./persistent-replica)
+(cd persistence && go test -race .)
+(cd persistence && go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 .)
+(cd persistence && go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 .)
+(cd persistence && go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s .)
 ```
 
 Repository gates:
 
 ```sh
-go test ./...
-go test -race ./...
-go vet ./...
+make test
+make race
+make vet
 make coverage
 make verify
 ```

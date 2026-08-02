@@ -2,8 +2,8 @@
 
 [English](extensions.md) | [简体中文](extensions.zh-CN.md)
 
-`extensions` is an official, manifest-bound live-relay reference for this Go
-module. It is deliberately opt-in: the zero feature set exposes no endpoint,
+`extensions` is an official, manifest-bound live-relay reference in the
+opt-in `github.com/DarkInno/crdt/extensions` module. Its zero feature set exposes no endpoint,
 does not call authentication, and starts no listener or background work.
 
 It lowers the first integration step to an application-owned mux plus one
@@ -29,7 +29,7 @@ to the host application. The complete, runnable setup—including both required
 authorization callbacks—is in [examples/extensions-provider](../../examples/extensions-provider):
 
 ```sh
-go run ./examples/extensions-provider
+(cd examples && go run ./extensions-provider)
 ```
 
 Expected output:
@@ -260,18 +260,21 @@ production database transaction.
 
 ```sh
 # Unit, real loopback WS/HTTP/SSE, duplicate/reorder, concurrency, and sample.
-go test ./extensions ./examples/extensions-provider
+(cd extensions && go test .)
+(cd examples && go test ./extensions-provider)
 
 # Shared-state and connection lifecycle races.
-go test -race ./extensions
+(cd extensions && go test -race .)
 
 # Bounded parser robustness.
-go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=250000x ./extensions
+(cd extensions && go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=250000x .)
 
 # Loopback transport cost on the current machine; do not treat it as an SLA.
-go test -run='^$' \
+(
+  cd extensions && go test -run='^$' \
   -bench='Benchmark(GroupReceive|WebSocket(Batch)?Publish|HTTPPublish)Loopback$' \
-  -benchmem ./extensions
+  -benchmem .
+)
 ```
 
 The WebSocket and HTTP benchmarks wait for the publishing client to observe

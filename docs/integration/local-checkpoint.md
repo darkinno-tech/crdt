@@ -1,6 +1,7 @@
 # Local checkpoint Store references
 
-`persistence` is a local CRDT recovery reference. Its `Store` contract saves
+`persistence` is a local CRDT recovery reference in the opt-in
+`github.com/DarkInno/crdt/persistence` module. Its `Store` contract saves
 one complete `snapshot.Snapshot`, its durable-relay cursor, and an
 application-owned opaque outbox as one durability boundary. `BoltStore` uses a
 bbolt transaction; `FileStore` uses a private file replacement. It fills the
@@ -11,7 +12,7 @@ Use it when one process owns one protected local volume and one concrete CRDT
 state codec. The executable OR-Set restart flow is:
 
 ```sh
-go run ./examples/persistent-replica
+(cd examples && go run ./persistent-replica)
 # recovered=true cursor=41 outbox_bytes=24
 ```
 
@@ -234,11 +235,12 @@ throughput. Back up and restore-test a closed database file or use a
 host-managed consistent volume snapshot.
 
 ```sh
-go test ./persistence ./examples/persistent-replica
-go test -race ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 ./persistence
-go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 ./persistence
-go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s ./persistence
+(cd persistence && go test .)
+(cd examples && go test ./persistent-replica)
+(cd persistence && go test -race .)
+(cd persistence && go test -run='^$' -fuzz=FuzzUnmarshalCheckpoint -fuzztime=250000x -parallel=1 .)
+(cd persistence && go test -run='^$' -fuzz=FuzzUnmarshalFileRecords -fuzztime=250000x -parallel=1 .)
+(cd persistence && go test -run='^$' -bench='Benchmark((File)?Store(Save|Load|SaveParallel|Delete|LoadLegacyMigration)|(File)?ConfigFromLoader)$' -benchmem -benchtime=2s .)
 ```
 
 These checks cover local restart, corruption rejection, concurrent access, and

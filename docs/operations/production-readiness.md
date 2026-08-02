@@ -132,6 +132,7 @@ does not inherit request context, and does not select a process-global Meter
 provider. The host creates and owns its `MeterProvider`, exporter endpoint,
 credentials, batching, resource attributes, and shutdown. That keeps an
 observability backend outside the CRDT security and availability boundary.
+Install `github.com/DarkInno/crdt/telemetry` when using this adapter.
 
 ```go
 // Configure this MeterProvider in the host with its chosen OTLP, Prometheus,
@@ -188,18 +189,19 @@ deployment dependency, not a durable audit or delivery contract.
 ## Evidence and limits
 
 ```sh
-# Unit, real loopback WebSocket, and configuration/error-path coverage.
-go test ./config ./telemetry ./durable ./extensions
-go test -race ./config ./telemetry ./durable ./extensions
+# Unit, real loopback WebSocket, and configuration/error-path coverage across
+# the root and every opt-in module.
+make test
+make race
 
 # Parser robustness and hot-path allocation evidence.
 go test -run='^$' -fuzz=FuzzLoaderTypedAccessors -fuzztime=250000x ./config
-go test -run='^$' -bench='Benchmark(ReporterRecord|OpenTelemetrySinkRecord|HandlerRecord)' -benchmem ./telemetry ./durable
+go test -run='^$' -bench='^BenchmarkReporterRecord$$' -benchmem ./telemetry
+(cd durable && go test -run='^$' -bench='^BenchmarkHandlerRecord$$' -benchmem .)
 ```
 
 The durable test includes a real loopback WebSocket handshake, replay, and
 append with a reporter sink. It proves event plumbing and that the relay's
 existing authorization/manifest/append contracts remain intact. It does not
-prove a production log or Metrics backend, TLS termination, identity provider,
-external exporter pipeline, target-machine p99 latency, or business
-authorization rules.
+prove a production log backend, TLS termination, identity provider, external
+metrics pipeline, target-machine p99 latency, or business authorization rules.

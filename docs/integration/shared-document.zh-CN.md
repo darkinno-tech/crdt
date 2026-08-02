@@ -153,7 +153,7 @@ fmt.Println(profile.ConflictRule)
 运行包含乱序和重复投递的完整示例：
 
 ```sh
-go run ./examples/shared-document
+(cd examples && go run ./shared-document)
 # title=Release plan
 # task=release-notes
 # done=false

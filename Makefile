@@ -24,6 +24,7 @@ CPP_FLAGS ?= -std=c++20 -Wall -Wextra -Werror -pedantic
 CPP_BUILD_DIR ?= clients/cpp/.build
 CPP_TEST_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-conformance
 CPP_BENCHMARK_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-benchmark
+GO_MODULE_RUNNER ?= ./scripts/for-go-modules.sh
 
 ifeq ($(shell uname -s),Darwin)
 CPP_LIBRARY_PATH_ENV := DYLD_LIBRARY_PATH
@@ -35,16 +36,16 @@ fmt-check:
 	test -z "$$(gofmt -l .)"
 
 generate:
-	go generate ./...
+	$(GO_MODULE_RUNNER) go generate ./...
 
 generate-check:
 	go run ./internal/cmd/typeidgen -check
 
 test:
-	go test ./...
+	$(GO_MODULE_RUNNER) go test ./...
 
 test-unit:
-	go test $$(go list ./...)
+	$(GO_MODULE_RUNNER) sh -c 'go test $$(go list ./...)'
 
 test-integration:
 	go test -count=1 -run '^TestThreeReplicaDeltaDeliveryRecoveryAndAntiEntropy$$' .
@@ -54,19 +55,19 @@ test-extreme:
 	go test -race -count=1 -run '^TestHighCardinalityThreeReplicaRecoveryAndConvergence$$' .
 
 race:
-	go test -race ./...
+	$(GO_MODULE_RUNNER) go test -race ./...
 
 vet:
-	go vet ./...
+	$(GO_MODULE_RUNNER) go vet ./...
 
 fuzz:
-	FUZZ_RUNS="$(FUZZ_RUNS)" FUZZ_MODEL_RUNS="$(FUZZ_MODEL_RUNS)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" ./scripts/fuzz-all.sh
+	FUZZ_ALLOW_EMPTY=1 FUZZ_RUNS="$(FUZZ_RUNS)" FUZZ_MODEL_RUNS="$(FUZZ_MODEL_RUNS)" FUZZ_PARALLEL="$(FUZZ_PARALLEL)" $(GO_MODULE_RUNNER) "$(CURDIR)/scripts/fuzz-all.sh"
 
 # List the release fuzz coverage derived from the current package graph. It is
 # intentionally separate from fuzz-smoke, whose small curated list documents
 # the most important attacker-controlled trust boundaries for pull requests.
 fuzz-list:
-	FUZZ_LIST_ONLY=1 ./scripts/fuzz-all.sh
+	FUZZ_ALLOW_EMPTY=1 FUZZ_LIST_ONLY=1 $(GO_MODULE_RUNNER) "$(CURDIR)/scripts/fuzz-all.sh"
 
 # Fuzz the independent trust boundaries that most often accept attacker-controlled
 # bytes in a pull request. Release candidates still run the complete fuzz target
@@ -76,14 +77,14 @@ fuzz-smoke:
 	go test -run=^$$ -fuzz=FuzzReferenceVerify -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./attachment
 	go test -run=^$$ -fuzz=FuzzUnmarshalUpdate -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./awareness
 	go test -run=^$$ -fuzz=FuzzDocumentTreeWire -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./documenttree
-	go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./durable
+	cd durable && go test -run=^$$ -fuzz=FuzzWire -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) .
 	go test -run=^$$ -fuzz=FuzzInboxHandlesUntrustedChangesWithoutPanic -fuzztime=$(FUZZ_RUNS)x -parallel=$(FUZZ_PARALLEL) ./replica
 
 coverage:
-	COVERAGE_THRESHOLD=90 ./scripts/check-coverage.sh
+	COVERAGE_THRESHOLD=90 $(GO_MODULE_RUNNER) "$(CURDIR)/scripts/check-coverage.sh"
 
 benchmark:
-	go test -run='^$$' -bench=. -benchmem ./...
+	$(GO_MODULE_RUNNER) go test -run='^$$' -bench=. -benchmem ./...
 
 # Level 1 interoperability needs the maintained Yjs engine. These targets are
 # separate from Go-only checks so library consumers do not need Node merely to
@@ -93,7 +94,7 @@ benchmark:
 yjs-store-test:
 	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
 	$(NPM) --prefix yjsstore/runtime test
-	CRDT_YJS_STORE_NODE_INTEGRATION=1 go test -count=1 ./extensions -run '^TestYJS.*Node.*Integration$$'
+	cd extensions && CRDT_YJS_STORE_NODE_INTEGRATION=1 go test -count=1 . -run '^TestYJS.*Node.*Integration$$'
 
 yjs-store-benchmark:
 	$(NPM) --prefix yjsstore/runtime ci --ignore-scripts --prefer-offline
@@ -108,8 +109,14 @@ yjs-store-benchmark:
 benchmark-regression:
 	@test -n "$(BENCHMARK_BASE)" || (echo "set BENCHMARK_BASE to a baseline checkout" >&2; exit 2)
 	@mkdir -p .tmp/benchmark-results
-	@(cd "$(BENCHMARK_BASE)" && GOMAXPROCS=1 go test -run='^$$' -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain|BenchmarkProviderEndToEndRelayFanout)$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./counter ./text ./examples/websocket-provider/provider) > .tmp/benchmark-results/baseline.txt
-	@GOMAXPROCS=1 go test -run='^$$' -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain|BenchmarkProviderEndToEndRelayFanout)$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./counter ./text ./examples/websocket-provider/provider > .tmp/benchmark-results/candidate.txt
+	@if [ -f "$(BENCHMARK_BASE)/examples/go.mod" ]; then \
+		(cd "$(BENCHMARK_BASE)" && GOMAXPROCS=1 go test -run='^$$' -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain)$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./counter ./text) > .tmp/benchmark-results/baseline.txt; \
+		(cd "$(BENCHMARK_BASE)/examples" && GOMAXPROCS=1 go test -run='^$$' -bench='^BenchmarkProviderEndToEndRelayFanout$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider) >> .tmp/benchmark-results/baseline.txt; \
+	else \
+		(cd "$(BENCHMARK_BASE)" && GOMAXPROCS=1 go test -run='^$$' -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain|BenchmarkProviderEndToEndRelayFanout)$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./counter ./text ./examples/websocket-provider/provider) > .tmp/benchmark-results/baseline.txt; \
+	fi
+	@GOMAXPROCS=1 go test -run='^$$' -bench='^(BenchmarkGCounterApplyDelta|BenchmarkRGAApplyDeltaLinearChain)$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./counter ./text > .tmp/benchmark-results/candidate.txt
+	@(cd examples && GOMAXPROCS=1 go test -run='^$$' -bench='^BenchmarkProviderEndToEndRelayFanout$$' -benchmem -benchtime=100ms -count=5 -cpu=1 ./websocket-provider/provider) >> .tmp/benchmark-results/candidate.txt
 	@go run ./cmd/crdt-benchmark-check -base .tmp/benchmark-results/baseline.txt -candidate .tmp/benchmark-results/candidate.txt -minimum-samples 5 -max-time-regression 1.00 -max-bytes-regression 0.05 -max-allocs-regression 0.05 -require BenchmarkGCounterApplyDelta -require BenchmarkRGAApplyDeltaLinearChain -require BenchmarkProviderEndToEndRelayFanout/receivers_1 -require BenchmarkProviderEndToEndRelayFanout/receivers_4 -require BenchmarkProviderEndToEndRelayFanout/receivers_16
 
 wasm:
@@ -224,10 +231,10 @@ docker-test:
 	docker run --rm --env COVERAGE_THRESHOLD=90 crdt-ci:local
 
 staticcheck:
-	$(STATICCHECK) ./...
+	$(GO_MODULE_RUNNER) $(STATICCHECK) ./...
 
 lint:
-	$(GOLANGCI_LINT) run ./...
+	$(GO_MODULE_RUNNER) $(GOLANGCI_LINT) run ./...
 
 # The formal model is an explicitly invoked, pinned Lean check. It remains
 # outside `verify` until the repository adopts a pinned Lean CI bootstrap.

@@ -178,9 +178,9 @@ Yjs update bytes, because its recovery and authorization contract differs.
 Run the focused contract checks:
 
 ```sh
-go test ./extensions -run 'TestYJS|FuzzUnmarshalYJSMessages'
-go test -race ./extensions -run 'TestYJS'
-go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s ./extensions
+(cd extensions && go test . -run 'TestYJS|FuzzUnmarshalYJSMessages')
+(cd extensions && go test -race . -run 'TestYJS')
+(cd extensions && go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s .)
 ```
 
 The benchmark measures local wire decoding and duplicate-aware in-memory
