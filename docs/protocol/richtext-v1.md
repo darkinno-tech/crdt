@@ -127,7 +127,50 @@ enforce its schema's URL/content policy before rendering; rate-limit writers;
 and atomically persist `{state frame, HLC state, delivery frontier/outbox}`.
 CRC-32C detects accidental corruption only.
 
-## 7. Tombstone lifecycle
+## 7. Relative-position metadata (non-frame)
+
+`text.Anchor` is the relative-position identity for a rich-text cursor. It is
+an RGA `tag` plus an association: `before = 1` references the boundary before
+the tag, `after = 2` references the boundary after it and before descendants.
+A root position omits the tag; root-before is document start and root-after is
+document end. `Document.AnchorAt` and `Document.ResolveAnchor` capture and
+resolve one cursor. `Document.AnchorRangeAt` and
+`Document.ResolveAnchorRange` capture or resolve two boundaries from one
+locked projection for selections and comment ranges. The range preserves its
+caller-provided direction (`start`/`end`); comment storage MUST reject a
+resolved reversed range if its product model requires an ordered span.
+
+The following versioned binary records are **host metadata**, not TypeID 23/24
+payloads and not nested RGA frames:
+
+```text
+anchor       = uvarint(1) anchor-payload
+anchor-range = uvarint(1) anchor-payload anchor-payload
+anchor-payload = association position-present [tag]
+association     = uvarint(1 before / 2 after)
+position-present = uvarint(0 root / 1 tag follows)
+```
+
+`Anchor.MarshalBinary` / `UnmarshalAnchor` and
+`AnchorRange.MarshalBinary` / `UnmarshalAnchorRange` MUST reject unknown
+versions, non-shortest varints, invalid associations, invalid tags, trailing
+data, and records outside the configured byte or replica-ID limits. The Go
+defaults bound one metadata record to 131,136 bytes and each replica ID to 64
+KiB; the browser runtime derives equivalent bounds from its negotiated string
+limit. Hosts SHOULD set lower authenticated document-specific limits before
+accepting client metadata.
+
+The encoded position deliberately has no document, user, group, or epoch ID.
+Its envelope MUST bind all four and be authenticated and authorized before
+decode or storage; a checksum or a valid RGA tag does not prove ownership. The
+host stores cursor/selection/comment records next to, but separately from, its
+atomic `{state frame, HLC state, frontier/outbox}` checkpoint. It MUST NOT put
+them in a CRDT state/delta frame, snapshot payload, outbox, or unauthenticated
+presence message. A retained tombstone remains resolvable. After compaction,
+resolution MUST return `text.ErrAnchorGone`; callers MUST clear or explicitly
+reattach the metadata rather than choosing a nearby offset.
+
+## 8. Tombstone lifecycle
 
 Text deletion tombstones retain structural RGA anchors. Attribute removals
 retain LWW deletion markers. `Document.TombstoneTags` exposes both as a
@@ -144,7 +187,7 @@ they remove all formatting metadata attached to a text position only after that
 position was structurally compacted. These methods do not themselves prove
 membership authority, checkpoint durability, or old-frame retirement.
 
-## 8. Conformance and versioning
+## 9. Conformance and versioning
 
 For every [vector](testdata/richtext-v1-vectors.json), an implementation MUST
 verify its frame, decode it, re-encode it identically, and obtain the specified

@@ -243,9 +243,10 @@ func (d *Document) Len() int {
 }
 
 // AnchorAt returns the existing text.Anchor representation for a visible rune
-// boundary. Anchors are local or ephemeral-presence metadata, never embedded
-// in a rich-text frame. Keeping this API typed as text.Anchor deliberately
-// avoids creating a second relative-position format for rich text.
+// boundary. text.Anchor has a versioned host-metadata encoding for durable
+// cursors, selections, and comments, but is never embedded in a rich-text
+// frame. Keeping this API typed as text.Anchor deliberately avoids creating a
+// second relative-position identity format for rich text.
 func (d *Document) AnchorAt(offset int) (text.Anchor, error) {
 	if d == nil || d.text == nil {
 		return text.Anchor{}, ErrNilDocument
@@ -264,6 +265,33 @@ func (d *Document) ResolveAnchor(anchor text.Anchor) (int, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.text.ResolveAnchor(anchor)
+}
+
+// AnchorRangeAt captures two relative boundaries from one rich-text revision.
+// It is appropriate for an editor selection or a comment range. The returned
+// text.AnchorRange preserves the supplied order, so a backwards selection can
+// retain its anchor/head direction. Its versioned binary encoding is host
+// metadata and must not be stored in rich-text state/delta frames.
+func (d *Document) AnchorRangeAt(start, end int) (text.AnchorRange, error) {
+	if d == nil || d.text == nil {
+		return text.AnchorRange{}, ErrNilDocument
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.text.AnchorRangeAt(start, end)
+}
+
+// ResolveAnchorRange maps both retained relative boundaries to the current
+// visible rune offsets from one document projection. A compacted position
+// fails closed with text.ErrAnchorGone instead of silently moving a selection
+// or comment.
+func (d *Document) ResolveAnchorRange(anchors text.AnchorRange) (start, end int, err error) {
+	if d == nil || d.text == nil {
+		return 0, 0, ErrNilDocument
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.text.ResolveAnchorRange(anchors)
 }
 
 // AttributesAt returns a copy of the live attributes at a visible rune offset.
