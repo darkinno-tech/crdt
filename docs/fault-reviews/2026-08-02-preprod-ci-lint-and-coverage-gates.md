@@ -25,6 +25,7 @@
 text/sequence.go:94:6: func markerPriority is unused (U1000)
 replica/inbox_delivery_test.go:72: comparing with != will fail on wrapped errors (errorlint)
 internal/wasm coverage: 88.0%, below required 90%
+performance baseline: main module does not contain package github.com/DarkInno/crdt/.benchmark-baseline/counter
 ```
 
 Docker 任务通过 `Dockerfile.ci` 执行 `make coverage`，因此与第三项共享同一覆盖率失败根因；候选未合并，未产生预发布 tag 或环境写入。
@@ -38,17 +39,19 @@ Docker 任务通过 `Dockerfile.ci` 执行 `make coverage`，因此与第三项�
 3. 运行 `make lint`，复现测试对 sentinel error 使用 `!=` 而非可包装的 `errors.Is`。
 4. 运行 `make coverage`，定位 `internal/wasm` 的新增单锚点包装 API 尚未由测试直达，包覆盖率为 88.0%。
 5. 补齐单锚点、未知句柄和 nil runtime 分支后，`internal/wasm` 覆盖率升至 92.5%，完整 `make coverage` 通过。
-6. 以 `origin/preprod` 为基线运行 `make benchmark-regression`，本地受控比较通过；远端 performance 失败仍单独保留，不能被 coverage 修复掩盖。
+6. 下载 performance 任务日志，发现基线 checkout 位于候选根目录下，自动向上查找的候选 `go.work` 把 `.benchmark-baseline/*` 解释为根模块外的路径。
+7. 只在基线子树设置 `GOWORK=off`，并在同样嵌套的 checkout 下运行 root 与 examples 基准；随后以 `origin/preprod` 为基线运行完整受控比较通过。
 
 ### 3.2 直接原因
 
 - `text/sequence.go` 保留了已不再被生产代码或测试使用的私有 helper。
 - `replica/inbox_delivery_test.go` 固定比较 error 实例，违背项目其余测试的可包装 sentinel error 契约。
 - `internal/wasm/richtext_test.go` 覆盖范围 API，但遗漏单锚点和 nil/未知 document 边界。
+- `.github/workflows/test.yml` 的 performance job 在候选目录中嵌套 baseline checkout，却没有隔离其 Go workspace 解析。
 
 ### 3.3 根本原因
 
-重构后只验证了主功能路径，没有把“删除无调用 helper”“包装错误比较”和“每个新增公开包装方法的成功/失败分支”纳入同一发布前检查。
+重构后只验证了主功能路径，没有把“删除无调用 helper”“包装错误比较”“每个新增公开包装方法的成功/失败分支”以及“嵌套基线 checkout 的 workspace 边界”纳入同一发布前检查。
 
 ### 3.4 为什么没有提前发现
 
@@ -61,8 +64,9 @@ Docker 任务通过 `Dockerfile.ci` 执行 `make coverage`，因此与第三项�
 - 删除无调用的 `markerPriority`，保留由 `markerPriorities` 统一计算 entry/exit priority 的路径。
 - 使用 `errors.Is(err, ErrInvalidChange)` 验证测试的 sentinel error。
 - 为 `RichTextRuntime` 的单锚点 encode/decode/resolve、未知句柄和 nil runtime 增加真实边界测试。
+- 仅在 `.benchmark-baseline` 及其 `examples` 子模块的基准命令设置 `GOWORK=off`，使基线不继承候选的 workspace；候选命令保持现有多模块 workspace 行为。
 
-**修改文件**：`text/sequence.go`、`replica/inbox_delivery_test.go`、`internal/wasm/richtext_test.go`。
+**修改文件**：`text/sequence.go`、`replica/inbox_delivery_test.go`、`internal/wasm/richtext_test.go`、`.github/workflows/test.yml`。
 
 ### 4.2 验证结果
 
@@ -72,6 +76,7 @@ make lint         PASS
 make coverage     PASS
 internal/wasm     92.5% (required >= 90%)
 make benchmark-regression BENCHMARK_BASE=<origin/preprod worktree>  PASS
+nested .benchmark-baseline commands with GOWORK=off                  PASS
 ```
 
 ## 5. 预防措施
@@ -85,6 +90,7 @@ make benchmark-regression BENCHMARK_BASE=<origin/preprod worktree>  PASS
 
 - [x] 每个新增公开 Wasm runtime 包装 API 至少覆盖成功、未知 document 与 nil runtime 边界。
 - [x] 发布候选推送前执行 staticcheck、golangci、coverage 和基线性能比较。
+- [x] 基线 checkout 嵌套在候选目录时，明确验证 `GOWORK` 解析边界。
 
 ### 5.3 流程层面
 
