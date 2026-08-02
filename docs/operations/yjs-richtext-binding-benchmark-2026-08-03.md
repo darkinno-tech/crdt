@@ -28,8 +28,8 @@ make typescript-yjs-richtext-benchmark
 
 | Scenario | Median elapsed | Median per remote merge | Full writes | Incremental writes |
 | --- | ---: | ---: | ---: | ---: |
-| `incremental_ytext_delta` | 65.27 ms / 512 | 0.127 ms | 0 | 512 |
-| `full_delta_projection_baseline` | 323.08 ms / 512 | 0.631 ms | 512 | 0 |
+| `incremental_ytext_delta` | 52.72 ms / 512 | 0.103 ms | 0 | 512 |
+| `full_delta_projection_baseline` | 312.11 ms / 512 | 0.610 ms | 512 | 0 |
 
 The sample verifies convergence of author `Y.Text`, replica `Y.Text`, and the
 Delta port after every scenario. Heap deltas varied with V8 GC and are not
