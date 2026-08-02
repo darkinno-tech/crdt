@@ -69,6 +69,8 @@ be committed.
 - [Document-tree v2 protocol](protocol/document-tree-v2.md)
 - [Native multilingual RGA delivery decision](design/native-multilanguage-rga.md)
 - [原生多语言 RGA 交付决策](design/native-multilanguage-rga.zh-CN.md)
+- [Native client CRDT type-coverage decision](design/native-client-type-coverage.md)
+- [原生客户端 CRDT 类型覆盖决策](design/native-client-type-coverage.zh-CN.md)
 
 ## Operations and architecture
 
@@ -97,6 +99,7 @@ be committed.
 - [Rich-text editor binding controlled validation — 2026-07-31](operations/richtext-editor-binding-benchmark-2026-07-31.md)
 - [Tiptap rich-text profile controlled validation — 2026-08-01](operations/tiptap-richtext-binding-benchmark-2026-08-01.md)
 - [Native multilingual RGA controlled benchmark — 2026-07-31](operations/native-multilanguage-rga-benchmark-2026-07-31.md)
+- [Native LWW-Map controlled validation — 2026-08-03](operations/native-client-lww-map-benchmark-2026-08-03.md)
 - [RGA incremental editor cross-host benchmark — 2026-08-01](operations/rga-incremental-editor-benchmark-2026-08-01.md)
 - [Browser multi-tab/offline controlled validation — 2026-08-01](operations/browser-multitab-offline-2026-08-01.md)
 - [DarkInno / Yjs text comparison](operations/crdt-library-comparison-2026-07-30.md)

@@ -90,7 +90,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
 | Implement run-v2 outside Go/Wasm | [RGA run-v2 protocol and vectors](docs/protocol/rga-run-v2.md) |
 | Reduce large Go/Wasm text-frame bytes without changing scalar RGA semantics | [Packed RGA v3 protocol](docs/protocol/rga-packed-v3.md) and `go run ./cmd/crdt-compare -protocol=packed-v3` |
-| Use the native Rust, Python, Swift, or C++ RGA runtime | [Multilanguage RGA decision](docs/design/native-multilanguage-rga.md) |
+| Use the native Rust, Python, Swift, or C++ RGA/LWW-Map runtime | [Native type-coverage decision](docs/design/native-client-type-coverage.md) |
 | Implement stable formatting or trees | [Rich-text v1](docs/protocol/richtext-v1.md) and [observed-remove tree v1](docs/protocol/or-tree-v1.md) |
 
 The [documentation index](docs/README.md) separates getting-started, integration, protocol/design, and operational material. Detailed performance evidence and deployment runbooks live there instead of making this entry page a manual.
