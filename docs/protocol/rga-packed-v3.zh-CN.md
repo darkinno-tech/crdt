@@ -49,7 +49,29 @@ UTF-8 文本必须有效且刚好有 `count` 个 Unicode scalar；第一项使�
 state 必须父节点完整；delta 可以起于外部 parent，但只可在有界 pending 策略内保存，不能将
 未完成状态写成 snapshot。失败不得改变文本、HLC、pending 或持久化状态。
 
-v3 由 Go 库和显式构建的 Go/Wasm runtime（`WASM_RGA_PROTOCOL=packed-v3`）实现。
+## 初始同步的可选 outer frame v2
+
+packed-v3 可以叠加独立协商的[压缩感知 outer frame v2](frame-v2.md)。这不是 packed-v4：
+TypeID `29/30`、语义版本 `3` 和解压后 canonical packed-v3 payload 均保持不变。组必须在
+经过认证的 `replica.Protocol` 中绑定 `WireFormatVersion: frame.FormatVersionV2`；outer-v1 与
+outer-v2 的 packed-v3 组故意不兼容，不能降级或混用。
+
+Go 提供 `MarshalPackedFrameV2`、`Delta.MarshalPackedFrameV2`、packed 的
+`Insert`/`Delete`/`Replace` `FrameV2WithLimits`、`SnapshotPackedFrameV2CurrentState`
+及 snapshot-delta v2 API。它们在 local mutation 前按最终 v2 envelope 预检。DEFLATE 未能缩小
+完整帧时会选择 raw v2，但这种小帧仍必须使用 outer-v2 Manifest。
+
+浏览器工件使用 `WASM_RGA_PROTOCOL=packed-v3-v2` 构建，并向 `initRGAWasm` 传入
+`RGA_PROTOCOL_PACKED_V3_V2`。它会暴露 outer version `2`，在 mutation 前拒绝 v1 输入；普通
+`packed-v3` 工件也会拒绝 v2。无依赖 TypeScript `decodeFrame` helper 仍只验证 v1 envelope；
+loader 有意将 v2 解码交给有界 Go Wasm runtime。纯 TypeScript 实现只有在完成同样有界的 raw
+DEFLATE 校验后才能声明 v2。
+
+DEFLATE 不提供认证或加密。outer decoder 在解析前检查 `MaxFrameBytes`、展开前检查
+`MaxPayload`；应用仍必须提供 transport body cap、TLS、授权和经过认证的精确 Manifest。
+
+v3 由 Go 库和显式构建的 Go/Wasm runtime（`WASM_RGA_PROTOCOL=packed-v3` 或
+`WASM_RGA_PROTOCOL=packed-v3-v2`）实现。
 TypeScript loader 只暴露精确 Manifest 契约，并将所有 RGA 帧交给该 runtime；它不自行解码或
 转换 packed 帧。原生实现未完成同样的有界 decoder、canonical re-encoder 与向量前，不得宣称
 支持 `29/30`。它不是 Yjs 协议兼容层；Yjs 仍通过独立有界的 opaque relay/store 处理。

@@ -22,6 +22,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Added an opt-in `packed-v3-v2` Go/Wasm artifact and TypeScript contract for
+  compression-aware packed RGA frames. It binds outer frame v2 to the exact
+  Manifest, rejects v1/v2 mixing before mutation, and retains the decoded
+  packed-v3 semantics and resource limits.
 - Added an explicitly selected packed-v3 Go/Wasm browser runtime artifact and
   TypeScript manifest contract. Its bounded initial snapshots and local edits
   retain the same scalar RGA semantics while avoiding run-v2 wire expansion
