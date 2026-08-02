@@ -1,6 +1,7 @@
 package richtext
 
 import (
+	"errors"
 	"sort"
 
 	"github.com/DarkInno/crdt"
@@ -70,7 +71,7 @@ func (d *Document) compactTombstones(tags []crdt.Tag, eligible bool) (int, error
 }
 
 func richCompactionError(err error) error {
-	if err == text.ErrUnsafeCompaction {
+	if errors.Is(err, text.ErrUnsafeCompaction) {
 		return ErrUnsafeCompaction
 	}
 	return err
