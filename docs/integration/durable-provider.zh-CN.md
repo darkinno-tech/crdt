@@ -32,8 +32,9 @@ go get github.com/DarkInno/crdt/durable@latest
 
 ```go
 store, err := durable.OpenStore("/var/lib/crdt/relay.db", durable.StoreConfig{
-	MaxEvents: 1_000_000,
-	MaxBytes:  4 << 30,
+	MaxEvents:    1_000_000,
+	MaxBytes:     4 << 30,
+	HLCReplicaID: "relay-1", // 启用可选无 state vector HLC/Merkle v3
 })
 if err != nil {
 	return err
@@ -63,7 +64,7 @@ if err != nil {
 mux.Handle("/crdt/durable/", http.StripPrefix("/crdt/durable", handler))
 ```
 
-服务端通过 `GET /ws` 暴露 `crdt-durable-v1` 子协议。`bbolt` 会对文件加独占锁，但部署仍必须保证一个持久卷只有一个 active pod/process；不要把同一文件挂到多副本。高可用可使用保留相同事务语义的 Redis、PostgreSQL 或 MySQL 实现，具体边界见 [provider architecture](provider-architecture.md)。
+服务端通过 `GET /ws` 暴露稳定 `crdt-durable-v1`；在 Log 具备对应能力时还可协商 v2 或 HLC/Merkle v3。`bbolt` 会对文件加独占锁，但部署仍必须保证一个持久卷只有一个 active pod/process；不要把同一文件挂到多副本。高可用可使用保留相同事务语义的 Redis、PostgreSQL 或 MySQL 实现，具体边界见 [provider architecture](provider-architecture.md)。
 `MaxEvents` 与 `MaxBytes` 对每个 replication group 生效；多租户服务还需要在此前增加固定的每租户 group 配额。
 
 ## 持久接收与重连
@@ -72,13 +73,22 @@ mux.Handle("/crdt/durable/", http.StripPrefix("/crdt/durable", handler))
 
 当缺失历史超过服务端窗口，客户端返回 `ErrReplayUnavailable`。此时必须从经过校验的 checkpoint bootstrap；不能重置 cursor 或接收截断的流。
 
+## 无 state vector 的 HLC/Merkle 反熵
+
+持久化应用事件 inventory 时，可配置稳定的 `StoreConfig.HLCReplicaID`，并提供
+`MerkleRoot`、`ReconcileMerkle`、`OnMerkleCatchUp`。客户端协商 `crdt-durable-v3`：
+root 相等只交换轻量 control boundary；root 不等才交换有上限叶清单，并仅请求本地缺失的
+relay-HLC identity。root 只用于完整性/反熵，不是认证、回执或 tombstone-GC 许可。进入
+live 前必须将具体 state、本地 inventory 与 boundary 原子持久化。完整边界、恢复及性能
+取舍见 [HLC/Merkle 反熵设计](../design/durable-hlc-merkle-anti-entropy.zh-CN.md)。
+
 ## 验证
 
 ```sh
 (cd durable && go test .)
 (cd durable && go test -race .)
 (cd durable && go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x .)
-(cd durable && go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect)' -benchmem .)
+(cd durable && go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect|Merkle)' -benchmem .)
 ```
 
 测试覆盖真实 loopback WebSocket、重启/重放、强制断线重连、重复/乱序模拟及本地文件存储。它们不证明线上 TLS、外部身份提供方、多节点存储、客户端 checkpoint 事务或墓碑 GC 策略。

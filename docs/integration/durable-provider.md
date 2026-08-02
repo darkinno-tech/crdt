@@ -136,6 +136,19 @@ If replay exceeds the configured window, the client receives
 `ErrReplayUnavailable`. It must bootstrap from a validated checkpoint instead
 of resetting the cursor or accepting a partial event stream.
 
+## HLC/Merkle anti-entropy without a state vector
+
+For a durable application event inventory, configure a stable
+`StoreConfig.HLCReplicaID` and provide `MerkleRoot`, `ReconcileMerkle`, and
+`OnMerkleCatchUp`. The client negotiates `crdt-durable-v3`: equal roots use a
+small control-only boundary, while differing roots exchange a bounded leaf
+inventory and request only missing relay-HLC identities. The root is an
+integrity/reconciliation commitment, not authentication, a receipt, or a
+tombstone-GC permission. Persist the concrete state, local inventory, and
+boundary atomically before live delivery. See the [HLC/Merkle anti-entropy
+design](../design/durable-hlc-merkle-anti-entropy.md) for exact bounds,
+recovery, and performance trade-offs.
+
 ## State-vector catch-up and long sessions
 
 The stable `crdt-durable-v1` subprotocol uses the cursor flow above. When the
@@ -177,7 +190,7 @@ TLS, ingress controls, and product authorization remain host responsibilities.
 (cd durable && go test .)
 (cd durable && go test -race .)
 (cd durable && go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x .)
-(cd durable && go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect|DurableSameHostFanout)' -benchmem .)
+(cd durable && go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect|DurableSameHostFanout|Merkle)' -benchmem .)
 ```
 
 These checks include real loopback WebSockets, restart/replay, connection-drop

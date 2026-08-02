@@ -74,6 +74,8 @@ be committed.
 - [原生多语言 RGA 交付决策](design/native-multilanguage-rga.zh-CN.md)
 - [Native client CRDT type-coverage decision](design/native-client-type-coverage.md)
 - [原生客户端 CRDT 类型覆盖决策](design/native-client-type-coverage.zh-CN.md)
+- [Durable HLC/Merkle anti-entropy design](design/durable-hlc-merkle-anti-entropy.md)
+- [Durable HLC/Merkle 反熵设计](design/durable-hlc-merkle-anti-entropy.zh-CN.md)
 
 ## Operations and architecture
 
