@@ -105,6 +105,30 @@ test("real Yjs V2 stays format-pinned and synchronizes from a state vector", asy
   assert.equal(wrongFormat.body.code, "wrong_format");
 });
 
+test("each request destroys its materialized Y.Doc after a durable operation", async (context) => {
+  const running = await startStore(context);
+  const document = testDocument("v1");
+  const author = new Y.Doc();
+  const update = captureUpdate(author, "update", () => author.getText("scoped").insert(0, "release"));
+  const vector = Y.encodeStateVector(author);
+  const destroy = Y.Doc.prototype.destroy;
+  let destroyed = 0;
+  Y.Doc.prototype.destroy = function destroyScopedDocument(...argumentsList) {
+    destroyed += 1;
+    return destroy.apply(this, argumentsList);
+  };
+  try {
+    assert.equal((await request(running.endpoint, "/v1/yjs/apply", { document, update: toBase64(update) })).status, 200);
+    assert.equal((await request(running.endpoint, "/v1/yjs/state-vector", { document })).status, 200);
+    assert.equal((await request(running.endpoint, "/v1/yjs/diff", { document, stateVector: toBase64(vector) })).status, 200);
+    assert.equal((await request(running.endpoint, "/v1/yjs/snapshot", { document })).status, 200);
+  } finally {
+    Y.Doc.prototype.destroy = destroy;
+    author.destroy();
+  }
+  assert.equal(destroyed, 4, "every request-scoped materialization must be released");
+});
+
 test("parallel offline writers converge and a duplicate is not persisted twice", async (context) => {
   const running = await startStore(context);
   const document = testDocument("v1");

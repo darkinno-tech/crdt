@@ -137,28 +137,36 @@ async function apply(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    const engine = engineFor(document.format);
-    const updateError = validateUpdateFormat(document.format, update);
-    if (updateError !== null) {
-      throw new YJSStoreError(updateError, 400);
-    }
-    const before = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
     try {
-      engine.apply(state.document, update);
-    } catch {
-      throw new YJSStoreError("invalid_update", 400);
+      const engine = engineFor(document.format);
+      const updateError = validateUpdateFormat(document.format, update);
+      if (updateError !== null) {
+        throw new YJSStoreError(updateError, 400);
+      }
+      const before = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
+      try {
+        engine.apply(state.document, update);
+      } catch {
+        throw new YJSStoreError("invalid_update", 400);
+      }
+      const merged = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
+      const vector = boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes);
+      if (equalBytes(before, merged)) {
+        return { applied: false, cursor: state.cursor, stateVector: encodeBytes(vector) };
+      }
+      if (state.cursor >= maximumCursor) {
+        throw new YJSStoreError("limit_exceeded", 413);
+      }
+      const cursor = state.cursor + 1;
+      await persistDocument(config, document, key, cursor, merged, vector);
+      return { applied: true, cursor, stateVector: encodeBytes(vector) };
+    } finally {
+      // Every HTTP request materializes a fresh Y.Doc from its durable
+      // snapshot. Destroy it after the operation so Yjs observers, subdocs,
+      // and implementation-owned references cannot accumulate under a
+      // sustained state-vector or snapshot workload.
+      state.document.destroy();
     }
-    const merged = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
-    const vector = boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes);
-    if (equalBytes(before, merged)) {
-      return { applied: false, cursor: state.cursor, stateVector: encodeBytes(vector) };
-    }
-    if (state.cursor >= maximumCursor) {
-      throw new YJSStoreError("limit_exceeded", 413);
-    }
-    const cursor = state.cursor + 1;
-    await persistDocument(config, document, key, cursor, merged, vector);
-    return { applied: true, cursor, stateVector: encodeBytes(vector) };
   });
 }
 
@@ -168,7 +176,11 @@ async function stateVector(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    return { stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)) };
+    try {
+      return { stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)) };
+    } finally {
+      state.document.destroy();
+    }
   });
 }
 
@@ -179,11 +191,15 @@ async function diff(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    const engine = engineFor(document.format);
     try {
-      return { update: encodeBytes(boundedUpdate(engine.encode(state.document, remoteVector), config.maxSnapshotBytes)) };
-    } catch {
-      throw new YJSStoreError("invalid_update", 400);
+      const engine = engineFor(document.format);
+      try {
+        return { update: encodeBytes(boundedUpdate(engine.encode(state.document, remoteVector), config.maxSnapshotBytes)) };
+      } catch {
+        throw new YJSStoreError("invalid_update", 400);
+      }
+    } finally {
+      state.document.destroy();
     }
   });
 }
@@ -194,12 +210,16 @@ async function snapshot(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    const engine = engineFor(document.format);
-    return {
-      cursor: state.cursor,
-      update: encodeBytes(boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes)),
-      stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)),
-    };
+    try {
+      const engine = engineFor(document.format);
+      return {
+        cursor: state.cursor,
+        update: encodeBytes(boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes)),
+        stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)),
+      };
+    } finally {
+      state.document.destroy();
+    }
   });
 }
 
