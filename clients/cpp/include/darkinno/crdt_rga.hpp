@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -184,6 +185,224 @@ class Rga final {
   }
 
   crdt_rga* handle_{};
+};
+
+// LwwMap owns one opaque C ABI handle for the stable Go-compatible LWW-Map
+// v1 TypeIDs 9/10. Values are opaque bytes; applications must authenticate a
+// manifest that binds value schema, limits, document, and epoch before Apply.
+class LwwMap final {
+ public:
+  explicit LwwMap(std::string_view replica_id)
+      : LwwMap(std::span<const std::uint8_t>(
+            reinterpret_cast<const std::uint8_t*>(replica_id.data()), replica_id.size())) {}
+
+  LwwMap(std::string_view replica_id, const crdt_lww_map_limits& limits)
+      : LwwMap(std::span<const std::uint8_t>(
+                   reinterpret_cast<const std::uint8_t*>(replica_id.data()), replica_id.size()),
+               limits) {}
+
+  explicit LwwMap(std::span<const std::uint8_t> replica_id) : handle_(NewHandle(replica_id)) {}
+
+  LwwMap(std::span<const std::uint8_t> replica_id, const crdt_lww_map_limits& limits)
+      : handle_(NewHandle(replica_id, &limits)) {}
+
+  explicit LwwMap(const ClockState& clock_state) : handle_(NewHandle(clock_state)) {}
+
+  LwwMap(const ClockState& clock_state, const crdt_lww_map_limits& limits)
+      : handle_(NewHandle(clock_state, &limits)) {}
+
+  ~LwwMap() { crdt_lww_map_free(handle_); }
+
+  LwwMap(const LwwMap&) = delete;
+  LwwMap& operator=(const LwwMap&) = delete;
+
+  LwwMap(LwwMap&& other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
+
+  LwwMap& operator=(LwwMap&& other) noexcept {
+    if (this != &other) {
+      crdt_lww_map_free(handle_);
+      handle_ = std::exchange(other.handle_, nullptr);
+    }
+    return *this;
+  }
+
+  void Apply(std::span<const std::uint8_t> frame) {
+    CheckStatus(crdt_lww_map_apply(handle_, frame.data(), frame.size()));
+  }
+
+  [[nodiscard]] std::vector<std::uint8_t> Set(std::string_view key,
+                                               std::span<const std::uint8_t> value) {
+    crdt_buffer output{};
+    CheckStatus(crdt_lww_map_set(handle_, reinterpret_cast<const std::uint8_t*>(key.data()),
+                                 key.size(), value.data(), value.size(), &output));
+    return TakeBuffer(output);
+  }
+
+  [[nodiscard]] std::vector<std::uint8_t> Delete(std::string_view key) {
+    crdt_buffer output{};
+    CheckStatus(crdt_lww_map_delete(handle_, reinterpret_cast<const std::uint8_t*>(key.data()),
+                                    key.size(), &output));
+    return TakeBuffer(output);
+  }
+
+  [[nodiscard]] std::optional<std::vector<std::uint8_t>> Get(std::string_view key) const {
+    crdt_buffer output{};
+    std::uint8_t present = 0;
+    CheckStatus(crdt_lww_map_get(handle_, reinterpret_cast<const std::uint8_t*>(key.data()),
+                                 key.size(), &output, &present));
+    BufferOwner owner(output);
+    if (present == 0) {
+      return std::nullopt;
+    }
+    if (present != 1) {
+      throw Error(CRDT_INTERNAL);
+    }
+    return CopyBuffer(output);
+  }
+
+  [[nodiscard]] std::vector<std::string> Keys() const {
+    const auto encoded = KeysBuffer();
+    std::size_t cursor = 0;
+    const auto count = ReadUvarint(encoded, &cursor);
+    if (count > encoded.size() || count > static_cast<std::uint64_t>(SIZE_MAX)) {
+      throw Error(CRDT_INTERNAL);
+    }
+    std::vector<std::string> keys;
+    keys.reserve(static_cast<std::size_t>(count));
+    for (std::uint64_t index = 0; index < count; ++index) {
+      const auto length = ReadUvarint(encoded, &cursor);
+      if (length > encoded.size() - cursor) {
+        throw Error(CRDT_INTERNAL);
+      }
+      const auto length_size = static_cast<std::size_t>(length);
+      keys.emplace_back(reinterpret_cast<const char*>(encoded.data() + cursor), length_size);
+      cursor += length_size;
+    }
+    if (cursor != encoded.size()) {
+      throw Error(CRDT_INTERNAL);
+    }
+    return keys;
+  }
+
+  [[nodiscard]] std::vector<std::uint8_t> State() const {
+    crdt_buffer output{};
+    CheckStatus(crdt_lww_map_state(handle_, &output));
+    return TakeBuffer(output);
+  }
+
+  [[nodiscard]] ClockState Clock() const {
+    crdt_clock_state state{};
+    CheckStatus(crdt_lww_map_clock_state(handle_, &state));
+    [[maybe_unused]] BufferOwner replica_id(state.replica_id);
+    return ClockState{.replica_id = CopyBuffer(state.replica_id),
+                      .wall_time = state.wall_time,
+                      .logical = state.logical};
+  }
+
+ private:
+  class BufferOwner final {
+   public:
+    explicit BufferOwner(crdt_buffer value) noexcept : value_(value) {}
+    ~BufferOwner() { crdt_buffer_free(value_); }
+
+    BufferOwner(const BufferOwner&) = delete;
+    BufferOwner& operator=(const BufferOwner&) = delete;
+
+   private:
+    crdt_buffer value_;
+  };
+
+  static crdt_lww_map* NewHandle(std::span<const std::uint8_t> replica_id,
+                                 const crdt_lww_map_limits* limits = nullptr) {
+    crdt_lww_map* handle = nullptr;
+    const auto status = limits == nullptr
+                            ? crdt_lww_map_new(replica_id.data(), replica_id.size(), &handle)
+                            : crdt_lww_map_new_with_limits(replica_id.data(), replica_id.size(),
+                                                          limits, &handle);
+    CheckStatus(status);
+    if (handle == nullptr) {
+      throw Error(CRDT_INTERNAL);
+    }
+    return handle;
+  }
+
+  static crdt_lww_map* NewHandle(const ClockState& state,
+                                 const crdt_lww_map_limits* limits = nullptr) {
+    crdt_lww_map* handle = nullptr;
+    const auto status = limits == nullptr
+                            ? crdt_lww_map_new_from_clock(state.replica_id.data(),
+                                                          state.replica_id.size(), state.wall_time,
+                                                          state.logical, &handle)
+                            : crdt_lww_map_new_from_clock_with_limits(
+                                  state.replica_id.data(), state.replica_id.size(), state.wall_time,
+                                  state.logical, limits, &handle);
+    CheckStatus(status);
+    if (handle == nullptr) {
+      throw Error(CRDT_INTERNAL);
+    }
+    return handle;
+  }
+
+  static void CheckStatus(std::int32_t status) {
+    if (status != CRDT_OK) {
+      throw Error(status);
+    }
+  }
+
+  static std::vector<std::uint8_t> CopyBuffer(const crdt_buffer& value) {
+    if (value.len == 0) {
+      return {};
+    }
+    if (value.data == nullptr) {
+      throw Error(CRDT_INTERNAL);
+    }
+    return {value.data, value.data + value.len};
+  }
+
+  static std::vector<std::uint8_t> TakeBuffer(crdt_buffer value) {
+    BufferOwner owner(value);
+    return CopyBuffer(value);
+  }
+
+  [[nodiscard]] std::vector<std::uint8_t> KeysBuffer() const {
+    crdt_buffer output{};
+    CheckStatus(crdt_lww_map_keys(handle_, &output));
+    return TakeBuffer(output);
+  }
+
+  static std::uint64_t ReadUvarint(const std::vector<std::uint8_t>& value,
+                                   std::size_t* cursor) {
+    const auto start = *cursor;
+    std::uint64_t result = 0;
+    for (std::size_t shift = 0; shift < 10; ++shift) {
+      if (*cursor >= value.size()) {
+        throw Error(CRDT_INTERNAL);
+      }
+      const auto byte = value[(*cursor)++];
+      if (shift == 9 && byte > 1) {
+        throw Error(CRDT_INTERNAL);
+      }
+      result |= static_cast<std::uint64_t>(byte & 0x7FU) << (shift * 7U);
+      if ((byte & 0x80U) == 0) {
+        if (*cursor - start != UvarintSize(result)) {
+          throw Error(CRDT_INTERNAL);
+        }
+        return result;
+      }
+    }
+    throw Error(CRDT_INTERNAL);
+  }
+
+  static std::size_t UvarintSize(std::uint64_t value) noexcept {
+    std::size_t size = 1;
+    while (value >= 0x80U) {
+      value >>= 7U;
+      ++size;
+    }
+    return size;
+  }
+
+  crdt_lww_map* handle_{};
 };
 
 }  // namespace darkinno::crdt

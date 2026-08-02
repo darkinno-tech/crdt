@@ -5,7 +5,7 @@
 `shared.Document` is the smallest high-level Go entry point for a structured
 collaborative document. It exposes named `Map` and `Array` objects in the same
 spirit as Yjs shared types, while reusing this repository's stable,
-`document/tree-v1` protocol.
+`document/tree-v2` protocol.
 
 It is deliberately not Yjs API or binary-update compatible. Use the separate
 [Yjs relay](yjs-relay.md) when a browser or server already speaks Yjs.
@@ -47,6 +47,19 @@ byte values. `CreateMap`, `CreateArray`, `InsertMap`, and `InsertArray` create
 single-owner nested shared objects. A map or array child cannot be moved or
 mounted twice, which keeps concurrent ownership deterministic.
 
+Every reachable Map and Array uses one replication contract and is present in a
+complete state/checkpoint frame. This facade deliberately has no descendant
+`load`, `unload`, or external-document identifier: one authenticated
+manifest/authorization boundary applies to the whole tree. Split content into
+separately negotiated document groups before it needs independent access,
+retention, or loading behavior.
+
+`Map` and `Array` create an absent named root, so they may emit a local update.
+Code that only inspects an already-synchronized document should use
+`LookupMap` or `LookupArray` instead. These lookups never create a root, change
+HLC state, or call `OnUpdate`; they return `false` when the root is absent,
+still incomplete, or has the other kind.
+
 You do not need to implement a CRDT algorithm, but you do need to select the
 right product meaning:
 
@@ -64,6 +77,7 @@ The short comparison is:
 | Create a document | `new Y.Doc()` | `shared.New("editor-a")` |
 | Get/create a named map | `doc.getMap("board")` | `doc.Map("board")` |
 | Get/create a named array | `doc.getArray("tasks")` | `doc.Array("tasks")` |
+| Read an existing named root without creating it | `doc.share.get("board")` | `doc.LookupMap("board")` |
 | Listen for local frames | `doc.on("update", ...)` | `doc.OnUpdate(...)` |
 | Apply a frame | `Y.applyUpdate(doc, update)` | `doc.ApplyUpdate(update)` |
 
@@ -160,7 +174,7 @@ authentication or durable storage built in.
 
 ## Let people and tools inspect the contract
 
-The facade always selects the stable `document/tree-v1` profile, so a setup
+The facade always selects the stable `document/tree-v2` profile, so a setup
 tool can expose the merge rule without copying TypeIDs:
 
 ```go
@@ -185,5 +199,5 @@ Run the complete duplicate/reordered example:
 ```
 
 For the underlying ownership rule, pending-work limits, recovery model, and
-wire contract, read [document-tree v1 architecture](../design/document-tree-v1.md)
-and [document-tree v1 protocol](../protocol/document-tree-v1.md).
+wire contract, read [document-tree v2 architecture](../design/document-tree-v2.md)
+and [document-tree v2 protocol](../protocol/document-tree-v2.md).

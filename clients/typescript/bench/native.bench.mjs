@@ -10,12 +10,21 @@ cachedReadCards.push(Array.from({ length: 4096 }, (_, index) => `card-${index}`)
 if (cachedReadCards.length !== 4096) {
   throw new Error("cached read fixture did not initialize");
 }
+const stateVectorSource = new NativeDocument("state-vector-source");
+const stateVectorTarget = new NativeDocument("state-vector-target");
+const stateVectorUpdates = recordUpdates(stateVectorSource);
+stateVectorSource.getArray("cards").push(Array.from({ length: 4096 }, (_, index) => `card-${index}`));
+stateVectorTarget.applyUpdate(stateVectorUpdates[0]);
+stateVectorSource.getMap("metadata").set("title", "state-vector repair");
+const stateVectorPeer = stateVectorTarget.getStateVector();
 
 console.log(`runtime=node-${process.version} workload=native-ts-v1 controlled=true`);
 benchmark("cold_append_and_encoded_merge_4096", 6, runAppendAndMerge);
 benchmark("cold_middle_insert_and_encoded_merge_4096", 8, runMiddleInsertAndMerge);
 benchmark("shuffled_duplicate_three_editor_session", 6, runShuffledThreeEditorSession);
 benchmark("cold_state_encode_and_restore_4096", 6, runStateEncodeAndRestore);
+benchmark("cold_state_vector_bootstrap_and_repair_4096", 6, runSparseStateVectorDiff);
+benchmark("warm_sparse_state_vector_diff_4096", 64, runWarmSparseStateVectorDiff);
 benchmark("cached_visible_projection_reads_4096", 2, runCachedProjectionReads, "reads");
 
 function benchmark(name, iterations, operation, measurementName = "bytes") {
@@ -115,6 +124,35 @@ function runStateEncodeAndRestore() {
     throw new Error("state recovery benchmark did not converge");
   }
   return snapshot.updates.reduce((total, update) => total + encodeNativeUpdate(update).byteLength, 0);
+}
+
+function runSparseStateVectorDiff() {
+  const source = new NativeDocument("state-vector-source");
+  const target = new NativeDocument("state-vector-target");
+  const updates = recordUpdates(source);
+  source.getArray("cards").push(Array.from({ length: 4096 }, (_, index) => `card-${index}`));
+  target.applyUpdate(updates[0]);
+  source.getMap("metadata").set("title", "state-vector repair");
+
+  const diff = source.encodeStateAsUpdates(target.getStateVector());
+  if (diff.length !== 1 || target.applyUpdate(diff[0]) !== true) {
+    throw new Error("state-vector benchmark did not apply its bounded repair");
+  }
+  if (target.getMap("metadata").get("title") !== "state-vector repair") {
+    throw new Error("state-vector benchmark did not converge");
+  }
+  if (source.encodeStateAsUpdates(target.getStateVector()).length !== 0) {
+    throw new Error("state-vector benchmark repeated a known state update");
+  }
+  return encodeNativeUpdate(diff[0]).byteLength;
+}
+
+function runWarmSparseStateVectorDiff() {
+  const diff = stateVectorSource.encodeStateAsUpdates(stateVectorPeer);
+  if (diff.length !== 1 || diff[0].operations.length !== 1) {
+    throw new Error("warm state-vector benchmark did not retain its bounded repair");
+  }
+  return encodeNativeUpdate(diff[0]).byteLength;
 }
 
 function runCachedProjectionReads() {

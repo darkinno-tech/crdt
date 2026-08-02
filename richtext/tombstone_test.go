@@ -2,12 +2,21 @@ package richtext
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/text"
 	"github.com/DarkInno/crdt/tombstonegc"
 )
+
+func TestRichCompactionErrorRecognizesWrappedUnsafeCompaction(t *testing.T) {
+	wrapped := fmt.Errorf("remote compaction: %w", text.ErrUnsafeCompaction)
+	if got := richCompactionError(wrapped); !errors.Is(got, ErrUnsafeCompaction) {
+		t.Fatalf("richCompactionError(%v) = %v, want %v", wrapped, got, ErrUnsafeCompaction)
+	}
+}
 
 func TestDocumentExactAcknowledgementCompactsTextAndFormattingTombstones(t *testing.T) {
 	source := mustDocument(t, "source")

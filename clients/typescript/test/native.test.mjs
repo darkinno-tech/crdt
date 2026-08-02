@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  decodeNativeStateVector,
   decodeNativeUpdate,
+  encodeNativeStateVector,
   encodeNativeUpdate,
   NativeCRDTError,
   NativeDocument,
@@ -307,6 +309,113 @@ test("snapshots retain empty root type declarations", () => {
   assert.equal(restored.getArray("empty-array").length, 0);
   assertCode(() => restored.getArray("empty-map"), "type_conflict");
   assertCode(() => restored.getMap("empty-array"), "type_conflict");
+});
+
+test("sparse state vectors make state diffs safe after shuffled map and array delivery", () => {
+  const source = new NativeDocument("alice");
+  const updates = recordUpdates(source);
+  const metadata = source.getMap("metadata");
+  metadata.set("title", "first");
+  metadata.set("owner", "alice");
+  metadata.set("title", "final");
+  const cards = source.getArray("cards");
+  cards.push(["draft"]);
+  cards.delete(0);
+
+  const receiver = new NativeDocument("bob");
+  // Deliver only the winning LWW operation. Its actor counter has a hole, so
+  // a conventional maximum-clock vector would wrongly claim counter 2 too.
+  receiver.applyUpdate(updates[2]);
+  assert.deepEqual(receiver.getStateVector(), {
+    version: 1,
+    entries: [{ actor: "alice", ranges: [{ from: 3, to: 3 }] }],
+  });
+
+  const firstDiff = source.encodeStateAsUpdates(receiver.getStateVector());
+  assert.equal(firstDiff.some((update) => update.operations.some((operation) => operation.kind === "map-set" && operation.key === "title")), false);
+  assert.equal(firstDiff.some((update) => update.operations.some((operation) => operation.kind === "map-set" && operation.key === "owner")), true);
+  // The receiver knows the card insertion only after the diff, but the
+  // tombstone must still transfer because deletes have no separate dot.
+  for (const update of firstDiff) receiver.applyUpdate(update);
+  assert.deepEqual(receiver.getMap("metadata").toJSON(), { owner: "alice", title: "final" });
+  assert.deepEqual(receiver.getArray("cards").toArray(), []);
+
+  const settledDiff = source.encodeStateAsUpdates(receiver.getStateVector());
+  assert.deepEqual(
+    settledDiff.flatMap((update) => update.operations).map((operation) => operation.kind),
+    ["array-delete"],
+  );
+  assert.equal(receiver.applyUpdate(settledDiff[0]), false);
+  const snapshot = source.snapshot();
+  const restored = NativeDocument.restore("alice", snapshot);
+  assert.deepEqual(restored.getStateVector(), source.getStateVector());
+});
+
+test("state vectors are canonical, bounded, and preflight resource admission", () => {
+  const vector = {
+    version: 1,
+    entries: [
+      { actor: "alice", ranges: [{ from: 1, to: 1 }, { from: 3, to: 4 }] },
+      { actor: "bob", ranges: [{ from: 9, to: 9 }] },
+    ],
+  };
+  const encoded = encodeNativeStateVector(vector);
+  assert.deepEqual(decodeNativeStateVector(encoded), vector);
+  assertCode(() => decodeNativeStateVector(new TextEncoder().encode(JSON.stringify(vector))), "invalid_update");
+  assertCode(
+    () => decodeNativeStateVector(encodeNativeStateVector(vector), { maxStateVectorActors: 1 }),
+    "resource_limit",
+  );
+
+  const limited = new NativeDocument("local", { maxStateVectorActors: 1 });
+  const forged = {
+    version: 1,
+    actor: "relay",
+    operations: [{
+      kind: "array-insert",
+      target: "cards",
+      entries: [
+        { id: { actor: "alice", counter: 1 }, after: null, value: "a" },
+        { id: { actor: "bob", counter: 1 }, after: { actor: "alice", counter: 1 }, value: "b" },
+      ],
+    }],
+  };
+  assertCode(() => limited.applyUpdate(forged), "resource_limit");
+  assert.equal(limited.getArray("cards").length, 0);
+
+  const byteLimited = new NativeDocument("local", { maxStateVectorBytes: 64 });
+  assertCode(
+    () => byteLimited.applyUpdate({
+      version: 1,
+      actor: "relay",
+      operations: [{
+        kind: "map-set",
+        target: "metadata",
+        key: "title",
+        id: { actor: "remote", counter: 1 },
+        value: "too large for the state-vector budget",
+      }],
+    }),
+    "resource_limit",
+  );
+  assert.equal(byteLimited.getMap("metadata").size, 0);
+});
+
+test("state-vector decoder fuzzes malformed bytes without non-domain failures", () => {
+  let random = 0x6a09e667;
+  for (let sample = 0; sample < 600; sample += 1) {
+    random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+    const bytes = new Uint8Array(random % 384);
+    for (let index = 0; index < bytes.length; index += 1) {
+      random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+      bytes[index] = random & 0xff;
+    }
+    try {
+      decodeNativeStateVector(bytes);
+    } catch (error) {
+      assert.ok(error instanceof NativeCRDTError, `sample ${sample} threw ${String(error)}`);
+    }
+  }
 });
 
 test("three offline editors converge after shuffled duplicate delivery and state recovery", () => {

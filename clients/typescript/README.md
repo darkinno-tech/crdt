@@ -46,6 +46,10 @@ without claiming Yjs API or wire compatibility:
 - `applyUpdate()` is transport-agnostic and validates the entire update before
   mutation. It accepts reordered and duplicate operations. `encodeNativeUpdate`
   and `decodeNativeUpdate` use canonical JSON for byte transports.
+- `getStateVector()` returns a bounded sparse (dotted) state vector, while
+  `encodeStateAsUpdates(peerVector)` sends only state the peer vector proves
+  it lacks. `encodeNativeStateVector` / `decodeNativeStateVector` provide a
+  canonical byte transport for that summary.
 
 ```ts
 import { decodeNativeUpdate, encodeNativeUpdate, NativeDocument } from "@darkinno/crdt-client/native";
@@ -68,6 +72,35 @@ socket.onmessage = ({ data }) => {
   alice.applyUpdate(decodeNativeUpdate(new Uint8Array(data)), "remote-peer");
 };
 ```
+
+### Native state-vector anti-entropy
+
+For a **previously authenticated and document/schema-bound** peer, exchange a
+state vector before requesting a bounded state repair. The vector is a sparse
+set of actor-counter ranges, not a conventional actor-to-maximum map. Native
+updates can arrive out of order and a rejected local admission may leave a
+counter unused; representing only a maximum could falsely claim a missing
+operation was known and make a repair omit it.
+
+```ts
+import {
+  decodeNativeStateVector,
+  encodeNativeStateVector,
+} from "@darkinno/crdt-client/native";
+
+const peerVector = decodeNativeStateVector(await receiveAuthenticatedVector());
+for (const update of alice.encodeStateAsUpdates(peerVector)) {
+  await sendAuthenticatedUpdate(encodeNativeUpdate(update));
+}
+await sendAuthenticatedVector(encodeNativeStateVector(alice.getStateVector()));
+```
+
+The vector is an optimization only: it is neither membership evidence nor a
+durable receipt. Array deletes have no separate immutable dot, so state repair
+intentionally re-sends retained array tombstones even when a peer knows the
+insertion ID. New snapshots and browser metadata store the vector atomically
+with roots, updates, and the local counter; legacy snapshots without one are
+accepted but conservatively know only IDs present in their retained state.
 
 Values are copied JSON values (`null`, booleans, finite numbers, strings,
 arrays, and plain objects). They are intentionally **atomic**: this first
@@ -202,9 +235,10 @@ await board.flush(); // local IndexedDB recovery record is committed
 ```
 
 The default browser store is `darkinno-crdt-native`; `documentID` is its local
-record key. A recovery record has three parts: copied root declarations and
-the local actor counter, an optional compacted bounded state base, and an
-append-only canonical update log. An append writes its update and current
+record key. A recovery record has three parts: copied root declarations plus
+the local actor counter and sparse state vector; an optional compacted bounded
+state base; and an append-only canonical update log. An append writes its
+update and current
 metadata in one IndexedDB transaction. This avoids serializing the whole
 document on every keystroke while ensuring a same-actor restart never reuses a
 counter after `flush()` resolves.
@@ -241,6 +275,11 @@ durable acknowledgement. Received bytes enter `applyEncodedUpdate()` and are
 still bounded and canonical-validated before state changes. Cap an HTTP or
 WebSocket message before constructing its `Uint8Array`.
 
+`NativeBrowserDocument` exposes the same `getStateVector()` and
+`encodeStateAsUpdates(peerVector)` read APIs. Its IndexedDB metadata persists
+the sparse vector on both append and compaction, so a restart does not turn a
+known repair suffix back into a full transfer.
+
 For a local same-origin multi-tab experience, pass a
 `BroadcastChannelNativeTransport` as `liveTransport`; attach an authenticated
 receipt transport separately with `connect()` when it is available:
@@ -275,8 +314,10 @@ and [controlled browser benchmarks](../../docs/operations/browser-native-client-
 The defaults are deliberately mobile-oriented: 1 MiB encoded update, 10,000
 operations/update, 128 roots, 10,000 retained map entries, 100,000 array nodes
 and array tombstones, 10,000 unresolved array nodes, 64 KiB/value, and nesting
-depth 32. Pass lower compatible values to `new NativeDocument(replicaID,
-options)`. A limit rejection is atomic; it never accepts a partial update.
+depth 32. Sparse state vectors are additionally capped at 10,000 actors,
+100,000 ranges, and 1 MiB encoded. Pass lower compatible values to
+`new NativeDocument(replicaID, options)`. A limit rejection is atomic; it
+never accepts a partial update.
 
 Call `document.snapshot()` and atomically persist its **root declarations**,
 `updates`, and `counter`; restore with `NativeDocument.restore(replicaID,
@@ -488,6 +529,20 @@ op/update、10,000 map entry、100,000 array node/墓碑、10,000 pending node�
 加密；canonical JSON 与 CRDT 合并都不提供这些安全能力。快照必须把 root 声明、`updates`
 与本地 `counter` 原子持久化，避免重启后复用 ID。
 
+### 原生 State Vector 与反熵
+
+在已经完成**身份认证且绑定同一 document/schema**的对端之间，可用
+`getStateVector()` 交换摘要，再调用 `encodeStateAsUpdates(peerVector)` 仅导出对端尚未证明
+已拥有的状态；`encodeNativeStateVector` 和 `decodeNativeStateVector` 提供该摘要的规范字节表示。
+这里采用按 actor 保存精确 counter 区间的稀疏（dotted）State Vector，而不是
+`actor -> 最大 counter`：native 更新允许乱序抵达，且被拒绝的本地操作可能留下未使用的
+counter；仅保存最大值会把缺失操作错误地声明为已知，反熵时可能漏传状态。
+
+State Vector 仅用于优化传输，不是成员资格、授权或持久 receipt 的证据。Array 删除没有独立
+dot，因此即使对端已有插入 ID，状态修复也会保留并重传 tombstone，以保证 delete-before-insert
+收敛。新快照及浏览器 IndexedDB metadata 会将 vector 与 root、updates、本地 counter 原子保存；
+旧快照没有 vector 时仍可恢复，但只会保守地识别其保留状态中出现过的 ID。
+
 对于必须与 Go、原生移动端或既有 RGA 数据互通的组，仍然使用下面的 Wasm run-v2 路径；它
 复用同一份 Go 编辑、乱序、墓碑和 HLC 语义，而不是维护一份隐式兼容的第二实现。
 
@@ -509,7 +564,7 @@ await board.flush(); // 本地恢复记录已提交
 ```
 
 默认数据库名为 `darkinno-crdt-native`，`documentID` 是本地记录键。记录把根类型声明与本地
-counter、可选完整 state base、以及规范 update 追加日志分开保存；每次追加在一个
+counter、稀疏 State Vector、可选完整 state base、以及规范 update 追加日志分开保存；每次追加在一个
 IndexedDB 事务中同时保存 update 与 metadata。因此不会每次编辑都编码整个文档，并且
 `flush()` 成功后以同一 actor 重启不会复用 counter。默认在日志达到 128 条或 1 MiB 时尝试
 压缩，但只有没有待确认本地 outbox 且 array 没有待父节点时才可压缩；总上限为 10,000 条或
@@ -520,6 +575,10 @@ IndexedDB 事务中同时保存 update 与 metadata。因此不会每次编辑�
 身份验证、组/schema/version/limits 绑定和入站 body 限制；`send(bytes)` 只有在产品定义的
 receipt 到达后才应 resolve。浏览器层在此之前保留 outbox 并在 `connect()` 后重试；普通
 WebSocket `send()` 只代表浏览器已入队，并不是远端持久确认。
+
+`NativeBrowserDocument` 同样暴露 `getStateVector()` 与
+`encodeStateAsUpdates(peerVector)` 的只读接口。它在追加或压缩时同步保存稀疏 vector，避免
+重启后把已完成的反熵后缀再次退化为全量状态传输。
 
 同源多标签将 `BroadcastChannelNativeTransport` 作为 `liveTransport` 传入；认证服务端 receipt
 adapter 仍通过 `connect()` 单独连接。前者只是易失的实时路径：没有认证、持久化、

@@ -13,7 +13,8 @@
     "./collections": "./dist/collections.js",
     "./bindings": "./dist/bindings.js",
     "./wasm": "./dist/wasm.js",
-    "./yjs": "./dist/yjs.js"
+    "./yjs": "./dist/yjs.js",
+    "./yjs-richtext": "./dist/yjs-richtext.js"
   },
   "files": [
     "dist",
@@ -24,7 +25,7 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "test": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/collections.test.mjs test/collections.real.test.mjs test/collections-editor.example.test.mjs test/offline-policy.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/blocknote.test.mjs test/blocknote.real.test.mjs test/tiptap-richtext.test.mjs test/rga-run-v2-vectors.test.mjs test/yjs.test.mjs",
+    "test": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/collections.test.mjs test/collections.real.test.mjs test/collections-editor.example.test.mjs test/offline-policy.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/blocknote.test.mjs test/blocknote.real.test.mjs test/tiptap-richtext.test.mjs test/rga-run-v2-vectors.test.mjs test/yjs.test.mjs test/yjs-richtext.test.mjs",
     "test:adapters:types": "tsc --project tsconfig.adapters.json && tsc --project tsconfig.blocknote-adapter.json",
     "test:wasm": "npm run build && node --test test/wasm-loader-concurrency.test.mjs test/wasm.integration.test.mjs",
     "test:compat": "npm run build && npm run test:adapters:types && node --test test/frame.test.mjs test/native.test.mjs test/browser.test.mjs test/nested.test.mjs test/collections.test.mjs test/collections.real.test.mjs test/collections-editor.example.test.mjs test/offline-policy.test.mjs test/bindings.test.mjs test/bindings.real.test.mjs test/blocknote.test.mjs test/blocknote.real.test.mjs test/tiptap-richtext.test.mjs test/rga-run-v2-vectors.test.mjs test/wasm-loader-concurrency.test.mjs test/wasm.integration.test.mjs test/rga-browser.integration.test.mjs",
@@ -40,7 +41,8 @@
     "bench:wasm-browser": "npm run build && node bench/wasm-browser.bench.mjs",
     "bench:wasm-bindings": "npm run build && node bench/wasm-bindings.bench.mjs",
     "bench:yjs-core": "npm run build && node bench/yjs-core.bench.mjs",
-    "bench:yjs-bindings": "npm run build && node bench/yjs-bindings.bench.mjs"
+    "bench:yjs-bindings": "npm run build && node bench/yjs-bindings.bench.mjs",
+    "bench:yjs-richtext": "npm run build && node bench/yjs-richtext.bench.mjs"
   },
   "dependencies": {
     "lib0": "0.2.117",

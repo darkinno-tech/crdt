@@ -458,8 +458,6 @@ func appendValue(output []byte, value Value) []byte {
 	case ValueObject:
 		output = frame.AppendUvarint(output, uint64(value.Object.Kind))
 		return frame.AppendTag(output, value.Object.ID)
-	case ValueSubdocument:
-		return appendBytes(output, []byte(value.Subdocument.ID))
 	default:
 		return output
 	}
@@ -596,12 +594,6 @@ func readValue(payload []byte, position int, options Options, limits frame.Decod
 			return Value{}, position, false
 		}
 		return Value{Kind: ValueObject, Object: ObjectRef{ID: id, Kind: kind}}, next, true
-	case uint64(ValueSubdocument):
-		id, next, ok := readString(payload, next, min(limits.MaxStringBytes, options.MaxSubdocumentIDBytes))
-		if !ok {
-			return Value{}, position, false
-		}
-		return Subdocument(id), next, true
 	default:
 		return Value{}, position, false
 	}
@@ -692,8 +684,6 @@ func addValueSize(size *int, value Value, limits frame.DecoderLimits) error {
 			return frame.ErrFrameLimit
 		}
 		return addRawSize(size, frame.UvarintSize(uint64(value.Object.Kind))+frame.TagSize(value.Object.ID), limits)
-	case ValueSubdocument:
-		return addBytesSize(size, len(value.Subdocument.ID), limits)
 	default:
 		return frame.ErrInvalidFrame
 	}
@@ -755,8 +745,6 @@ func valueSize(value Value) int {
 		return size + frame.UvarintSize(uint64(len(value.Bytes))) + len(value.Bytes)
 	case ValueObject:
 		return size + frame.UvarintSize(uint64(value.Object.Kind)) + frame.TagSize(value.Object.ID)
-	case ValueSubdocument:
-		return size + frame.UvarintSize(uint64(len(value.Subdocument.ID))) + len(value.Subdocument.ID)
 	default:
 		return size
 	}

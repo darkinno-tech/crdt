@@ -107,6 +107,14 @@ follows a redirect from the configured bearer-token endpoint, and a handler
 permits one store-backed room per exact durable document identity; both rules
 prevent trust-boundary drift or live fan-out split-brain.
 
+A server-side AI task that needs to become a document peer uses the explicit
+`YJSAgentPeer` capability on that same configured handler, rather than calling
+the sidecar directly. It reads a bounded snapshot or state-vector diff through
+subscription authorization, produces a normal Yjs update in a maintained tool
+runtime, and reauthorizes publication before `Apply` and fan-out. It deliberately
+does not manufacture a Yjs client identity, awareness state, Go-RGA operation,
+or browser receipt. See the [agent-peer integration guide](../integration/yjs-agent-peers.md).
+
 Tenant, room, epoch, schema label, and V1/V2 format form the immutable durable
 identity. The schema label is a fencing/version field, not a claim that the
 sidecar understands an application's ProseMirror, Quill, or custom schema.

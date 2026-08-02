@@ -117,11 +117,9 @@ func validOwner(owner objectOwner, options Options) bool {
 func validStoredValue(value Value, options Options) bool {
 	switch value.Kind {
 	case ValueBytes:
-		return len(value.Bytes) <= options.MaxValueBytes && !value.Object.ID.Valid() && value.Object.Kind == 0 && value.Subdocument.ID == ""
+		return len(value.Bytes) <= options.MaxValueBytes && !value.Object.ID.Valid() && value.Object.Kind == 0
 	case ValueObject:
-		return value.Object.ID.Valid() && value.Object.Kind.valid() && len(value.Bytes) == 0 && value.Subdocument.ID == ""
-	case ValueSubdocument:
-		return validNameWithLimit(value.Subdocument.ID, options.MaxSubdocumentIDBytes) && len(value.Bytes) == 0 && !value.Object.ID.Valid() && value.Object.Kind == 0
+		return value.Object.ID.Valid() && value.Object.Kind.valid() && len(value.Bytes) == 0
 	default:
 		return false
 	}
@@ -527,7 +525,7 @@ func sameArrayNode(left, right arrayNode) bool {
 }
 
 func sameValue(left, right Value) bool {
-	if left.Kind != right.Kind || left.Object != right.Object || left.Subdocument != right.Subdocument || len(left.Bytes) != len(right.Bytes) {
+	if left.Kind != right.Kind || left.Object != right.Object || len(left.Bytes) != len(right.Bytes) {
 		return false
 	}
 	for index := range left.Bytes {

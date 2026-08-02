@@ -355,11 +355,12 @@ func (r *Register) TombstoneTags() []crdt.Tag {
 	return tags
 }
 
-// CompactTombstones removes only requested delete metadata. Invoke it only
-// after every active member has acknowledged the exact tags in one
-// authenticated membership epoch, a post-compaction snapshot is durable, and
-// obsolete deltas are retired. Unknown tags are ignored; invalid or live tags
-// leave the register unchanged.
+// CompactTombstones removes only requested delete metadata. For replicated
+// state, invoke it only after every active member has acknowledged the exact
+// tags in one authenticated membership epoch, a post-compaction snapshot is
+// durable, and obsolete deltas are retired. tombstonegc.SimpleCollector may
+// call it only for its documented local-only lifecycle. Unknown tags are
+// ignored; invalid or live tags leave the register unchanged.
 func (r *Register) CompactTombstones(tags []crdt.Tag) (int, error) {
 	if r == nil {
 		return 0, ErrNilRegister

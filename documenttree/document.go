@@ -1,4 +1,5 @@
-// Package documenttree implements a bounded, framed document-tree CRDT.
+// Package documenttree implements a bounded, framed, fully nested
+// document-tree CRDT.
 //
 // A document tree combines LWW maps and RGA arrays through single-owner child
 // objects. It intentionally does not reuse the wire formats of lww.Map,
@@ -35,10 +36,10 @@ var (
 	ErrResourceLimit   = errors.New("documenttree: resource limit exceeded")
 )
 
-// SemanticsVersion is the immutable document-tree-v1 protocol contract.
+// SemanticsVersion is the immutable document-tree-v2 protocol contract.
 const SemanticsVersion uint64 = crdt.SemanticsVersionDocumentTree
 
-// StableFrameType returns the state/delta pair selected by a document-tree-v1
+// StableFrameType returns the state/delta pair selected by a document-tree-v2
 // replication manifest. The protocol owns its HLC because roots, map writes,
 // and array positions all use HLC tags.
 func StableFrameType() crdt.FrameType {
@@ -72,68 +73,55 @@ type ObjectRef struct {
 	Kind Kind
 }
 
-// SubdocumentRef identifies a separate, independently authorized replication
-// group. Its bytes never contain the subdocument state or grant access to it.
-// A provider can use Registry to track local load/unload requests.
-type SubdocumentRef struct{ ID string }
-
 // ValueKind classifies the payload retained by maps and array positions.
 type ValueKind uint8
 
 const (
 	ValueBytes ValueKind = iota + 1
 	ValueObject
-	ValueSubdocument
 )
 
 // Value is an owned projection value. Bytes is copied on both input and
 // output; applications must treat its content as schema-selected opaque data.
 type Value struct {
-	Kind        ValueKind
-	Bytes       []byte
-	Object      ObjectRef
-	Subdocument SubdocumentRef
+	Kind   ValueKind
+	Bytes  []byte
+	Object ObjectRef
 }
 
 func Bytes(value []byte) Value {
 	return Value{Kind: ValueBytes, Bytes: append([]byte(nil), value...)}
 }
 
-func Subdocument(id string) Value {
-	return Value{Kind: ValueSubdocument, Subdocument: SubdocumentRef{ID: id}}
-}
-
 // Options bounds retained and incomplete document state. Limits apply to one
 // document-tree group; hosts must still reject oversized transport bodies
-// before allocating them and authorize every parent/subdocument group.
+// before allocating them and authorize the one complete replication group.
 type Options struct {
-	MaxRoots              int
-	MaxObjects            int
-	MaxMapEntries         int
-	MaxArrayNodes         int
-	MaxArrayTombstones    int
-	MaxPendingOperations  int
-	MaxPendingBytes       int
-	MaxDepth              int
-	MaxKeyBytes           int
-	MaxValueBytes         int
-	MaxSubdocumentIDBytes int
+	MaxRoots             int
+	MaxObjects           int
+	MaxMapEntries        int
+	MaxArrayNodes        int
+	MaxArrayTombstones   int
+	MaxPendingOperations int
+	MaxPendingBytes      int
+	MaxDepth             int
+	MaxKeyBytes          int
+	MaxValueBytes        int
 }
 
 // DefaultOptions returns conservative per-document retention limits.
 func DefaultOptions() Options {
 	return Options{
-		MaxRoots:              1 << 12,
-		MaxObjects:            1 << 16,
-		MaxMapEntries:         1 << 20,
-		MaxArrayNodes:         1 << 20,
-		MaxArrayTombstones:    1 << 20,
-		MaxPendingOperations:  1 << 16,
-		MaxPendingBytes:       4 << 20,
-		MaxDepth:              128,
-		MaxKeyBytes:           1 << 12,
-		MaxValueBytes:         1 << 20,
-		MaxSubdocumentIDBytes: 256,
+		MaxRoots:             1 << 12,
+		MaxObjects:           1 << 16,
+		MaxMapEntries:        1 << 20,
+		MaxArrayNodes:        1 << 20,
+		MaxArrayTombstones:   1 << 20,
+		MaxPendingOperations: 1 << 16,
+		MaxPendingBytes:      4 << 20,
+		MaxDepth:             128,
+		MaxKeyBytes:          1 << 12,
+		MaxValueBytes:        1 << 20,
 	}
 }
 
@@ -141,7 +129,7 @@ func (o Options) valid() bool {
 	return o.MaxRoots > 0 && o.MaxObjects > 0 && o.MaxMapEntries > 0 &&
 		o.MaxArrayNodes > 0 && o.MaxArrayTombstones > 0 &&
 		o.MaxPendingOperations > 0 && o.MaxPendingBytes > 0 && o.MaxDepth > 0 &&
-		o.MaxKeyBytes > 0 && o.MaxValueBytes > 0 && o.MaxSubdocumentIDBytes > 0
+		o.MaxKeyBytes > 0 && o.MaxValueBytes > 0
 }
 
 type ownerKind uint8
@@ -713,13 +701,6 @@ func (m *Map) Set(key string, value []byte) (Delta, error) {
 	return m.document.setMapValue(m.id, key, Bytes(value))
 }
 
-func (m *Map) SetSubdocument(key, id string) (Delta, error) {
-	if m == nil || m.document == nil {
-		return Delta{}, ErrNilDocument
-	}
-	return m.document.setMapValue(m.id, key, Subdocument(id))
-}
-
 func (m *Map) Delete(key string) (Delta, error) {
 	if m == nil || m.document == nil {
 		return Delta{}, ErrNilDocument
@@ -835,13 +816,6 @@ func (a *Array) Insert(index int, value []byte) (Delta, error) {
 		return Delta{}, ErrNilDocument
 	}
 	return a.document.insertArrayValue(a.id, index, Bytes(value), Kind(0))
-}
-
-func (a *Array) InsertSubdocument(index int, id string) (Delta, error) {
-	if a == nil || a.document == nil {
-		return Delta{}, ErrNilDocument
-	}
-	return a.document.insertArrayValue(a.id, index, Subdocument(id), Kind(0))
 }
 
 func (a *Array) InsertMap(index int) (*Map, Delta, error) {
@@ -1140,10 +1114,6 @@ func (d *Document) validateValue(value Value) error {
 	case ValueBytes:
 		if len(value.Bytes) > d.options.MaxValueBytes {
 			return ErrResourceLimit
-		}
-	case ValueSubdocument:
-		if !d.validName(value.Subdocument.ID, d.options.MaxSubdocumentIDBytes) {
-			return ErrInvalidValue
 		}
 	case ValueObject:
 		return ErrInvalidValue // Public mutation methods create child objects atomically.

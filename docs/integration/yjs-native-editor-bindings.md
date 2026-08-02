@@ -1,4 +1,4 @@
-# Native Yjs incremental editor binding
+# Native Yjs editor bindings
 
 `@darkinno/crdt-client/yjs` is an opt-in browser binding for a **native Yjs
 document**. It maps a `Y.TextEvent.delta` into a CodeMirror 6 change set, so a
@@ -22,7 +22,8 @@ try to convert live mutations between them.
 | Manual transport | `onLocalUpdate` / `onLocalAwarenessUpdate` are synchronous hand-offs to the application-owned outbox; a thrown callback or outbound byte-cap failure latches that respective path and reports a stable error. |
 | Manual V1 sync | `createSyncProtocol` reads and writes exactly one bounded, unwrapped y-protocols SyncStep1/2 or update submessage. V2 continues to use state-vector/diff methods directly because y-protocols sync is V1. |
 | Presence | `y-protocols/awareness` encode/apply APIs are used directly. Yjs client IDs are routing identifiers, never authenticated user identities. |
-| Rich text | Not supported by this plain-text binding. A format or embed stops projection instead of silently flattening it. Use a schema-aware Yjs editor binding for rich content. |
+| Plain rich text | `YjsTextBinding` is deliberately plain text. A format or embed stops that projection instead of silently flattening it. |
+| Quill 2 rich text | `YjsRichTextBinding` and `bindYjsQuillRichText` carry approved native `Y.Text` Deltas. Formats and one-key embeds are an explicit bounded room schema; unknown remote content freezes the projection. |
 
 The Go `extensions.YJSHandler` already supports the y-websocket/y-protocols
 envelope and can relay these native bytes. A store-backed configured room adds
@@ -97,6 +98,51 @@ An initial editor/document mismatch is written once at attachment. Thereafter
 remote transactions are range changes. A local single-range CodeMirror update
 also remains incremental; legacy or multi-range local updates use a deliberate
 atomic text fallback, never a partial Yjs transaction.
+
+## Quill 2 rich-text setup
+
+`@darkinno/crdt-client/yjs-richtext` is an opt-in binding for Quill's native
+Delta model. It does not bundle Quill or y-quill: the application owns its
+Quill version, modules, provider, document lifecycle, and all schema choices.
+The binding accepts only string inserts, approved scalar attributes, and
+approved single-key scalar embeds. It does not accept HTML, arbitrary nested
+objects, custom module state, DOM node references, cursors, or authorization
+claims.
+
+```ts
+import * as Y from "yjs";
+import { bindYjsQuillRichText } from "@darkinno/crdt-client/yjs-richtext";
+
+const document = new Y.Doc();
+const text = document.getText("content");
+const binding = bindYjsQuillRichText(document, text, quill, {
+  updateFormat: "v1", // Match the configured YJSRoom / YJSStore.
+  maxUpdateBytes: 1 << 20,
+  maxTextUTF16: 1 << 20,
+  maxDeltaOperations: 512,
+  maxAttributesPerOperation: 8,
+  maxAttributeKeyBytes: 64,
+  maxAttributeValueBytes: 1024,
+  maxEmbedBytes: 4096,
+  allowedAttributes: ["bold", "italic", "header", "link"],
+  allowedEmbeds: ["image"],
+  // Omit when a standard y-websocket-compatible provider owns this Y.Doc.
+  onLocalUpdate: (update) => durableOutbox.append(update),
+});
+```
+
+The default `initialContent: "document"` replaces Quill's initial value with
+the validated `Y.Text` Delta. Use `initialContent: "editor"` only while
+seeding an empty `Y.Text`; construction rejects a non-empty Y.Text so a joining
+editor cannot create a concurrent local seed. For one document, choose a
+standard y-websocket-compatible provider **or** the synchronous
+`onLocalUpdate` hand-off, not both.
+
+On a local unsupported Delta, the Quill adapter restores its last validated
+Y.Text projection. On a remote unsupported Delta, the Y.Doc remains merged but
+the rich projection freezes; repair the authenticated schema admission and
+recover the editor from the room's normal state-vector/checkpoint path. Do not
+strip formatting or embeds to keep displaying the document.
 
 ## Manual transport example
 
@@ -249,6 +295,15 @@ separately negotiated authenticated envelope.
 - Treat a `YjsBindingError("unsupported_text")` as a rendering boundary. The
   underlying Yjs document remains valid; detach this plain-text view and attach
   a schema-aware rich-text surface rather than stripping formats or embeds.
+- `YjsRichTextBinding` has separate caps for Delta operations, text, each
+  format key/value, and each embed. Its `allowedAttributes` and
+  `allowedEmbeds` are an editor-schema allowlist, not an authorization policy.
+  `YjsBindingError("unsupported_rich_text")` freezes the rich view after a
+  remote schema violation; it never coerces rich content into plain text.
+- Quill selections, cursors, comments, clipboard sanitisation, image upload,
+  link fetching, custom module state, and local undo grouping remain
+  application-owned. Bind any presence payload to the authenticated room and
+  keep it out of YJSStore snapshots and authorization decisions.
 
 ## Validation and performance scope
 
@@ -257,6 +312,7 @@ make typescript-test
 node --test clients/typescript/test/yjs.test.mjs
 make typescript-yjs-core-benchmark
 make typescript-yjs-bindings-benchmark
+make typescript-yjs-richtext-benchmark
 ```
 
 The focused suite uses a real CodeMirror 6 view under JSDOM for remote range
@@ -264,7 +320,13 @@ application, tests V1/V2, state-vector recovery, cursor/awareness forwarding,
 formatted-text refusal, binding-scoped undo/redo, deep-observation bounds, V1
 SyncStep1/2 convergence, capped undo-history reset, and a three-replica
 delayed/duplicated/reordered update simulation, and failure-latched manual
-update/awareness callbacks. The benchmarks record local
-process work and editor write shape;
-they are not browser rendering, WebSocket, TLS, WAN, persistence, or service
-capacity results. See the [recorded baselines](../operations/yjs-native-editor-bindings-2026-08-01.md).
+update/awareness callbacks. The rich-text suite uses real Yjs documents and a
+deterministic Quill-shaped Delta port to cover approved format/embed
+convergence, local restoration, remote projection freeze, local hand-off
+latching, Delta source-cursor semantics, and 256 malformed-Delta rejection
+cases. It is a Quill-port simulation, not a browser acceptance claim for a
+selected Quill build. The benchmarks record local process work and editor write
+shape; they are not browser rendering, WebSocket, TLS, WAN, persistence, or
+service capacity results. See the
+[recorded baselines](../operations/yjs-native-editor-bindings-2026-08-01.md)
+and [Quill Delta baseline](../operations/yjs-richtext-binding-benchmark-2026-08-03.md).

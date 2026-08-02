@@ -188,6 +188,117 @@ func TestDocumentUpdateHandlersReceiveIndependentOwnedFrames(t *testing.T) {
 	}
 }
 
+func TestDocumentLookupsDoNotCreateRootsOrEmitUpdates(t *testing.T) {
+	document := mustNewDocument(t, "writer", testOptions())
+	before, err := document.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := 0
+	if _, err := document.OnUpdate(func([]byte) { updates++ }); err != nil {
+		t.Fatal(err)
+	}
+
+	if value, ok := document.LookupMap("workspace"); value != nil || ok {
+		t.Fatalf("missing map lookup = %#v, %t", value, ok)
+	}
+	if value, ok := document.LookupArray("items"); value != nil || ok {
+		t.Fatalf("missing array lookup = %#v, %t", value, ok)
+	}
+	if value, ok := document.LookupMap(""); value != nil || ok {
+		t.Fatalf("invalid map lookup = %#v, %t", value, ok)
+	}
+	if value, ok := document.LookupArray(""); value != nil || ok {
+		t.Fatalf("invalid array lookup = %#v, %t", value, ok)
+	}
+	var nilDocument *Document
+	if value, ok := nilDocument.LookupMap("workspace"); value != nil || ok {
+		t.Fatalf("nil map lookup = %#v, %t", value, ok)
+	}
+	if value, ok := nilDocument.LookupArray("items"); value != nil || ok {
+		t.Fatalf("nil array lookup = %#v, %t", value, ok)
+	}
+
+	after, err := document.Checkpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before.State, after.State) || before.ClockState != after.ClockState || updates != 0 {
+		t.Fatalf("lookup changed document checkpoint=%#v updates=%d", after, updates)
+	}
+
+	_, err = document.Map("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := document.LookupMap("workspace"); !ok || value == nil {
+		t.Fatalf("map lookup = %#v, %t", value, ok)
+	}
+	if value, ok := document.LookupArray("workspace"); value != nil || ok {
+		t.Fatalf("map lookup as array = %#v, %t", value, ok)
+	}
+
+	_, err = document.Array("items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := document.LookupArray("items"); !ok || value == nil {
+		t.Fatalf("array lookup = %#v, %t", value, ok)
+	}
+	if value, ok := document.LookupMap("items"); value != nil || ok {
+		t.Fatalf("array lookup as map = %#v, %t", value, ok)
+	}
+	if updates != 2 {
+		t.Fatalf("updates after root creation = %d, want 2", updates)
+	}
+}
+
+func TestDocumentLookupsExposeReceivedRootsWithoutNewUpdates(t *testing.T) {
+	source := mustNewDocument(t, "source", testOptions())
+	var updates [][]byte
+	if _, err := source.OnUpdate(func(update []byte) { updates = append(updates, update) }); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := source.Map("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.SetString("title", "received"); err != nil {
+		t.Fatal(err)
+	}
+
+	receiver := mustNewDocument(t, "receiver", testOptions())
+	receiverUpdates := 0
+	if _, err := receiver.OnUpdate(func([]byte) { receiverUpdates++ }); err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 2 {
+		t.Fatalf("source updates = %d, want 2", len(updates))
+	}
+	if err := receiver.ApplyUpdate(updates[1]); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := receiver.LookupMap("workspace"); value != nil || ok {
+		t.Fatalf("incomplete received root lookup = %#v, %t", value, ok)
+	}
+	if receiverUpdates != 0 {
+		t.Fatalf("incomplete remote update emitted %d local updates", receiverUpdates)
+	}
+	if err := receiver.ApplyUpdate(updates[0]); err != nil {
+		t.Fatal(err)
+	}
+	result, ok := receiver.LookupMap("workspace")
+	if !ok || result == nil {
+		t.Fatal("received map is missing")
+	}
+	if title, ok := result.String("title"); !ok || title != "received" {
+		t.Fatalf("received title = %q, %t", title, ok)
+	}
+	if receiverUpdates != 0 {
+		t.Fatalf("remote lookup emitted %d local updates", receiverUpdates)
+	}
+}
+
 func TestDocumentCheckpointRestoresClockAndState(t *testing.T) {
 	document := mustNewDocument(t, "writer", testOptions())
 	workspace, err := document.Map("workspace")
@@ -240,7 +351,7 @@ func TestDocumentErrorsAndOptions(t *testing.T) {
 	if err := nilArray.Insert(0, nil); !errors.Is(err, ErrNilArray) {
 		t.Fatalf("nil array insert = %v", err)
 	}
-	if profile := Profile(); profile.ID != "document/tree-v1" || profile.RequiresCodecID {
+	if profile := Profile(); profile.ID != "document/tree-v2" || profile.RequiresCodecID {
 		t.Fatalf("profile = %#v", profile)
 	}
 }
@@ -699,6 +810,42 @@ func TestDocumentConcurrentLocalUpdates(t *testing.T) {
 	}
 }
 
+func TestDocumentConcurrentLookupsAndLocalUpdates(t *testing.T) {
+	document := mustNewDocument(t, "writer", testOptions())
+	workspace, err := document.Map("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	const iterations = 64
+	var group sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		group.Add(1)
+		go func(worker int) {
+			defer group.Done()
+			for iteration := 0; iteration < iterations; iteration++ {
+				value, ok := document.LookupMap("workspace")
+				if !ok || value == nil {
+					t.Errorf("lookup map %d/%d", worker, iteration)
+					return
+				}
+				if value, ok := document.LookupArray("workspace"); value != nil || ok {
+					t.Errorf("lookup array %d/%d = %#v, %t", worker, iteration, value, ok)
+					return
+				}
+				if err := workspace.SetString(fmt.Sprintf("key-%d-%d", worker, iteration), "value"); err != nil {
+					t.Errorf("set %d/%d: %v", worker, iteration, err)
+					return
+				}
+			}
+		}(worker)
+	}
+	group.Wait()
+	if value, ok := document.LookupMap("workspace"); !ok || value == nil {
+		t.Fatal("workspace is missing after concurrent updates")
+	}
+}
+
 func TestDocumentBoundedLoopbackHTTP(t *testing.T) {
 	options := testOptions()
 	options.FrameLimits.MaxFrameBytes = 8 << 10
@@ -844,6 +991,21 @@ func BenchmarkDocumentMapSetAndApplyUpdate(b *testing.B) {
 		b.SetBytes(int64(len(update)))
 		if err := target.ApplyUpdate(update); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDocumentLookupMap(b *testing.B) {
+	document := mustNewDocument(b, "writer", testOptions())
+	if _, err := document.Map("workspace"); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		value, ok := document.LookupMap("workspace")
+		if !ok || value == nil {
+			b.Fatal("workspace lookup failed")
 		}
 	}
 }

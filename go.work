@@ -7,6 +7,7 @@ use (
 	./extensions
 	./persistence
 	./providers/internal/sqlrelay
+	./providers/mssql
 	./providers/mysql
 	./providers/postgres
 	./providers/redis
@@ -15,26 +16,28 @@ use (
 	./telemetry
 )
 
-replace github.com/DarkInno/crdt v1.0.32 => .
+replace github.com/DarkInno/crdt v1.0.33 => .
 
-replace github.com/DarkInno/crdt/durable v1.0.32 => ./durable
+replace github.com/DarkInno/crdt/durable v1.0.33 => ./durable
 
-replace github.com/DarkInno/crdt/examples v1.0.32 => ./examples
+replace github.com/DarkInno/crdt/examples v1.0.33 => ./examples
 
-replace github.com/DarkInno/crdt/extensions v1.0.32 => ./extensions
+replace github.com/DarkInno/crdt/extensions v1.0.33 => ./extensions
 
-replace github.com/DarkInno/crdt/persistence v1.0.32 => ./persistence
+replace github.com/DarkInno/crdt/persistence v1.0.33 => ./persistence
 
-replace github.com/DarkInno/crdt/telemetry v1.0.32 => ./telemetry
+replace github.com/DarkInno/crdt/telemetry v1.0.33 => ./telemetry
 
-replace github.com/DarkInno/crdt/providers/internal/sqlrelay v1.0.32 => ./providers/internal/sqlrelay
+replace github.com/DarkInno/crdt/providers/internal/sqlrelay v1.0.33 => ./providers/internal/sqlrelay
 
-replace github.com/DarkInno/crdt/providers/mysql v1.0.32 => ./providers/mysql
+replace github.com/DarkInno/crdt/providers/mssql v1.0.33 => ./providers/mssql
 
-replace github.com/DarkInno/crdt/providers/postgres v1.0.32 => ./providers/postgres
+replace github.com/DarkInno/crdt/providers/mysql v1.0.33 => ./providers/mysql
 
-replace github.com/DarkInno/crdt/providers/redis v1.0.32 => ./providers/redis
+replace github.com/DarkInno/crdt/providers/postgres v1.0.33 => ./providers/postgres
 
-replace github.com/DarkInno/crdt/providers/sqlite v1.0.32 => ./providers/sqlite
+replace github.com/DarkInno/crdt/providers/redis v1.0.33 => ./providers/redis
 
-replace github.com/DarkInno/crdt/providers/webrtc v1.0.32 => ./providers/webrtc
+replace github.com/DarkInno/crdt/providers/sqlite v1.0.33 => ./providers/sqlite
+
+replace github.com/DarkInno/crdt/providers/webrtc v1.0.33 => ./providers/webrtc

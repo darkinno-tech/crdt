@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "darkinno-crdt-rga"
 version = "0.1.0"
-description = "Python bindings for the bounded DarkInno rga-run-v2 native runtime"
+description = "Python bindings for bounded DarkInno RGA run-v2 and LWW-Map native runtimes"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 classifiers = [

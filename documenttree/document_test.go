@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"math/rand"
-	"reflect"
 	"testing"
 
 	"github.com/DarkInno/crdt"
@@ -82,7 +81,12 @@ func TestDocumentTreeNestedMapArrayConvergesAcrossDuplicateReorderedFrames(t *te
 		t.Fatal(err)
 	}
 	changes = append(changes, delta)
-	delta, err = activity.InsertSubdocument(0, "workspace-card-1-comments")
+	comments, delta, err := activity.InsertMap(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes = append(changes, delta)
+	delta, err = comments.Set("body", []byte("fully replicated"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +135,16 @@ func TestDocumentTreeNestedMapArrayConvergesAcrossDuplicateReorderedFrames(t *te
 	if value, ok := resultLabels.Get(1); !ok || string(value.Bytes) != "security" {
 		t.Fatalf("second label = %#v, %t", value, ok)
 	}
-	if references := carol.Subdocuments(); !reflect.DeepEqual(references, []SubdocumentRef{{ID: "workspace-card-1-comments"}}) {
-		t.Fatalf("Subdocuments() = %#v", references)
+	resultActivity, ok := resultRoot.Array("activity")
+	if !ok || resultActivity.Len() != 1 {
+		t.Fatalf("activity = %#v, len=%d", resultActivity, resultActivity.Len())
+	}
+	resultComments, ok := resultActivity.Map(0)
+	if !ok {
+		t.Fatal("fully nested comments map is missing")
+	}
+	if value, found := resultComments.Get("body"); !found || string(value.Bytes) != "fully replicated" {
+		t.Fatalf("fully nested comments = %#v, %t", value, found)
 	}
 }
 
@@ -221,46 +233,6 @@ func TestDocumentTreeRejectsTypeConfusionAndChildAliasingWithoutMutation(t *test
 	after, err = document.MarshalBinary()
 	if err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("alias rejection mutated state: %v", err)
-	}
-}
-
-func TestDocumentTreeSubdocumentRegistryIsLocalAndBounded(t *testing.T) {
-	document := mustDocument(t, "writer")
-	root, _, err := document.CreateRootMap("workspace")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := root.SetSubdocument("notes", "subdoc-notes"); err != nil {
-		t.Fatal(err)
-	}
-	items, _, err := root.CreateArray("items")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := items.InsertSubdocument(0, "subdoc-comments"); err != nil {
-		t.Fatal(err)
-	}
-	registry, err := NewRegistry(DefaultRegistryOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.Sync(document); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := registry.Available(), []SubdocumentRef{{ID: "subdoc-comments"}, {ID: "subdoc-notes"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Available() = %#v, want %#v", got, want)
-	}
-	if loaded, ok := registry.Load("subdoc-notes"); !ok || loaded.ID != "subdoc-notes" || !registry.Loaded("subdoc-notes") {
-		t.Fatalf("Load = %#v, %t, loaded=%t", loaded, ok, registry.Loaded("subdoc-notes"))
-	}
-	if _, err := root.Delete("notes"); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.Sync(document); err != nil {
-		t.Fatal(err)
-	}
-	if registry.Loaded("subdoc-notes") || len(registry.Available()) != 1 {
-		t.Fatalf("registry after parent removal = loaded=%t refs=%#v", registry.Loaded("subdoc-notes"), registry.Available())
 	}
 }
 

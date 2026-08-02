@@ -45,12 +45,12 @@ const (
 	TypeIDMoveRGAState           uint64 = 25
 	TypeIDMoveRGADelta           uint64 = 26
 	SemanticsVersionMoveRGA      uint64 = 2
-	TypeIDDocumentTreeState      uint64 = 27
-	TypeIDDocumentTreeDelta      uint64 = 28
-	SemanticsVersionDocumentTree uint64 = 1
 	TypeIDRGAPackedState         uint64 = 29
 	TypeIDRGAPackedDelta         uint64 = 30
 	SemanticsVersionRGAPacked    uint64 = 3
+	TypeIDDocumentTreeState      uint64 = 31
+	TypeIDDocumentTreeDelta      uint64 = 32
+	SemanticsVersionDocumentTree uint64 = 2
 )
 
 var frameTypeRegistrations = [...]FrameTypeRegistration{
@@ -67,6 +67,6 @@ var frameTypeRegistrations = [...]FrameTypeRegistration{
 	{Name: "ListRGA", FrameType: FrameType{StateID: TypeIDListRGAState, DeltaID: TypeIDListRGADelta, SemanticsVersion: SemanticsVersionListRGA, UsesHLC: true}},
 	{Name: "RichText", FrameType: FrameType{StateID: TypeIDRichTextState, DeltaID: TypeIDRichTextDelta, SemanticsVersion: SemanticsVersionRichText, UsesHLC: true}},
 	{Name: "MoveRGA", FrameType: FrameType{StateID: TypeIDMoveRGAState, DeltaID: TypeIDMoveRGADelta, SemanticsVersion: SemanticsVersionMoveRGA, UsesHLC: true}},
-	{Name: "DocumentTree", FrameType: FrameType{StateID: TypeIDDocumentTreeState, DeltaID: TypeIDDocumentTreeDelta, SemanticsVersion: SemanticsVersionDocumentTree, UsesHLC: true}},
 	{Name: "RGAPacked", FrameType: FrameType{StateID: TypeIDRGAPackedState, DeltaID: TypeIDRGAPackedDelta, SemanticsVersion: SemanticsVersionRGAPacked, UsesHLC: true}},
+	{Name: "DocumentTree", FrameType: FrameType{StateID: TypeIDDocumentTreeState, DeltaID: TypeIDDocumentTreeDelta, SemanticsVersion: SemanticsVersionDocumentTree, UsesHLC: true}},
 }

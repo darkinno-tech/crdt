@@ -1,9 +1,9 @@
-# DarkInno native Rust RGA client
+# DarkInno native Rust CRDT runtime
 
-`darkinno-crdt-rga` is the bounded native implementation of the stable
-[`rga-run-v2`](../../docs/protocol/rga-run-v2.md) protocol. It exchanges the
-same canonical state/delta frames as Go: state TypeID `19`, delta TypeID `20`,
-empty codec, semantics version `2`.
+`darkinno-crdt-rga` is the bounded native implementation of two stable Go-wire
+protocols: [`rga-run-v2`](../../docs/protocol/rga-run-v2.md) TypeIDs `19/20`
+(semantic version `2`) and [`lww-map-v1`](../../docs/protocol/lww-v1.md)
+TypeIDs `9/10` (semantic version `1`). Each is independently negotiated.
 
 It is deliberately not compatible with TypeScript's separately negotiated
 `native-ts-v1` JSON updates or the legacy scalar RGA TypeIDs `11/12`.
@@ -43,13 +43,20 @@ already-applied canonical delta. `insert_at`, `delete_at`, and
 `apply_frame_at` additionally accept a physical millisecond clock for
 deterministic hosts and tests.
 
+`LwwMap` stores opaque byte values under UTF-8 keys. It exposes `set`,
+`delete`, `get`, canonical visible `keys`, `state`, and `clock_state`; use
+`LwwMapLimits` from the authenticated manifest for frame/payload/key/value/
+entry/tombstone bounds. It is not a generic fallback for tree, rich-text,
+attachment, or other TypeIDs; see the
+[type-coverage decision](../../docs/design/native-client-type-coverage.md).
+
 ## FFI and language bindings
 
 The crate also emits a `cdylib` and `staticlib`. Its small, ownership-explicit
 C ABI is in [`include/crdt_rga.h`](include/crdt_rga.h): returned bytes are
 owned `crdt_buffer` values and must be released with `crdt_buffer_free`.
-`crdt_rga` serializes a handle with a mutex; callers must still enforce their
-own lifecycle and avoid use after `crdt_rga_free`.
+`crdt_rga` and `crdt_lww_map` serialize opaque handles with a mutex; callers
+must still enforce their own lifecycle and avoid use after free.
 
 The checked-in Python and Swift clients use this ABI. They are supported native
 runtime bindings, not claims of independent Python/Swift wire implementations:
@@ -66,7 +73,6 @@ make swift-test # macOS: uses the no-framework Swift conformance executable
 make rust-benchmark
 ```
 
-`tests/conformance.rs` consumes the Go-published JSON fixtures directly and
-checks byte-for-byte re-encoding, atomic invalid-frame rejection, bounded
-out-of-order parents, duplicated/reordered three-replica convergence, and
-snapshot recovery.
+The conformance suites consume Go-published fixtures and check byte-for-byte
+re-encoding, atomic invalid-frame rejection, duplicated/reordered
+three-replica convergence, tombstones, and snapshot/HLC recovery.

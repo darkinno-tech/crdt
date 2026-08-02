@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use darkinno_crdt_rga::{Limits, Rga};
+use darkinno_crdt_rga::{Limits, LwwMap, LwwMapLimits, Rga};
 
 fn main() {
     const ITERATIONS: u32 = 8;
@@ -42,6 +42,39 @@ fn main() {
     eprintln!(
         "rga_run_v2_encode_complete_state_1536_ns_per_op={}",
         started.elapsed().as_nanos() / u128::from(ITERATIONS)
+    );
+
+    let mut total = 0_u128;
+    for iteration in 0..ITERATIONS {
+        let mut writer = LwwMap::new("map-writer", LwwMapLimits::default()).expect("valid writer");
+        let mut reader = LwwMap::new("map-reader", LwwMapLimits::default()).expect("valid reader");
+        let started = Instant::now();
+        for index in 0..128_u64 {
+            let key = format!("task:{index:03}");
+            let value = format!("owner=reviewer;state=open;iteration={iteration};index={index}");
+            let delta = writer
+                .set_at(
+                    &key,
+                    value.as_bytes(),
+                    u64::from(iteration) * 1_000 + index + 1,
+                )
+                .expect("bounded local map write");
+            reader
+                .apply_frame_at(&delta, u64::from(iteration) * 1_000 + index + 1)
+                .expect("apply map frame");
+        }
+        let state = reader.state().expect("complete state");
+        let mut recovered =
+            LwwMap::new("map-recovered", LwwMapLimits::default()).expect("valid recovery");
+        recovered
+            .apply_frame_at(&state, u64::from(iteration) * 1_000 + 256)
+            .expect("apply map state");
+        assert_eq!(recovered.keys().len(), 128);
+        total += started.elapsed().as_nanos();
+    }
+    eprintln!(
+        "lww_map_v1_set_replicate_recover_128_ns_per_op={}",
+        total / u128::from(ITERATIONS)
     );
 }
 
