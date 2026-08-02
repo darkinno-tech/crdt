@@ -40,14 +40,15 @@ Docker 任务通过 `Dockerfile.ci` 执行 `make coverage`，因此与第三项�
 4. 运行 `make coverage`，定位 `internal/wasm` 的新增单锚点包装 API 尚未由测试直达，包覆盖率为 88.0%。
 5. 补齐单锚点、未知句柄和 nil runtime 分支后，`internal/wasm` 覆盖率升至 92.5%，完整 `make coverage` 通过。
 6. 下载 performance 任务日志，发现基线 checkout 位于候选根目录下，自动向上查找的候选 `go.work` 把 `.benchmark-baseline/*` 解释为根模块外的路径。
-7. 只在基线子树设置 `GOWORK=off`，并在同样嵌套的 checkout 下运行 root 与 examples 基准；随后以 `origin/preprod` 为基线运行完整受控比较通过。
+7. 首次在基线子树设置 `GOWORK=off`；Actions 日志仍将相对包路径解析为候选树，因此不把该环境行为当作可靠隔离。
+8. 将 Actions checkout 的基线移动到 `$RUNNER_TEMP` 后再运行基准，并在本地以“嵌套普通 clone 后移至独立临时目录”的同构拓扑验证 root、examples 与完整基线比较通过。
 
 ### 3.2 直接原因
 
 - `text/sequence.go` 保留了已不再被生产代码或测试使用的私有 helper。
 - `replica/inbox_delivery_test.go` 固定比较 error 实例，违背项目其余测试的可包装 sentinel error 契约。
 - `internal/wasm/richtext_test.go` 覆盖范围 API，但遗漏单锚点和 nil/未知 document 边界。
-- `.github/workflows/test.yml` 的 performance job 在候选目录中嵌套 baseline checkout，却没有隔离其 Go workspace 解析。
+- `.github/workflows/test.yml` 的 performance job 在候选目录中嵌套 baseline checkout；仅依赖进程级 `GOWORK=off` 未能在 Actions runner 上可靠隔离相对包路径解析。
 
 ### 3.3 根本原因
 
@@ -64,7 +65,7 @@ Docker 任务通过 `Dockerfile.ci` 执行 `make coverage`，因此与第三项�
 - 删除无调用的 `markerPriority`，保留由 `markerPriorities` 统一计算 entry/exit priority 的路径。
 - 使用 `errors.Is(err, ErrInvalidChange)` 验证测试的 sentinel error。
 - 为 `RichTextRuntime` 的单锚点 encode/decode/resolve、未知句柄和 nil runtime 增加真实边界测试。
-- 仅在 `.benchmark-baseline` 及其 `examples` 子模块的基准命令设置 `GOWORK=off`，使基线不继承候选的 workspace；候选命令保持现有多模块 workspace 行为。
+- 在运行基准前把 `.benchmark-baseline` 移至 `$RUNNER_TEMP`，并在基线 root/examples 命令显式 `GOWORK=off`；候选命令保持现有多模块 workspace 行为。
 
 **修改文件**：`text/sequence.go`、`replica/inbox_delivery_test.go`、`internal/wasm/richtext_test.go`、`.github/workflows/test.yml`。
 
@@ -77,6 +78,7 @@ make coverage     PASS
 internal/wasm     92.5% (required >= 90%)
 make benchmark-regression BENCHMARK_BASE=<origin/preprod worktree>  PASS
 nested .benchmark-baseline commands with GOWORK=off                  PASS
+nested clone moved to an independent temporary directory              PASS
 ```
 
 ## 5. 预防措施
@@ -90,7 +92,7 @@ nested .benchmark-baseline commands with GOWORK=off                  PASS
 
 - [x] 每个新增公开 Wasm runtime 包装 API 至少覆盖成功、未知 document 与 nil runtime 边界。
 - [x] 发布候选推送前执行 staticcheck、golangci、coverage 和基线性能比较。
-- [x] 基线 checkout 嵌套在候选目录时，明确验证 `GOWORK` 解析边界。
+- [x] 基线 checkout 嵌套在候选目录时，移动至独立目录并明确验证 `GOWORK` 解析边界。
 
 ### 5.3 流程层面
 
