@@ -147,6 +147,11 @@ payload that happens to parse.
 - Limit raw HTTP body, decoded update, state vector, merged snapshot, and
   merge fan-in. The sidecar checks each boundary before base64 decode or Yjs
   invocation, then checks the materialized snapshot before durable replacement.
+- Each operation materializes one request-scoped `Y.Doc` from the durable
+  snapshot and destroys it on every success or failure path. This prevents
+  sidecar-owned Yjs observers or subdocument references accumulating across a
+  sustained apply, diff, state-vector, or snapshot workload; it does not make
+  an untrusted update's decoded allocation cost safe by itself.
 - Set a Node heap/container memory ceiling and ingress rate limit as well.
   A raw byte cap limits but cannot prove a Yjs update's decoded structure has a
   low allocation cost.
