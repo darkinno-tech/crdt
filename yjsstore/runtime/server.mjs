@@ -12,6 +12,13 @@ const maximumStateVectorBytes = 1 << 20;
 const maximumSnapshotBytes = 128 << 20;
 const maximumMergeUpdates = 1 << 16;
 const maximumRequestBytes = 160 << 20;
+const defaultMaxConcurrentRequests = 4;
+const maximumConcurrentRequests = 64;
+const defaultRequestTimeoutMillis = 10_000;
+const minimumRequestTimeoutMillis = 1_000;
+const maximumRequestTimeoutMillis = 120_000;
+const maximumHeadersTimeoutMillis = 5_000;
+const connectionTimeoutCheckMillis = 1_000;
 const maximumCursor = Number.MAX_SAFE_INTEGER;
 const emptyV1 = Y.encodeStateAsUpdate(new Y.Doc());
 const emptyV2 = Y.encodeStateAsUpdateV2(new Y.Doc());
@@ -42,6 +49,8 @@ export async function loadConfig(environment = process.env) {
     maxStateVectorBytes: boundedEnvironmentInteger(environment.YJS_STORE_MAX_STATE_VECTOR_BYTES ?? `${64 << 10}`, 1, maximumStateVectorBytes, "YJS_STORE_MAX_STATE_VECTOR_BYTES"),
     maxSnapshotBytes: boundedEnvironmentInteger(environment.YJS_STORE_MAX_SNAPSHOT_BYTES ?? `${16 << 20}`, 1, maximumSnapshotBytes, "YJS_STORE_MAX_SNAPSHOT_BYTES"),
     maxMergeUpdates: boundedEnvironmentInteger(environment.YJS_STORE_MAX_MERGE_UPDATES ?? "256", 1, maximumMergeUpdates, "YJS_STORE_MAX_MERGE_UPDATES"),
+    maxConcurrentRequests: boundedEnvironmentInteger(environment.YJS_STORE_MAX_CONCURRENT_REQUESTS ?? `${defaultMaxConcurrentRequests}`, 1, maximumConcurrentRequests, "YJS_STORE_MAX_CONCURRENT_REQUESTS"),
+    requestTimeoutMillis: boundedEnvironmentInteger(environment.YJS_STORE_REQUEST_TIMEOUT_MS ?? `${defaultRequestTimeoutMillis}`, minimumRequestTimeoutMillis, maximumRequestTimeoutMillis, "YJS_STORE_REQUEST_TIMEOUT_MS"),
   };
   if (!isLoopbackHost(config.host)) {
     throw new Error("YJS_STORE_HOST must be the literal loopback address 127.0.0.1 or ::1");
@@ -61,15 +70,35 @@ export async function loadConfig(environment = process.env) {
 // createYJSStoreServer constructs the local semantic service. It never adds
 // CORS headers and should normally listen only on loopback; a gateway owns
 // client authentication, authorization, origin checks, rate limits, and TLS.
-export function createYJSStoreServer(config) {
+export function createYJSStoreServer(configuration) {
+  const config = normalizeServerConfig(configuration);
   validateConfig(config);
   const locks = new KeyedLock();
-  const server = createServer((request, response) => {
-    void handleRequest(config, locks, request, response).catch((error) => sendError(response, error));
+  const admission = new RequestAdmission(config.maxConcurrentRequests);
+  const server = createServer({
+    requestTimeout: config.requestTimeoutMillis,
+    headersTimeout: Math.min(config.requestTimeoutMillis, maximumHeadersTimeoutMillis),
+    connectionsCheckingInterval: connectionTimeoutCheckMillis,
+  }, (request, response) => {
+    if (!admission.tryAcquire()) {
+      // Do not buffer a rejected body while the bounded semantic workers are
+      // occupied. The loopback gateway can retry a 503 after backoff.
+      request.resume();
+      sendError(response, new YJSStoreError("unavailable", 503));
+      return;
+    }
+    void handleRequest(config, locks, request, response)
+      .catch((error) => sendError(response, error))
+      .finally(() => admission.release());
   });
   return {
     server,
     async listen() {
+      // loadConfig performs this check too, but createYJSStoreServer is
+      // exported for embedding wrappers. Recheck at the point the listener
+      // becomes live so a direct configuration or a permission change between
+      // loading and binding cannot weaken the durable-store boundary.
+      await ensureSecureDataDirectory(config.dataDir);
       await new Promise((resolveListen, rejectListen) => {
         server.once("error", rejectListen);
         server.listen(config.port, config.host, () => {
@@ -86,6 +115,18 @@ export function createYJSStoreServer(config) {
     async close() {
       await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
     },
+  };
+}
+
+function normalizeServerConfig(configuration) {
+  if (configuration === null || typeof configuration !== "object") {
+    return configuration;
+  }
+  return {
+    ...configuration,
+    dataDir: typeof configuration.dataDir === "string" ? resolve(configuration.dataDir) : configuration.dataDir,
+    maxConcurrentRequests: configuration.maxConcurrentRequests ?? defaultMaxConcurrentRequests,
+    requestTimeoutMillis: configuration.requestTimeoutMillis ?? defaultRequestTimeoutMillis,
   };
 }
 
@@ -531,9 +572,33 @@ function validateConfig(config) {
     !Number.isInteger(config.maxStateVectorBytes) || config.maxStateVectorBytes < 1 || config.maxStateVectorBytes > maximumStateVectorBytes ||
     !Number.isInteger(config.maxSnapshotBytes) || config.maxSnapshotBytes < config.maxUpdateBytes || config.maxSnapshotBytes > maximumSnapshotBytes ||
     !Number.isInteger(config.maxMergeUpdates) || config.maxMergeUpdates < 1 || config.maxMergeUpdates > maximumMergeUpdates ||
+    !Number.isInteger(config.maxConcurrentRequests) || config.maxConcurrentRequests < 1 || config.maxConcurrentRequests > maximumConcurrentRequests ||
+    !Number.isInteger(config.requestTimeoutMillis) || config.requestTimeoutMillis < minimumRequestTimeoutMillis || config.requestTimeoutMillis > maximumRequestTimeoutMillis ||
     !Number.isInteger(config.maxRequestBytes) || config.maxRequestBytes < config.maxUpdateBytes || config.maxRequestBytes > maximumRequestBytes ||
     !isLoopbackHost(config.host) || !Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error("invalid Yjs store configuration");
+  }
+}
+
+class RequestAdmission {
+  #active = 0;
+
+  constructor(maximum) {
+    this.maximum = maximum;
+  }
+
+  tryAcquire() {
+    if (this.#active >= this.maximum) {
+      return false;
+    }
+    this.#active += 1;
+    return true;
+  }
+
+  release() {
+    if (this.#active > 0) {
+      this.#active -= 1;
+    }
   }
 }
 
