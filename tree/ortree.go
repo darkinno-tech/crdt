@@ -212,6 +212,17 @@ func (t *ORTree) ApplyDelta(delta Delta) error {
 			return err
 		}
 	}
+	// A first sync has no retained entries to preserve. Allocate exactly once
+	// after every rejecting operation (including clock advancement) has passed,
+	// rather than growing an initially empty map repeatedly for a large batch.
+	// Existing maps stay untouched so incremental delivery keeps its current
+	// amortized behavior and identity.
+	if len(t.nodes) == 0 && len(delta.nodes) > 0 {
+		t.nodes = make(map[NodeID]storedNode, len(delta.nodes))
+	}
+	if len(t.tombstones) == 0 && len(delta.tombstones) > 0 {
+		t.tombstones = make(map[NodeID]struct{}, len(delta.tombstones))
+	}
 	changed := false
 	for id, incoming := range delta.nodes {
 		if _, exists := t.nodes[id]; !exists {
