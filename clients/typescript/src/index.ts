@@ -186,18 +186,28 @@ export type {
 } from "./nested.js";
 export {
   bindYjsCodeMirrorPlainText,
+  observeYjsDeep,
   YjsBindingError,
   YjsCodeMirrorBinding,
+  YjsDeepObserver,
+  YjsSyncProtocol,
   YjsTextBinding,
+  YjsTextUndoManager,
 } from "./yjs.js";
 export type {
   BindYjsCodeMirrorOptions,
   YjsBindingErrorCode,
   YjsCodeMirrorTextPort,
   YjsCodeMirrorViewUpdate,
+  YjsDeepChange,
+  YjsDeepObserverOptions,
+  YjsRelativePositionAssociation,
   YjsRemoteCursor,
+  YjsSyncProtocolOptions,
   YjsTextBindingOptions,
   YjsTextChange,
+  YjsTextRelativePosition,
   YjsTextSelection,
+  YjsTextUndoManagerOptions,
   YjsUpdateFormat,
 } from "./yjs.js";

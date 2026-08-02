@@ -8,6 +8,8 @@
  * below, but never mix those transport ownership models for one Y.Doc.
  */
 
+import * as decoding from "lib0/decoding";
+import * as encoding from "lib0/encoding";
 import * as Y from "yjs";
 import {
   applyAwarenessUpdate,
@@ -22,10 +24,13 @@ export type YjsBindingErrorCode =
   | "document_mismatch"
   | "document_closed"
   | "editor_update_failed"
+  | "invalid_relative_position"
   | "invalid_options"
   | "invalid_selection"
   | "invalid_update"
+  | "observer_failed"
   | "resource_limit"
+  | "sync_mismatch"
   | "unsupported_text";
 
 /** A stable error code for callers that need to close or recover a binding. */
@@ -49,10 +54,51 @@ export interface YjsTextSelection {
   readonly head: number;
 }
 
+/** A bounded binary Yjs relative position for this binding's exact Y.Text. */
+export interface YjsTextRelativePosition {
+  readonly version: 1;
+  readonly encoded: string;
+}
+
+/** Yjs distinguishes the character before (-1) or at/after (0) an index. */
+export type YjsRelativePositionAssociation = -1 | 0;
+
 /** One peer cursor resolved against the current local Y.Text projection. */
 export interface YjsRemoteCursor {
   readonly clientID: number;
   readonly selection: YjsTextSelection;
+}
+
+/** Optional local-history settings for one plain-text binding. */
+export interface YjsTextUndoManagerOptions {
+  /** Milliseconds in which adjacent local replacements are coalesced. */
+  readonly captureTimeout?: number;
+}
+
+/** A safe, minimal projection of one synchronous Yjs observeDeep event. */
+export interface YjsDeepChange {
+  /** Immutable path from the observed root to the changed shared type. */
+  readonly path: readonly (string | number)[];
+  /** The changed live Yjs type; read it synchronously rather than retaining raw Y.Event data. */
+  readonly target: Y.AbstractType<unknown>;
+}
+
+/** Resource limits for an observeDeep callback owned by this library. */
+export interface YjsDeepObserverOptions {
+  /** Caps the number of changed descendants delivered in one transaction. */
+  readonly maxEventsPerTransaction: number;
+  /** Caps copied path segments for each changed descendant. */
+  readonly maxPathDepth: number;
+  /** Receives the bounded path/target projection synchronously after a transaction. */
+  readonly onChanges: (changes: readonly YjsDeepChange[]) => void;
+  /** Reports a boundedness or callback failure after the Yjs transaction commits. */
+  readonly onError?: (error: YjsBindingError) => void;
+}
+
+/** Envelope limit for one unwrapped y-protocols sync submessage. */
+export interface YjsSyncProtocolOptions {
+  /** Caps the complete y-protocols sync submessage before decoder allocation. */
+  readonly maxMessageBytes: number;
 }
 
 export interface YjsTextBindingOptions {
@@ -111,6 +157,7 @@ export class YjsTextBinding {
   #closed = false;
   #projectingText = true;
   #textObserved = false;
+  readonly #undoManagers = new Set<YjsTextUndoManager>();
 
   constructor(
     readonly document: Y.Doc,
@@ -173,11 +220,86 @@ export class YjsTextBinding {
     if (remoteStateVector !== undefined) {
       assertBoundedBytes(remoteStateVector, this.options.maxUpdateBytes);
     }
-    const update = this.updateFormat === "v1"
-      ? Y.encodeStateAsUpdate(this.document, remoteStateVector)
-      : Y.encodeStateAsUpdateV2(this.document, remoteStateVector);
+    let update: Uint8Array;
+    try {
+      update = this.updateFormat === "v1"
+        ? Y.encodeStateAsUpdate(this.document, remoteStateVector)
+        : Y.encodeStateAsUpdateV2(this.document, remoteStateVector);
+    } catch {
+      throw new YjsBindingError("invalid_update");
+    }
     assertBoundedBytes(update, this.options.maxUpdateBytes);
     return update;
+  }
+
+  /** The pre-decode bound shared by update and state-vector messages. */
+  get maxUpdateBytes(): number {
+    return this.options.maxUpdateBytes;
+  }
+
+  /** Creates a stable, bounded Yjs position tied to this exact plain Y.Text. */
+  createRelativePosition(
+    index: number,
+    association: YjsRelativePositionAssociation = 0,
+  ): YjsTextRelativePosition {
+    this.#assertTextProjection();
+    if (!validOffset(index, this.text.length) || !validRelativePositionAssociation(association)) {
+      throw new YjsBindingError("invalid_selection");
+    }
+    return {
+      version: 1,
+      encoded: encodeRelativePosition(
+        Y.createRelativePositionFromTypeIndex(this.text, index, association),
+        this.options.maxCursorBytes,
+      ),
+    };
+  }
+
+  /** Resolves a position only when it still names this binding's current Y.Text. */
+  resolveRelativePosition(position: YjsTextRelativePosition): number {
+    this.#assertTextProjection();
+    if (!isTextRelativePosition(position)) {
+      throw new YjsBindingError("invalid_relative_position");
+    }
+    try {
+      const absolute = Y.createAbsolutePositionFromRelativePosition(
+        Y.decodeRelativePosition(fromBase64(position.encoded, this.options.maxCursorBytes)),
+        this.document,
+      );
+      if (absolute === null || absolute.type !== this.text || !validOffset(absolute.index, this.text.length)) {
+        throw new YjsBindingError("invalid_relative_position");
+      }
+      return absolute.index;
+    } catch (error) {
+      if (error instanceof YjsBindingError) {
+        throw error;
+      }
+      throw new YjsBindingError("invalid_relative_position");
+    }
+  }
+
+  /** Creates local-only undo/redo history for replacements made through this binding. */
+  createUndoManager(options: YjsTextUndoManagerOptions = {}): YjsTextUndoManager {
+    this.#assertTextProjection();
+    validateUndoOptions(options);
+    const manager = new YjsTextUndoManager(
+      this.text,
+      this.#localTextOrigin,
+      options,
+      () => this.#assertTextProjection(),
+      (released) => this.#undoManagers.delete(released),
+    );
+    this.#undoManagers.add(manager);
+    return manager;
+  }
+
+  /** Creates a bounded V1 y-protocols sync helper for a transport this binding owns. */
+  createSyncProtocol(options: YjsSyncProtocolOptions): YjsSyncProtocol {
+    this.#assertOpen();
+    if (this.updateFormat !== "v1") {
+      throw new YjsBindingError("sync_mismatch");
+    }
+    return new YjsSyncProtocol(this, options);
   }
 
   /** Applies one inbound y-protocols awareness message without treating client IDs as identities. */
@@ -207,14 +329,14 @@ export class YjsTextBinding {
 
   /** Stores the local cursor using encoded Yjs relative positions in awareness JSON. */
   setLocalCursor(selection: YjsTextSelection): void {
-    this.#assertOpen();
+    this.#assertTextProjection();
     if (this.awareness === undefined || !validSelection(selection, this.text.length)) {
       throw new YjsBindingError("invalid_selection");
     }
     const cursor: EncodedYjsCursor = {
       version: 1,
-      anchor: encodeRelativePosition(Y.createRelativePositionFromTypeIndex(this.text, selection.anchor), this.options.maxCursorBytes),
-      head: encodeRelativePosition(Y.createRelativePositionFromTypeIndex(this.text, selection.head), this.options.maxCursorBytes),
+      anchor: this.createRelativePosition(selection.anchor).encoded,
+      head: this.createRelativePosition(selection.head).encoded,
     };
     this.awareness.setLocalStateField(this.cursorField, cursor);
   }
@@ -277,6 +399,9 @@ export class YjsTextBinding {
       return false;
     }
     this.#closed = true;
+    for (const manager of [...this.#undoManagers]) {
+      manager.destroy();
+    }
     if (this.#textObserved) {
       this.text.unobserve(this.#observeText);
       this.#textObserved = false;
@@ -365,6 +490,217 @@ export class YjsTextBinding {
   }
 }
 
+/**
+ * Selective undo/redo over only replacements emitted by one YjsTextBinding.
+ * Undo and redo are new Yjs transactions: callers must send the resulting
+ * local update through their authenticated transport like any other edit.
+ */
+export class YjsTextUndoManager {
+  readonly #manager: Y.UndoManager;
+  #closed = false;
+
+  constructor(
+    text: Y.Text,
+    localOrigin: unknown,
+    options: YjsTextUndoManagerOptions,
+    private readonly assertActive: () => void,
+    private readonly release: (manager: YjsTextUndoManager) => void,
+  ) {
+    const managerOptions = {
+      trackedOrigins: new Set<unknown>([localOrigin]),
+      ...(options.captureTimeout === undefined ? {} : { captureTimeout: options.captureTimeout }),
+    };
+    this.#manager = new Y.UndoManager(text, managerOptions);
+  }
+
+  canUndo(): boolean {
+    this.#assertActive();
+    return this.#manager.canUndo();
+  }
+
+  canRedo(): boolean {
+    this.#assertActive();
+    return this.#manager.canRedo();
+  }
+
+  /** Applies a compensating Yjs transaction for the latest captured local edit. */
+  undo(): boolean {
+    this.#assertActive();
+    return this.#manager.undo() !== null;
+  }
+
+  /** Reapplies the latest locally undone edit as a new Yjs transaction. */
+  redo(): boolean {
+    this.#assertActive();
+    return this.#manager.redo() !== null;
+  }
+
+  /** Starts a new capture group before the next local editor replacement. */
+  stopCapturing(): void {
+    this.#assertActive();
+    this.#manager.stopCapturing();
+  }
+
+  /** Drops retained local history without modifying the shared Y.Text. */
+  clear(): void {
+    this.#assertActive();
+    this.#manager.clear();
+  }
+
+  /** Releases Yjs listeners; it never destroys the caller-owned Y.Doc. */
+  destroy(): boolean {
+    if (this.#closed) {
+      return false;
+    }
+    this.#closed = true;
+    this.#manager.destroy();
+    this.release(this);
+    return true;
+  }
+
+  #assertActive(): void {
+    if (this.#closed) {
+      throw new YjsBindingError("document_closed");
+    }
+    this.assertActive();
+  }
+}
+
+/**
+ * Bounded wrapper for Yjs observeDeep. It deliberately copies only paths and
+ * live targets, not lazy Y.Event internals or arbitrary user values.
+ */
+export class YjsDeepObserver {
+  readonly #observer: (events: Y.YEvent<any>[]) => void;
+  #closed = false;
+
+  constructor(
+    private readonly root: Y.AbstractType<unknown>,
+    private readonly options: YjsDeepObserverOptions,
+  ) {
+    validateDeepObserverOptions(options);
+    this.#observer = (events) => this.#handle(events);
+    root.observeDeep(this.#observer);
+  }
+
+  destroy(): boolean {
+    if (this.#closed) {
+      return false;
+    }
+    this.#closed = true;
+    this.root.unobserveDeep(this.#observer);
+    return true;
+  }
+
+  #handle(events: readonly Y.YEvent<any>[]): void {
+    if (this.#closed) {
+      return;
+    }
+    if (events.length > this.options.maxEventsPerTransaction) {
+      this.#fail("resource_limit");
+      return;
+    }
+    const changes: YjsDeepChange[] = [];
+    for (const event of events) {
+      const path = event.path;
+      if (path.length > this.options.maxPathDepth) {
+        this.#fail("resource_limit");
+        return;
+      }
+      changes.push({
+        path: Object.freeze([...path]),
+        target: event.target as Y.AbstractType<unknown>,
+      });
+    }
+    try {
+      this.options.onChanges(Object.freeze(changes));
+    } catch {
+      // Yjs already committed. Unsubscribe so the host cannot keep claiming a
+      // view is current after its own deep-observation callback failed.
+      this.#fail("observer_failed");
+    }
+  }
+
+  #fail(code: Extract<YjsBindingErrorCode, "observer_failed" | "resource_limit">): void {
+    if (this.#closed) {
+      return;
+    }
+    this.#closed = true;
+    this.root.unobserveDeep(this.#observer);
+    try {
+      this.options.onError?.(new YjsBindingError(code));
+    } catch {
+      // Error reporting must not re-enter the synchronous Yjs observer loop.
+    }
+  }
+}
+
+/** Starts a bounded synchronous deep observer rooted at one Yjs shared type. */
+export function observeYjsDeep(
+  root: Y.AbstractType<unknown>,
+  options: YjsDeepObserverOptions,
+): YjsDeepObserver {
+  return new YjsDeepObserver(root, options);
+}
+
+const yjsSyncStep1 = 0;
+const yjsSyncStep2 = 1;
+const yjsSyncUpdate = 2;
+
+/**
+ * A V1 y-protocols sync submessage helper for a caller-owned authenticated
+ * transport. It deliberately does not add y-websocket's outer message type,
+ * a room name, authentication, or receipt semantics.
+ */
+export class YjsSyncProtocol {
+  constructor(
+    private readonly binding: YjsTextBinding,
+    private readonly options: YjsSyncProtocolOptions,
+  ) {
+    validateSyncProtocolOptions(options);
+  }
+
+  /** Encodes standard y-protocols SyncStep1 from this binding's state vector. */
+  encodeSyncStep1(): Uint8Array {
+    return encodeYjsSyncMessage(yjsSyncStep1, this.binding.encodeStateVector(), this.options.maxMessageBytes);
+  }
+
+  /**
+   * Reads exactly one unwrapped y-protocols V1 sync submessage. A SyncStep1
+   * returns SyncStep2; SyncStep2 and update messages return undefined.
+   */
+  receive(message: Uint8Array): Uint8Array | undefined {
+    this.binding.encodeStateVector(); // validates that the owning binding remains open
+    assertBoundedBytes(message, this.options.maxMessageBytes);
+    try {
+      const decoder = decoding.createDecoder(message);
+      const type = decoding.readVarUint(decoder);
+      if (type !== yjsSyncStep1 && type !== yjsSyncStep2 && type !== yjsSyncUpdate) {
+        throw new YjsBindingError("invalid_update");
+      }
+      const payload = decoding.readVarUint8Array(decoder);
+      if (decoding.hasContent(decoder)) {
+        throw new YjsBindingError("invalid_update");
+      }
+      assertBoundedBytes(payload, this.binding.maxUpdateBytes);
+      if (type === yjsSyncStep1) {
+        return encodeYjsSyncMessage(
+          yjsSyncStep2,
+          this.binding.encodeStateAsUpdate(payload),
+          this.options.maxMessageBytes,
+        );
+      }
+      this.binding.applyRemoteUpdate(payload);
+      return undefined;
+    } catch (error) {
+      if (error instanceof YjsBindingError) {
+        throw error;
+      }
+      throw new YjsBindingError("invalid_update");
+    }
+  }
+}
+
 /** The CodeMirror 6 surface used by the incremental native Yjs text binding. */
 export interface YjsCodeMirrorTextPort {
   readonly state: {
@@ -446,6 +782,25 @@ export class YjsCodeMirrorBinding {
 
   encodeStateAsUpdate(remoteStateVector?: Uint8Array): Uint8Array {
     return this.#binding.encodeStateAsUpdate(remoteStateVector);
+  }
+
+  createRelativePosition(
+    index: number,
+    association: YjsRelativePositionAssociation = 0,
+  ): YjsTextRelativePosition {
+    return this.#binding.createRelativePosition(index, association);
+  }
+
+  resolveRelativePosition(position: YjsTextRelativePosition): number {
+    return this.#binding.resolveRelativePosition(position);
+  }
+
+  createUndoManager(options: YjsTextUndoManagerOptions = {}): YjsTextUndoManager {
+    return this.#binding.createUndoManager(options);
+  }
+
+  createSyncProtocol(options: YjsSyncProtocolOptions): YjsSyncProtocol {
+    return this.#binding.createSyncProtocol(options);
   }
 
   encodeAwarenessUpdate(clientIDs: readonly number[]): Uint8Array {
@@ -661,6 +1016,12 @@ function isEncodedCursor(value: unknown): value is EncodedYjsCursor {
     && typeof (value as { head?: unknown }).head === "string";
 }
 
+function isTextRelativePosition(value: unknown): value is YjsTextRelativePosition {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && (value as { version?: unknown }).version === 1
+    && typeof (value as { encoded?: unknown }).encoded === "string";
+}
+
 function toBase64(value: Uint8Array): string {
   let binary = "";
   for (let offset = 0; offset < value.length; offset += 8192) {
@@ -688,9 +1049,38 @@ function base64Length(bytes: number): number {
   return Math.ceil(bytes / 3) * 4;
 }
 
+function encodeYjsSyncMessage(type: number, payload: Uint8Array, maximumBytes: number): Uint8Array {
+  const encoder = encoding.createEncoder();
+  encoding.writeVarUint(encoder, type);
+  encoding.writeVarUint8Array(encoder, payload);
+  const message = encoding.toUint8Array(encoder);
+  assertBoundedBytes(message, maximumBytes);
+  return message;
+}
+
 function validateOptions(options: YjsTextBindingOptions): void {
   if (!validPositive(options.maxUpdateBytes) || !validPositive(options.maxAwarenessBytes) ||
     !validPositive(options.maxTextUTF16) || !validPositive(options.maxCursorBytes)) {
+    throw new YjsBindingError("invalid_options");
+  }
+}
+
+function validateUndoOptions(options: YjsTextUndoManagerOptions): void {
+  if (options.captureTimeout !== undefined &&
+    (!Number.isSafeInteger(options.captureTimeout) || options.captureTimeout < 0)) {
+    throw new YjsBindingError("invalid_options");
+  }
+}
+
+function validateDeepObserverOptions(options: YjsDeepObserverOptions): void {
+  if (!validPositive(options.maxEventsPerTransaction) || !validPositive(options.maxPathDepth) ||
+    typeof options.onChanges !== "function") {
+    throw new YjsBindingError("invalid_options");
+  }
+}
+
+function validateSyncProtocolOptions(options: YjsSyncProtocolOptions): void {
+  if (!validPositive(options.maxMessageBytes)) {
     throw new YjsBindingError("invalid_options");
   }
 }
@@ -715,6 +1105,10 @@ function validTextChange(value: YjsTextChange, length: number): boolean {
 
 function validOffset(value: number, length: number): boolean {
   return Number.isSafeInteger(value) && value >= 0 && value <= length;
+}
+
+function validRelativePositionAssociation(value: number): value is YjsRelativePositionAssociation {
+  return value === -1 || value === 0;
 }
 
 function validPositive(value: number): boolean {
