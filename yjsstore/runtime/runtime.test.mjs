@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { once } from "node:events";
+import { chmod, mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -23,6 +25,65 @@ test("the bundled sidecar only permits literal loopback listeners", async () => 
   const ipv6 = await loadConfig({ ...base, YJS_STORE_HOST: "::1" });
   assert.equal(ipv6.host, "::1");
   assert.throws(() => createYJSStoreServer({ ...ipv6, host: "0.0.0.0" }), /invalid Yjs store configuration/);
+  await assert.rejects(() => loadConfig({ ...base, YJS_STORE_MAX_CONCURRENT_REQUESTS: "0" }), /out of range/);
+  await assert.rejects(() => loadConfig({ ...base, YJS_STORE_REQUEST_TIMEOUT_MS: "999" }), /out of range/);
+});
+
+test("the sidecar rechecks its durable directory before listening", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "darkinno-yjs-store-permissions-"));
+  const config = await loadConfig({
+    YJS_STORE_DATA_DIR: dataDir,
+    YJS_STORE_TOKEN: token,
+    YJS_STORE_PORT: "0",
+  });
+  await chmod(dataDir, 0o755);
+  const service = createYJSStoreServer(config);
+  await assert.rejects(() => service.listen(), /non-symlink 0700 directory/);
+});
+
+test("the sidecar rejects an over-cap active request and releases capacity after the request completes", async (context) => {
+  const running = await startStore(context, undefined, { maxConcurrentRequests: 1 });
+  const document = testDocument("v1");
+  const author = new Y.Doc();
+  const update = captureUpdate(author, "update", () => author.getText("bounded").insert(0, "write"));
+  const requestStarted = once(running.service.server, "request");
+  const held = holdJSONRequest(running.endpoint, "/v1/yjs/apply", { document, update: toBase64(update) });
+  try {
+    await requestStarted;
+    const rejected = await request(running.endpoint, "/v1/yjs/snapshot", { document });
+    assert.equal(rejected.status, 503);
+    assert.equal(rejected.body.code, "unavailable");
+
+    held.finish();
+    const completed = await held.result;
+    assert.equal(completed.status, 200);
+    const snapshot = await request(running.endpoint, "/v1/yjs/snapshot", { document });
+    assert.equal(snapshot.status, 200, "completion releases the sidecar admission slot");
+  } finally {
+    held.finish();
+    await held.result.catch(() => {});
+    author.destroy();
+  }
+});
+
+test("the sidecar times out an incomplete body before it can retain its admission slot", async (context) => {
+  const running = await startStore(context, undefined, { maxConcurrentRequests: 1, requestTimeoutMillis: 1000 });
+  const document = testDocument("v1");
+  const author = new Y.Doc();
+  const update = captureUpdate(author, "update", () => author.getText("timeout").insert(0, "write"));
+  const requestStarted = once(running.service.server, "request");
+  const held = holdJSONRequest(running.endpoint, "/v1/yjs/apply", { document, update: toBase64(update) });
+  try {
+    await requestStarted;
+    const timedOut = await held.result;
+    assert.equal(timedOut.status, 408);
+    const snapshot = await request(running.endpoint, "/v1/yjs/snapshot", { document });
+    assert.equal(snapshot.status, 200, "a timed-out body releases its slot for later durable work");
+  } finally {
+    held.finish();
+    await held.result.catch(() => {});
+    author.destroy();
+  }
 });
 
 test("real Yjs v1 state-vector diff, merge, and durable recovery converge", async (context) => {
@@ -130,7 +191,7 @@ test("each request destroys its materialized Y.Doc after a durable operation", a
 });
 
 test("parallel offline writers converge and a duplicate is not persisted twice", async (context) => {
-  const running = await startStore(context);
+  const running = await startStore(context, undefined, { maxConcurrentRequests: 16 });
   const document = testDocument("v1");
   const seed = new Y.Doc();
   const base = captureUpdate(seed, "update", () => seed.getText("shared").insert(0, "base"));
@@ -228,6 +289,8 @@ async function startStore(context, existingDataDir, overrides = {}) {
     YJS_STORE_MAX_STATE_VECTOR_BYTES: `${overrides.maxStateVectorBytes ?? 1024}`,
     YJS_STORE_MAX_SNAPSHOT_BYTES: `${overrides.maxSnapshotBytes ?? 32768}`,
     YJS_STORE_MAX_MERGE_UPDATES: `${overrides.maxMergeUpdates ?? 32}`,
+    YJS_STORE_MAX_CONCURRENT_REQUESTS: `${overrides.maxConcurrentRequests ?? 4}`,
+    YJS_STORE_REQUEST_TIMEOUT_MS: `${overrides.requestTimeoutMillis ?? 10000}`,
   });
   const service = createYJSStoreServer(config);
   const endpoint = await service.listen();
@@ -239,7 +302,47 @@ async function startStore(context, existingDataDir, overrides = {}) {
     }
   };
   context.after(close);
-  return { dataDir, endpoint, close };
+  return { dataDir, endpoint, service, close };
+}
+
+function holdJSONRequest(endpoint, path, value) {
+  const payload = Buffer.from(JSON.stringify(value));
+  const request = httpRequest(new URL(`${endpoint}${path}`), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "content-length": `${payload.length}`,
+    },
+  });
+  const result = new Promise((resolveResult, rejectResult) => {
+    request.once("error", rejectResult);
+    request.once("response", (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.once("error", rejectResult);
+      response.once("end", () => {
+        try {
+          const body = Buffer.concat(chunks);
+          resolveResult({ status: response.statusCode, body: body.length === 0 ? undefined : JSON.parse(body.toString("utf8")) });
+        } catch (error) {
+          rejectResult(error);
+        }
+      });
+    });
+  });
+  const boundary = Math.max(1, Math.floor(payload.length / 2));
+  request.write(payload.subarray(0, boundary));
+  let finished = false;
+  return {
+    result,
+    finish() {
+      if (!finished && !request.destroyed) {
+        finished = true;
+        request.end(payload.subarray(boundary));
+      }
+    },
+  };
 }
 
 async function request(endpoint, path, body, requestToken = token) {
