@@ -1,4 +1,4 @@
-import { FrameSemanticsVersion, FrameType } from "./frame.js";
+import { FORMAT_VERSION, FrameSemanticsVersion, FrameType } from "./frame.js";
 import type { RichTextEditorOperation, RichTextSpan } from "./bindings.js";
 
 /** The global installed by the Go js/wasm entrypoint after it has started. */
@@ -15,6 +15,8 @@ export interface RGAProtocolExpectation {
   readonly stateTypeID: bigint;
   readonly deltaTypeID: bigint;
   readonly semanticsVersion: bigint;
+  /** Outer frame version authenticated with the frame pair; defaults to v1 for source compatibility. */
+  readonly wireFormatVersion?: bigint;
 }
 
 /** Explicit compatibility contract for legacy scalar RGA v1 groups. */
@@ -22,6 +24,7 @@ export const RGA_PROTOCOL_V1: Readonly<RGAProtocolExpectation> = Object.freeze({
   stateTypeID: FrameType.RGAState,
   deltaTypeID: FrameType.RGADelta,
   semanticsVersion: FrameSemanticsVersion.RGA,
+  wireFormatVersion: FORMAT_VERSION,
 });
 
 /** Default compatibility contract for new Go RGA replication groups. */
@@ -29,6 +32,7 @@ export const RGA_PROTOCOL_RUN_V2: Readonly<RGAProtocolExpectation> = Object.free
   stateTypeID: FrameType.RGARunState,
   deltaTypeID: FrameType.RGARunDelta,
   semanticsVersion: FrameSemanticsVersion.RGARun,
+  wireFormatVersion: FORMAT_VERSION,
 });
 
 /** Explicit compact RGA v3 contract for a separately authenticated Manifest. */
@@ -36,6 +40,15 @@ export const RGA_PROTOCOL_PACKED_V3: Readonly<RGAProtocolExpectation> = Object.f
   stateTypeID: FrameType.RGAPackedState,
   deltaTypeID: FrameType.RGAPackedDelta,
   semanticsVersion: FrameSemanticsVersion.RGAPacked,
+  wireFormatVersion: FORMAT_VERSION,
+});
+
+/** Packed RGA v3 with the separately authenticated compression-aware outer v2 frame. */
+export const RGA_PROTOCOL_PACKED_V3_V2: Readonly<RGAProtocolExpectation> = Object.freeze({
+  stateTypeID: FrameType.RGAPackedState,
+  deltaTypeID: FrameType.RGAPackedDelta,
+  semanticsVersion: FrameSemanticsVersion.RGAPacked,
+  wireFormatVersion: 2n,
 });
 
 /** Exact rich-text v1 contract selected by a separate authenticated Manifest. */
@@ -43,6 +56,7 @@ export const RICH_TEXT_PROTOCOL: Readonly<RGAProtocolExpectation> = Object.freez
   stateTypeID: FrameType.RichTextState,
   deltaTypeID: FrameType.RichTextDelta,
   semanticsVersion: FrameSemanticsVersion.RichText,
+  wireFormatVersion: FORMAT_VERSION,
 });
 
 export interface InitRGAWasmOptions {
@@ -50,8 +64,8 @@ export interface InitRGAWasmOptions {
   readonly wasmURL: string | URL;
   /**
    * Exact protocol contract authenticated for the replication group. Defaults
-   * to run-v2; pass the exact v1 or packed-v3 contract only with its
-   * separately built artifact and authenticated Manifest.
+   * to run-v2; pass the exact v1, packed-v3, or packed-v3 outer-v2 contract
+   * only with its separately built artifact and authenticated Manifest.
    */
   readonly expectedProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
@@ -62,6 +76,7 @@ export interface RGAProtocol {
   readonly stateTypeID: bigint;
   readonly deltaTypeID: bigint;
   readonly semanticsVersion: bigint;
+  readonly wireFormatVersion: bigint;
   readonly maxFrameBytes: number;
   readonly maxTags: number;
   readonly maxStringBytes: number;
@@ -83,7 +98,8 @@ export interface InitRichTextWasmOptions {
   /**
    * RGA protocol compiled into the shared artifact. This is independent of
    * the rich-text Manifest: omit it for the default run-v2 artifact, or pass
-   * the exact authenticated v1 or packed-v3 contract for that combined build.
+   * the exact authenticated v1, packed-v3, or packed-v3 outer-v2 contract for
+   * that combined build.
    */
   readonly expectedRGAProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
@@ -557,6 +573,7 @@ function readAndValidateProtocol(api: RawRGAAPI, expected: Readonly<RGAProtocolE
     stateTypeID: parseUnsignedInteger(raw.stateTypeID),
     deltaTypeID: parseUnsignedInteger(raw.deltaTypeID),
     semanticsVersion: parseUnsignedInteger(raw.semanticsVersion),
+    wireFormatVersion: parseUnsignedInteger(raw.wireFormatVersion),
     maxFrameBytes: nonNegativeSafeInteger(raw.maxFrameBytes),
     maxTags: nonNegativeSafeInteger(raw.maxTags),
     maxStringBytes: nonNegativeSafeInteger(raw.maxStringBytes),
@@ -567,6 +584,7 @@ function readAndValidateProtocol(api: RawRGAAPI, expected: Readonly<RGAProtocolE
     protocol.stateTypeID !== expected.stateTypeID ||
     protocol.deltaTypeID !== expected.deltaTypeID ||
     protocol.semanticsVersion !== expected.semanticsVersion ||
+    protocol.wireFormatVersion !== expectedWireFormatVersion(expected) ||
     protocol.maxFrameBytes <= 0 ||
     protocol.maxTags <= 0 ||
     protocol.maxStringBytes <= 0 ||
@@ -588,6 +606,7 @@ function readAndValidateRichTextProtocol(api: RawRGAAPI, expected: Readonly<RGAP
     stateTypeID: parseUnsignedInteger(raw.stateTypeID),
     deltaTypeID: parseUnsignedInteger(raw.deltaTypeID),
     semanticsVersion: parseUnsignedInteger(raw.semanticsVersion),
+    wireFormatVersion: parseUnsignedInteger(raw.wireFormatVersion),
     maxFrameBytes: nonNegativeSafeInteger(raw.maxFrameBytes),
     maxTags: nonNegativeSafeInteger(raw.maxTags),
     maxStringBytes: nonNegativeSafeInteger(raw.maxStringBytes),
@@ -600,6 +619,7 @@ function readAndValidateRichTextProtocol(api: RawRGAAPI, expected: Readonly<RGAP
     protocol.stateTypeID !== expected.stateTypeID ||
     protocol.deltaTypeID !== expected.deltaTypeID ||
     protocol.semanticsVersion !== expected.semanticsVersion ||
+    protocol.wireFormatVersion !== expectedWireFormatVersion(expected) ||
     protocol.maxFrameBytes <= 0 || protocol.maxTags <= 0 || protocol.maxStringBytes <= 0 ||
     protocol.maxLocalEditBytes <= 0 || protocol.maxLocalEditRunes <= 0 || protocol.maxLocalEditorOps <= 0 ||
     protocol.maxAttributesPerOperation <= 0 || protocol.maxLocalEditBytes > protocol.maxFrameBytes
@@ -626,17 +646,26 @@ function isKnownRGAProtocol(value: unknown): value is Readonly<RGAProtocolExpect
   ) {
     return false;
   }
+
+  const wireFormatVersion = expectedWireFormatVersion(value as Readonly<RGAProtocolExpectation>);
   return (
     (value.stateTypeID === RGA_PROTOCOL_V1.stateTypeID &&
       value.deltaTypeID === RGA_PROTOCOL_V1.deltaTypeID &&
-      value.semanticsVersion === RGA_PROTOCOL_V1.semanticsVersion) ||
+      value.semanticsVersion === RGA_PROTOCOL_V1.semanticsVersion &&
+      wireFormatVersion === FORMAT_VERSION) ||
     (value.stateTypeID === RGA_PROTOCOL_RUN_V2.stateTypeID &&
       value.deltaTypeID === RGA_PROTOCOL_RUN_V2.deltaTypeID &&
-      value.semanticsVersion === RGA_PROTOCOL_RUN_V2.semanticsVersion) ||
+      value.semanticsVersion === RGA_PROTOCOL_RUN_V2.semanticsVersion &&
+      wireFormatVersion === FORMAT_VERSION) ||
     (value.stateTypeID === RGA_PROTOCOL_PACKED_V3.stateTypeID &&
       value.deltaTypeID === RGA_PROTOCOL_PACKED_V3.deltaTypeID &&
-      value.semanticsVersion === RGA_PROTOCOL_PACKED_V3.semanticsVersion)
+      value.semanticsVersion === RGA_PROTOCOL_PACKED_V3.semanticsVersion &&
+      (wireFormatVersion === FORMAT_VERSION || wireFormatVersion === 2n))
   );
+}
+
+function expectedWireFormatVersion(expected: Readonly<RGAProtocolExpectation>): bigint {
+  return expected.wireFormatVersion ?? FORMAT_VERSION;
 }
 
 function snapshotFromRaw(raw: unknown, limits: SnapshotLimits): RGASnapshot {

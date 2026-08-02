@@ -119,6 +119,7 @@ func BenchmarkRuntimeInitialSnapshotAndRestore65536Runes(b *testing.B) {
 	}{
 		{name: "run_v2", options: DefaultRunRGAOptions()},
 		{name: "packed_v3", options: DefaultPackedRGAOptions()},
+		{name: "packed_v3_outer_v2", options: DefaultPackedRGAFrameV2Options()},
 	} {
 		b.Run(workload.name, func(b *testing.B) {
 			runtime, err := NewRuntime(workload.options)

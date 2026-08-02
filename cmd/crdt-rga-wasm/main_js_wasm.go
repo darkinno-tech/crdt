@@ -2,7 +2,7 @@
 
 // crdt-rga-wasm exposes the bounded RGA browser runtime through one small
 // syscall/js surface. The default artifact uses compact run-v2 frames; legacy
-// v1 and explicitly negotiated packed-v3 artifacts remain available for their
+// v1, packed-v3, and packed-v3 outer-v2 artifacts remain available for their
 // respective manifest groups. It deliberately does not provide networking,
 // identity, manifest negotiation, persistence, or authorization; applications
 // own those boundaries before passing framed bytes to this module.
@@ -57,6 +57,7 @@ func main() {
 		value.Set("stateTypeID", strconv.FormatUint(protocol.StateTypeID, 10))
 		value.Set("deltaTypeID", strconv.FormatUint(protocol.DeltaTypeID, 10))
 		value.Set("semanticsVersion", strconv.FormatUint(protocol.SemanticsVersion, 10))
+		value.Set("wireFormatVersion", strconv.FormatUint(protocol.WireFormatVersion, 10))
 		value.Set("maxFrameBytes", runtime.MaxFrameBytes())
 		value.Set("maxTags", runtime.MaxTags())
 		value.Set("maxStringBytes", runtime.MaxStringBytes())
@@ -260,6 +261,8 @@ func runtimeOptions() (clientwasm.RGAOptions, error) {
 		return clientwasm.DefaultRGAOptions(), nil
 	case "packed-v3":
 		return clientwasm.DefaultPackedRGAOptions(), nil
+	case "packed-v3-v2":
+		return clientwasm.DefaultPackedRGAFrameV2Options(), nil
 	default:
 		return clientwasm.RGAOptions{}, errors.New("wasm: unsupported build wire format")
 	}
@@ -272,6 +275,7 @@ func registerRichTextAPI(api js.Value, runtime *clientwasm.RichTextRuntime) {
 		value.Set("stateTypeID", strconv.FormatUint(protocol.StateTypeID, 10))
 		value.Set("deltaTypeID", strconv.FormatUint(protocol.DeltaTypeID, 10))
 		value.Set("semanticsVersion", strconv.FormatUint(protocol.SemanticsVersion, 10))
+		value.Set("wireFormatVersion", strconv.FormatUint(frame.FormatVersion, 10))
 		value.Set("maxFrameBytes", runtime.MaxFrameBytes())
 		value.Set("maxTags", runtime.MaxTags())
 		value.Set("maxStringBytes", runtime.MaxStringBytes())

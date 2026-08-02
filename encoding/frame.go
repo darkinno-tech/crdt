@@ -85,6 +85,26 @@ func (f Frame) Version() uint64 {
 	return f.formatVersion
 }
 
+// PeekFrameFormatVersion returns the declared outer frame version without
+// validating the checksum, codec, or payload. It is for a boundary that must
+// select an already-negotiated decoder before the full type-specific decode.
+// Callers MUST subsequently validate the complete frame with UnmarshalFrame or
+// an equivalent bounded decoder; this helper never authenticates or accepts a
+// frame by itself.
+func PeekFrameFormatVersion(data []byte, limits Limits) (uint64, error) {
+	if !limits.valid() || len(data) > limits.MaxFrameBytes || len(data) < 9 {
+		return 0, ErrFrameLimit
+	}
+	if string(data[:4]) != "CRDT" {
+		return 0, ErrInvalidFrame
+	}
+	version, _, ok := ReadUvarint(data, 4)
+	if !ok || (version != FormatVersion && version != FormatVersionV2) {
+		return 0, ErrInvalidFrame
+	}
+	return version, nil
+}
+
 // MarshalFrame returns the canonical v1 encoding of frame.
 func MarshalFrame(frame Frame) ([]byte, error) {
 	return MarshalFrameWithPayload(frame.TypeID, frame.CodecID, len(frame.Payload), func(payload []byte) error {
