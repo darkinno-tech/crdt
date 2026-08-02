@@ -65,6 +65,67 @@ func TestRGARunStateSliceSnapshotMatchesCanonicalMapEncoding(t *testing.T) {
 	}
 }
 
+func TestRGALinearSequenceCapturePreservesCanonicalRunAndPackedState(t *testing.T) {
+	source := mustRGA(t, "linear-source")
+	if _, err := source.Insert(0, "abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Delete(2, 2); err != nil {
+		t.Fatal(err)
+	}
+	state, _, err := source.captureRunState(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.nodesSorted || !state.tombstonesSorted {
+		t.Fatalf("linear capture flags = nodes:%t tombstones:%t, want true,true", state.nodesSorted, state.tombstonesSorted)
+	}
+
+	source.mu.RLock()
+	nodes := cloneNodes(source.nodes)
+	tombstones := cloneTombstones(source.tombstones)
+	source.mu.RUnlock()
+	limits := frame.DefaultLimits()
+	wantRun, err := marshalRGARun(crdt.TypeIDRGARunState, nodes, tombstones, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPacked, err := marshalRGAPacked(crdt.TypeIDRGAPackedState, nodes, tombstones, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRun, err := source.MarshalRunBinaryWithLimits(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPacked, err := source.MarshalPackedBinaryWithLimits(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotRun, wantRun) {
+		t.Fatal("linear capture changed canonical run-v2 state")
+	}
+	if !bytes.Equal(gotPacked, wantPacked) {
+		t.Fatal("linear capture changed canonical packed-v3 state")
+	}
+
+	peer := mustRGA(t, "branching-peer")
+	branch, err := peer.Insert(0, "z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.ApplyDelta(branch); err != nil {
+		t.Fatal(err)
+	}
+	fallback, _, err := source.captureRunState(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.nodesSorted || fallback.tombstonesSorted {
+		t.Fatalf("branching capture flags = nodes:%t tombstones:%t, want false,false", fallback.nodesSorted, fallback.tombstonesSorted)
+	}
+}
+
 func TestRGARunFrameV2EncodersPreserveCanonicalPayloadAndBounds(t *testing.T) {
 	source := mustRGA(t, "source")
 	delta, err := source.Insert(0, strings.Repeat("λ", 4_096))

@@ -20,14 +20,17 @@ import (
 )
 
 const (
-	defaultMaxMessageBytes  = 1 << 20
-	defaultMaxActorBytes    = 128
-	defaultQueuedEvents     = 64
-	defaultQueuedBytes      = 4 << 20
-	defaultReplayEvents     = 4096
-	defaultReplayBytes      = 32 << 20
-	defaultHandshakeTimeout = 10 * time.Second
-	defaultWriteTimeout     = 10 * time.Second
+	defaultMaxMessageBytes    = 1 << 20
+	defaultMaxActorBytes      = 128
+	defaultQueuedEvents       = 64
+	defaultQueuedBytes        = 4 << 20
+	defaultReplayEvents       = 4096
+	defaultReplayBytes        = 32 << 20
+	defaultStateVectorEntries = 256
+	defaultHandshakeTimeout   = 10 * time.Second
+	defaultWriteTimeout       = 10 * time.Second
+	defaultPingInterval       = 30 * time.Second
+	defaultPingTimeout        = 10 * time.Second
 )
 
 // Config configures an authenticated durable WebSocket relay. Store and all
@@ -38,15 +41,21 @@ type Config struct {
 	Authenticate          Authenticate
 	Authorize             Authorize
 	AuthorizeSubscription AuthorizeSubscription
-	OriginPatterns        []string
-	MaxMessageBytes       int
-	MaxActorBytes         int
-	MaxQueuedEvents       int
-	MaxQueuedBytes        int
-	MaxReplayEvents       int
-	MaxReplayBytes        int
-	HandshakeTimeout      time.Duration
-	WriteTimeout          time.Duration
+	// RevalidateSubscription is optional. When provided, it runs before every
+	// heartbeat so the host can close revoked or expired long-lived sessions.
+	RevalidateSubscription RevalidateSubscription
+	OriginPatterns         []string
+	MaxMessageBytes        int
+	MaxActorBytes          int
+	MaxQueuedEvents        int
+	MaxQueuedBytes         int
+	MaxReplayEvents        int
+	MaxReplayBytes         int
+	MaxStateVectorEntries  int
+	HandshakeTimeout       time.Duration
+	WriteTimeout           time.Duration
+	PingInterval           time.Duration
+	PingTimeout            time.Duration
 	// Telemetry receives bounded, payload-free operational events for
 	// handshake, replay, and append outcomes. A nil Reporter is the default
 	// and adds no reporting work to relay paths.
@@ -54,27 +63,31 @@ type Config struct {
 }
 
 type limits struct {
-	maxMessageBytes  int
-	maxActorBytes    int
-	maxQueuedEvents  int
-	maxQueuedBytes   int
-	maxReplayEvents  uint64
-	maxReplayBytes   uint64
-	handshakeTimeout time.Duration
-	writeTimeout     time.Duration
+	maxMessageBytes       int
+	maxActorBytes         int
+	maxQueuedEvents       int
+	maxQueuedBytes        int
+	maxReplayEvents       uint64
+	maxReplayBytes        uint64
+	maxStateVectorEntries int
+	handshakeTimeout      time.Duration
+	writeTimeout          time.Duration
+	pingInterval          time.Duration
+	pingTimeout           time.Duration
 }
 
 // Handler is safe to mount into an application-owned HTTP server. It exposes
 // only GET /ws and requires Subprotocol on every accepted connection.
 type Handler struct {
-	store                 Log
-	groups                map[string]*Group
-	authenticate          Authenticate
-	authorize             Authorize
-	authorizeSubscription AuthorizeSubscription
-	origins               []string
-	limits                limits
-	telemetry             *telemetry.Reporter
+	store                  Log
+	groups                 map[string]*Group
+	authenticate           Authenticate
+	authorize              Authorize
+	authorizeSubscription  AuthorizeSubscription
+	revalidateSubscription RevalidateSubscription
+	origins                []string
+	limits                 limits
+	telemetry              *telemetry.Reporter
 }
 
 // Group owns the manifest, validation boundary, and live subscribers for one
@@ -139,14 +152,15 @@ func NewHandler(config Config) (*Handler, error) {
 		groups[group.manifest.GroupID] = group
 	}
 	return &Handler{
-		store:                 config.Store,
-		groups:                groups,
-		authenticate:          config.Authenticate,
-		authorize:             config.Authorize,
-		authorizeSubscription: config.AuthorizeSubscription,
-		origins:               append([]string(nil), config.OriginPatterns...),
-		limits:                limits,
-		telemetry:             config.Telemetry,
+		store:                  config.Store,
+		groups:                 groups,
+		authenticate:           config.Authenticate,
+		authorize:              config.Authorize,
+		authorizeSubscription:  config.AuthorizeSubscription,
+		revalidateSubscription: config.RevalidateSubscription,
+		origins:                append([]string(nil), config.OriginPatterns...),
+		limits:                 limits,
+		telemetry:              config.Telemetry,
 	}, nil
 }
 
@@ -180,8 +194,12 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	protocols := []string{Subprotocol}
+	if _, supportsStateVector := handler.store.(StateVectorLog); supportsStateVector {
+		protocols = []string{StateVectorSubprotocol, Subprotocol}
+	}
 	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{
-		Subprotocols:    []string{Subprotocol},
+		Subprotocols:    protocols,
 		OriginPatterns:  handler.origins,
 		CompressionMode: websocket.CompressionDisabled,
 	})
@@ -189,7 +207,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.record("handshake", handshakeStarted, err)
 		return
 	}
-	if connection.Subprotocol() != Subprotocol {
+	if connection.Subprotocol() != Subprotocol && connection.Subprotocol() != StateVectorSubprotocol {
 		handler.record("handshake", handshakeStarted, errInvalidWire)
 		_ = connection.CloseNow()
 		return
@@ -197,7 +215,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	connection.SetReadLimit(int64(controlLimit(handler.limits.maxMessageBytes)))
 	handshakeContext, cancelHandshake := context.WithTimeout(context.Background(), handler.limits.handshakeTimeout)
 	defer cancelHandshake()
-	group, resume, err := handler.serverHandshake(handshakeContext, connection, peer)
+	group, subscription, err := handler.serverHandshake(handshakeContext, connection, peer)
 	if err != nil {
 		handler.record("handshake", handshakeStarted, err)
 		_ = connection.CloseNow()
@@ -206,7 +224,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	client := newServerPeer(connection, handler.limits.maxQueuedEvents, handler.limits.maxQueuedBytes, handler.limits.writeTimeout)
 	handler.record("handshake", handshakeStarted, nil)
 	replayStarted := handler.started()
-	replay, highWater, err := group.subscribe(handler.store, client, resume, handler.limits)
+	replay, highWater, err := group.subscribe(handler.store, client, subscription, handler.limits)
 	if err != nil {
 		handler.record("replay", replayStarted, err)
 		if errors.Is(err, ErrReplayUnavailable) {
@@ -220,12 +238,18 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	handler.record("replay", replayStarted, nil)
 	defer group.remove(client)
 	defer client.close()
-	welcome, err := marshalWelcome(group.manifest, highWater)
+	welcome, err := marshalWelcomeForSubprotocol(connection.Subprotocol(), group.manifest, highWater)
 	if err != nil || connection.Write(handshakeContext, websocket.MessageText, welcome) != nil {
 		return
 	}
 	for _, event := range replay {
 		if !client.writeEvent(handshakeContext, event) {
+			return
+		}
+	}
+	if connection.Subprotocol() == StateVectorSubprotocol {
+		complete, err := marshalCatchUpComplete(highWater)
+		if err != nil || connection.Write(handshakeContext, websocket.MessageText, complete) != nil {
 			return
 		}
 	}
@@ -235,37 +259,115 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	cancelHandshake()
 	connection.SetReadLimit(int64(handler.limits.maxMessageBytes))
 	go client.writeLoop()
+	go handler.heartbeat(client, peer, group)
 	client.readLoop(peer, group, handler)
 }
 
-func (handler *Handler) serverHandshake(ctx context.Context, connection *websocket.Conn, peer Peer) (*Group, uint64, error) {
+type subscriptionRequest struct {
+	resume uint64
+	vector *replica.Frontier
+}
+
+func (handler *Handler) serverHandshake(ctx context.Context, connection *websocket.Conn, peer Peer) (*Group, subscriptionRequest, error) {
 	messageType, data, err := connection.Read(ctx)
 	if err != nil || messageType != websocket.MessageText {
-		return nil, 0, errInvalidWire
+		return nil, subscriptionRequest{}, errInvalidWire
 	}
-	remote, resume, err := unmarshalHello(data)
-	if err != nil {
-		return nil, 0, err
+	var remote replica.Manifest
+	request := subscriptionRequest{}
+	if connection.Subprotocol() == StateVectorSubprotocol {
+		vector, parsedRemote, parseErr := stateVectorHandshake(data, handler.limits)
+		if parseErr != nil {
+			return nil, subscriptionRequest{}, parseErr
+		}
+		remote = parsedRemote
+		request.vector = &vector
+	} else {
+		var resume uint64
+		remote, resume, err = unmarshalHello(data)
+		if err != nil {
+			return nil, subscriptionRequest{}, err
+		}
+		request.resume = resume
 	}
 	group, exists := handler.groups[remote.GroupID]
 	if !exists || group.manifest.Compatible(remote) != nil {
-		return nil, 0, ErrUnauthorized
+		return nil, subscriptionRequest{}, ErrUnauthorized
 	}
 	if err := handler.authorizeSubscription(peer, group.manifest); err != nil {
-		return nil, 0, ErrUnauthorized
+		return nil, subscriptionRequest{}, ErrUnauthorized
 	}
-	return group, resume, nil
+	return group, request, nil
 }
 
-func (group *Group) subscribe(store Log, peer *serverPeer, resume uint64, limits limits) ([]Event, uint64, error) {
+func (group *Group) subscribe(store Log, peer *serverPeer, request subscriptionRequest, limits limits) ([]Event, uint64, error) {
 	group.mu.Lock()
 	defer group.mu.Unlock()
-	events, highWater, err := store.Replay(group.manifest.GroupID, resume, limits.maxReplayEvents, limits.maxReplayBytes, group.manifest, group.policy, limits.maxMessageBytes, limits.maxActorBytes)
+	var (
+		events    []Event
+		highWater uint64
+		err       error
+	)
+	if request.vector != nil {
+		stateVectorStore, ok := store.(StateVectorLog)
+		if !ok {
+			return nil, 0, ErrStateVectorUnavailable
+		}
+		events, highWater, err = stateVectorStore.CatchUp(group.manifest.GroupID, *request.vector, limits.maxReplayEvents, limits.maxReplayBytes, group.manifest, group.policy, limits.maxMessageBytes, limits.maxActorBytes)
+	} else {
+		events, highWater, err = store.Replay(group.manifest.GroupID, request.resume, limits.maxReplayEvents, limits.maxReplayBytes, group.manifest, group.policy, limits.maxMessageBytes, limits.maxActorBytes)
+	}
 	if err != nil {
 		return nil, 0, err
 	}
 	group.peers[peer] = struct{}{}
 	return events, highWater, nil
+}
+
+func stateVectorHandshake(data []byte, limits limits) (replica.Frontier, replica.Manifest, error) {
+	manifest, vector, err := unmarshalStateVectorHello(data, limits.maxStateVectorEntries, limits.maxActorBytes)
+	return vector, manifest, err
+}
+
+func marshalWelcomeForSubprotocol(subprotocol string, manifest replica.Manifest, highWater uint64) ([]byte, error) {
+	if subprotocol == StateVectorSubprotocol {
+		return marshalStateVectorWelcome(manifest, highWater)
+	}
+	if subprotocol == Subprotocol {
+		return marshalWelcome(manifest, highWater)
+	}
+	return nil, errInvalidWire
+}
+
+func (handler *Handler) heartbeat(peer *serverPeer, identity Peer, group *Group) {
+	if handler == nil || peer == nil || group == nil {
+		return
+	}
+	ticker := time.NewTicker(handler.limits.pingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-peer.context.Done():
+			return
+		case <-ticker.C:
+			started := handler.started()
+			if handler.revalidateSubscription != nil {
+				if err := handler.revalidateSubscription(identity, group.manifest); err != nil {
+					handler.record("heartbeat", started, ErrUnauthorized)
+					peer.close()
+					return
+				}
+			}
+			pingContext, cancel := context.WithTimeout(peer.context, handler.limits.pingTimeout)
+			err := peer.connection.Ping(pingContext)
+			cancel()
+			handler.record("heartbeat", started, err)
+			if err != nil {
+				peer.close()
+				return
+			}
+		}
+	}
 }
 
 func (group *Group) remove(peer *serverPeer) {
@@ -382,7 +484,7 @@ type serverPeer struct {
 }
 
 func newServerPeer(connection *websocket.Conn, maxEvents, maxBytes int, writeTimeout time.Duration) *serverPeer {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118 -- serverPeer.close owns and invokes cancel exactly once.
 	return &serverPeer{
 		connection:   connection,
 		context:      ctx,
@@ -468,15 +570,21 @@ func (peer *serverPeer) isClosed() bool {
 }
 
 func normalizeLimits(config Config) (limits, error) {
+	if config.MaxReplayEvents < 0 || config.MaxReplayBytes < 0 {
+		return limits{}, ErrInvalidConfig
+	}
 	result := limits{
-		maxMessageBytes:  config.MaxMessageBytes,
-		maxActorBytes:    config.MaxActorBytes,
-		maxQueuedEvents:  config.MaxQueuedEvents,
-		maxQueuedBytes:   config.MaxQueuedBytes,
-		maxReplayEvents:  uint64(config.MaxReplayEvents),
-		maxReplayBytes:   uint64(config.MaxReplayBytes),
-		handshakeTimeout: config.HandshakeTimeout,
-		writeTimeout:     config.WriteTimeout,
+		maxMessageBytes:       config.MaxMessageBytes,
+		maxActorBytes:         config.MaxActorBytes,
+		maxQueuedEvents:       config.MaxQueuedEvents,
+		maxQueuedBytes:        config.MaxQueuedBytes,
+		maxReplayEvents:       uint64(config.MaxReplayEvents),
+		maxReplayBytes:        uint64(config.MaxReplayBytes),
+		maxStateVectorEntries: config.MaxStateVectorEntries,
+		handshakeTimeout:      config.HandshakeTimeout,
+		writeTimeout:          config.WriteTimeout,
+		pingInterval:          config.PingInterval,
+		pingTimeout:           config.PingTimeout,
 	}
 	if result.maxMessageBytes == 0 {
 		result.maxMessageBytes = defaultMaxMessageBytes
@@ -496,15 +604,24 @@ func normalizeLimits(config Config) (limits, error) {
 	if result.maxReplayBytes == 0 {
 		result.maxReplayBytes = defaultReplayBytes
 	}
+	if result.maxStateVectorEntries == 0 {
+		result.maxStateVectorEntries = defaultStateVectorEntries
+	}
 	if result.handshakeTimeout == 0 {
 		result.handshakeTimeout = defaultHandshakeTimeout
 	}
 	if result.writeTimeout == 0 {
 		result.writeTimeout = defaultWriteTimeout
 	}
+	if result.pingInterval == 0 {
+		result.pingInterval = defaultPingInterval
+	}
+	if result.pingTimeout == 0 {
+		result.pingTimeout = defaultPingTimeout
+	}
 	frameLimits := frame.DefaultLimits()
 	maxWireBytes := frameLimits.MaxFrameBytes + result.maxActorBytes + 1 + 3*binary.MaxVarintLen64
-	if result.maxMessageBytes < 1024 || result.maxMessageBytes > maxWireBytes || result.maxActorBytes <= 0 || result.maxActorBytes > frameLimits.MaxStringBytes || result.maxQueuedEvents <= 0 || result.maxQueuedBytes < result.maxMessageBytes || result.maxReplayEvents == 0 || result.maxReplayBytes < uint64(result.maxMessageBytes) || result.handshakeTimeout <= 0 || result.writeTimeout <= 0 {
+	if result.maxMessageBytes < 1024 || result.maxMessageBytes > maxWireBytes || result.maxActorBytes <= 0 || result.maxActorBytes > frameLimits.MaxStringBytes || result.maxQueuedEvents <= 0 || result.maxQueuedBytes < result.maxMessageBytes || result.maxReplayEvents == 0 || result.maxReplayBytes < uint64(result.maxMessageBytes) || result.maxStateVectorEntries <= 0 || result.handshakeTimeout <= 0 || result.writeTimeout <= 0 || result.pingInterval <= 0 || result.pingTimeout <= 0 {
 		return limits{}, ErrInvalidConfig
 	}
 	return result, nil

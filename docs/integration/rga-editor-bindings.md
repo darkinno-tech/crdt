@@ -18,11 +18,17 @@ the negotiated Go/Wasm `RGAWasmDocument` to a text editor surface:
   application-supplied, schema-preserving text-leaf port rather than flattening
   blocks or marks into an unsafe string conversion.
 
+New browser groups use run-v2 by default. A large-text group may instead build
+`WASM_RGA_PROTOCOL=packed-v3` and pass `RGA_PROTOCOL_PACKED_V3` to
+`initRGAWasm`, but only after its authenticated Manifest binds TypeIDs `29/30`,
+semantics version `3`, and compatible resource limits. The artifact accepts
+only that one frame pair: it never falls back to v1 or run-v2.
+
 ```ts
 const binding = bindQuillPlainText(document, quill, {
   initialContent: "editor", // explicit one-time import; default is document
   onLocalFrame(frame) {
-    // Authenticate and bind the RGA run-v2 Manifest before durable outbox/send.
+    // Authenticate and bind this document's exact RGA Manifest before send.
     outbox.append(frame);
   },
 });
@@ -33,7 +39,9 @@ socket.onmessage = ({ data }) => binding.applyRemote(new Uint8Array(data));
 
 CodeMirror 6 must have its listener extension at view construction. Keep the
 binding variable outside the listener and forward all view updates; the
-binding only consumes updates where `docChanged` is true:
+binding only consumes updates where `docChanged` is true. For an ordinary
+single-range transaction it consumes CodeMirror's native `changes` range; a
+multi-range transaction deliberately falls back to the atomic full-text path:
 
 ```ts
 let binding: CodeMirrorPlainTextBinding | undefined;
@@ -70,14 +78,24 @@ inside `editor.update()`, and `registerTextContentListener()` delegates to
 Lexical's listener. This avoids treating a rich Lexical tree as an untyped
 string transport.
 
-The binding finds the common Unicode-scalar prefix/suffix of an editor change
-and emits one atomic RGA replacement frame. The changed text must fit the
-runtime's negotiated byte/rune limit; an over-limit replacement is rejected
-and the editor is restored to its last replicated text. This avoids a
-delete-plus-later-insert sequence that could otherwise leave a local,
-unreplicable delete-only state. Remote frames merge through the Wasm RGA
-before the adapter replaces editor text; a write guard prevents that
-replacement from echoing into `onLocalFrame`.
+CodeMirror's single-range native updates avoid the former full-document
+Unicode prefix/suffix comparison. The binding keeps a 4,096-UTF-16-unit chunk
+index with rune counts, so it validates the UTF-16 boundaries and finds the RGA
+rune range without materializing the entire editor text. Only a changed chunk
+is normally updated; a change that crosses chunks rebuilds the small index.
+The changed text must still fit the runtime's negotiated byte/rune limit; an
+over-limit replacement is rejected and the editor is restored to its last
+replicated text. A multi-range, absent, or inconsistent native change falls
+back to one full-text atomic replacement rather than emitting multiple frames
+that could partially succeed. This avoids a delete-plus-later-insert sequence
+that could otherwise leave a local, unreplicable delete-only state.
+
+Remote frames merge through the Wasm RGA before the adapter replaces editor
+text; a write guard prevents that replacement from echoing into
+`onLocalFrame`. The current negotiated RGA frame does not carry a trusted
+editor display-change set, so remote projection intentionally remains full
+text. The incremental guarantee applies to the local CodeMirror single-range
+path only.
 
 ## Position/Tag selections
 
@@ -106,10 +124,11 @@ the bounded anchor shape, and clear a cursor when `anchor_gone` is returned.
 
 This is plain-text integration only. Quill's trailing newline is replicated as
 text. Tiptap accepts its narrow plain-text JSON subset, while Quill
-formatting/embeds, non-plain Tiptap/ProseMirror nodes, Slate elements, Lexical
-rich nodes, HTML/CSS, selection presence, shared undo history, persistence,
-replay, TLS, identity, authorization, and network transport remain
-application-owned.
+formatting/embeds, Slate elements, Lexical rich nodes, HTML/CSS, selection
+presence, shared undo history, persistence, replay, TLS, identity,
+authorization, and network transport remain application-owned. For the
+separately negotiated Tiptap/ProseMirror rich profile, see
+[`tiptap-richtext-bindings.md`](tiptap-richtext-bindings.md).
 
 Do not silently map a rich editor tree to plain text. For inline attributes,
 use the separate stable `richtext.Document` protocol with its manifest,
@@ -127,11 +146,16 @@ runs generic and CodeMirror-shaped flows over real Go RGA frames. Run:
 ```sh
 make typescript-test
 make wasm-test
+make wasm-packed-test
 make typescript-bindings-benchmark
 make wasm-bindings-benchmark
 ```
 
 The benchmark targets report controlled local-machine samples, not a
-browser/device SLA. The simulated target isolates the full-text adapter work;
-the Wasm target includes a 12,288-rune CodeMirror-port document, real Go
-run-v2 replacement, and receiver application for each edit.
+browser/device SLA. Both print `native_incremental` and
+`full_projection_fallback` samples under the same workload. The simulated
+target isolates adapter work; the Wasm target includes a 12,288-rune
+CodeMirror-port document, real Go negotiated-RGA replacement, and receiver application
+for each edit. Set `CRDT_BINDINGS_INITIAL_RUNES` for a larger simulated text
+fixture. The current two-host, five-sample evidence and its limits are in the
+[2026-08-01 cross-host benchmark](../operations/rga-incremental-editor-benchmark-2026-08-01.md).

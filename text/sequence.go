@@ -36,19 +36,30 @@ func newSequenceIndex() *sequenceIndex {
 	entry, exit := &pair.entry, &pair.exit
 	entry.next, exit.prev = exit, entry
 	index := &sequenceIndex{
-		pairs: map[Position]*sequencePair{Position{}: pair},
+		pairs: map[Position]*sequencePair{{}: pair},
 	}
 	index.root = mergeMarkers(entry, exit)
 	return index
 }
 
 func newSequencePair(position Position, visible bool) *sequencePair {
-	pair := &sequencePair{position: position}
+	pair := new(sequencePair)
+	initializeSequencePair(pair, position, visible)
+	return pair
+}
+
+// initializeSequencePair resets pair for one retained RGA position. Batch
+// integration uses it for elements of one contiguous allocation, while the
+// generic path continues to allocate one pair at a time through
+// newSequencePair. A pointer to an element of that allocation remains stable
+// after the batch slice itself goes out of scope because sequenceIndex retains
+// the pointer in both its map and marker tree.
+func initializeSequencePair(pair *sequencePair, position Position, visible bool) {
+	*pair = sequencePair{position: position}
 	pair.entry = sequenceMarker{pair: pair, visible: visible, priority: markerPriority(position, false)}
 	pair.exit = sequenceMarker{pair: pair, priority: markerPriority(position, true)}
 	refreshMarker(&pair.entry)
 	refreshMarker(&pair.exit)
-	return pair
 }
 
 func markerPriority(position Position, exit bool) uint64 {
@@ -202,6 +213,21 @@ func (index *sequenceIndex) pair(position Position) *sequencePair {
 func (index *sequenceIndex) has(position Position) bool {
 	_, ok := index.pairs[position]
 	return ok
+}
+
+// reserveInitialPairs reserves the position index only while it contains the
+// root sentinel. A large first insert otherwise grows this map repeatedly;
+// rebuilding a non-empty index would add copy work to ordinary edits, so that
+// path deliberately remains unchanged.
+func (index *sequenceIndex) reserveInitialPairs(additional int) {
+	if additional <= 0 || len(index.pairs) != 1 {
+		return
+	}
+	pairs := make(map[Position]*sequencePair, additional+1)
+	for position, pair := range index.pairs {
+		pairs[position] = pair
+	}
+	index.pairs = pairs
 }
 
 func (index *sequenceIndex) insertPairAfter(anchor *sequenceMarker, pair *sequencePair) {

@@ -157,6 +157,16 @@ var replicationProfiles = [...]ReplicationProfile{
 		FrameType:        FrameType{StateID: TypeIDRGARunState, DeltaID: TypeIDRGARunDelta, SemanticsVersion: SemanticsVersionRGARun, UsesHLC: true},
 	},
 	{
+		ID:               "text/packed-v3",
+		Title:            "Packed RGA text v3",
+		Summary:          "Plain collaborative text that retains scalar RGA positions while compacting dense local HLC runs.",
+		ConflictRule:     "Concurrent inserts have deterministic position ordering and deletes retain causal anchors.",
+		RecommendedFor:   []string{"large plain-text pastes", "bandwidth-sensitive Go or Wasm text groups", "snapshot-heavy collaborative notes"},
+		NotFor:           []string{"mixed run-v2 and packed-v3 groups", "rich-text formatting", "authorization decisions"},
+		HostRequirements: []string{"Bind the exact packed-v3 manifest before exchanging frames; never fall back to run-v2.", "Persist state and HLC state atomically before reusing a replica ID.", "Keep tombstones until exact-acknowledgement compaction is authorized."},
+		FrameType:        FrameType{StateID: TypeIDRGAPackedState, DeltaID: TypeIDRGAPackedDelta, SemanticsVersion: SemanticsVersionRGAPacked, UsesHLC: true},
+	},
+	{
 		ID:               "list/ordered",
 		Title:            "Ordered RGA list",
 		Summary:          "An ordered collection with immutable positions and add/remove semantics.",

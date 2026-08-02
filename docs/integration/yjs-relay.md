@@ -28,6 +28,64 @@ replicated a `Y.Text` mutation, and propagated awareness. It remains a live
 relay, not a proof that arbitrary untrusted Yjs update bytes are semantically
 valid.
 
+## Native browser path: no Go/Wasm or manifest negotiation
+
+For a document that chooses Yjs as its collaboration contract, use the
+standard Yjs client and an editor binding that works on that same `Y.Doc`.
+The browser does not need a Go/Wasm runtime, frame decoder, or
+`replica.Manifest`. It may use a maintained upstream binding directly, or the
+optional native [`@darkinno/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md),
+which still operates on Yjs updates and y-protocols awareness rather than the
+repository's Go or `native-ts-v1` protocols.
+
+```ts
+import * as Y from "yjs";
+import { WebsocketProvider } from "y-websocket";
+
+const document = new Y.Doc();
+const provider = new WebsocketProvider(
+  "wss://collab.example/yjs",
+  "notes",
+  document,
+);
+
+const text = document.getText("shared");
+// Bind `text` with the maintained adapter for the selected editor, for example
+// y-prosemirror, y-quill, or a product-owned schema-preserving binding.
+```
+
+For a bounded incremental CodeMirror plain-text surface, use the optional
+native binding with this same `document` and `Y.Text`; do not attach a second
+transport owner to the document. Its limits, cursor model, and rich-text
+boundary are documented in the [native editor binding guide](yjs-native-editor-bindings.md).
+
+Mounting `YJSHandler` below `/yjs/` makes this connect to `/yjs/notes`; no
+adapter protocol is required. Use a same-origin (or appropriately scoped)
+Secure, HttpOnly session cookie for browser authentication. Browser WebSockets
+cannot add an `Authorization` header, and a long-lived bearer token in
+`WebsocketProvider` query parameters leaks too easily through URLs, proxy
+logs, and diagnostics. If a cross-site deployment cannot use a cookie, issue
+a very short-lived, room-bound, single-use connection ticket from an
+authenticated HTTPS endpoint and redact it at every proxy; that ticket design
+is application-owned and needs its own replay protection.
+
+The handler's `Authenticate` callback still runs before upgrade, so cookie
+verification remains ordinary application authentication:
+
+```go
+Authenticate: func(request *http.Request) (extensions.Peer, error) {
+    session, err := authenticateSessionCookie(request)
+    if err != nil {
+        return extensions.Peer{}, extensions.ErrUnauthorized
+    }
+    return extensions.Peer{ID: session.Subject}, nil
+},
+```
+
+Keep the provider URL and room selection in product configuration. Do not let
+a page choose an unconfigured room, store identity, schema, epoch, or byte
+limit.
+
 ## Mount one explicit room
 
 Rooms are configured before serving. An untrusted URL cannot create retained

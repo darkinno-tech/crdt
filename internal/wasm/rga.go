@@ -33,6 +33,15 @@ const (
 
 	// RGARunSemanticsVersion identifies compact RGA run-v2 semantics.
 	RGARunSemanticsVersion uint64 = crdt.SemanticsVersionRGARun
+
+	// RGAPackedStateTypeID and RGAPackedDeltaTypeID identify the explicitly
+	// negotiated compact packed-v3 protocol. It is distinct from both scalar-v1
+	// and run-v2, so a runtime never accepts it as a fallback.
+	RGAPackedStateTypeID uint64 = crdt.TypeIDRGAPackedState
+	RGAPackedDeltaTypeID uint64 = crdt.TypeIDRGAPackedDelta
+
+	// RGAPackedSemanticsVersion identifies compact packed RGA v3 semantics.
+	RGAPackedSemanticsVersion uint64 = crdt.SemanticsVersionRGAPacked
 )
 
 var (
@@ -49,6 +58,7 @@ type RGAWireFormat uint8
 const (
 	RGAWireFormatV1 RGAWireFormat = iota + 1
 	RGAWireFormatRunV2
+	RGAWireFormatPackedV3
 )
 
 // RGAProtocol identifies the framed RGA semantics exported by one runtime.
@@ -60,7 +70,8 @@ type RGAProtocol struct {
 
 func (p RGAProtocol) valid() bool {
 	return p == (RGAProtocol{StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion}) ||
-		p == (RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion})
+		p == (RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion}) ||
+		p == (RGAProtocol{StateTypeID: RGAPackedStateTypeID, DeltaTypeID: RGAPackedDeltaTypeID, SemanticsVersion: RGAPackedSemanticsVersion})
 }
 
 // RGAOptions bounds both externally received frames and retained document
@@ -113,12 +124,23 @@ func DefaultRunRGAOptions() RGAOptions {
 	return options
 }
 
+// DefaultPackedRGAOptions returns the browser/WebView limits for the
+// explicitly negotiated packed RGA v3 protocol. Applications still need
+// transport-level request limits before a Uint8Array is allocated.
+func DefaultPackedRGAOptions() RGAOptions {
+	options := DefaultRGAOptions()
+	options.WireFormat = RGAWireFormatPackedV3
+	return options
+}
+
 func (o RGAOptions) protocol() RGAProtocol {
 	switch o.WireFormat {
 	case RGAWireFormatV1:
 		return RGAProtocol{StateTypeID: RGAStateTypeID, DeltaTypeID: RGADeltaTypeID, SemanticsVersion: RGASemanticsVersion}
 	case RGAWireFormatRunV2:
 		return RGAProtocol{StateTypeID: RGARunStateTypeID, DeltaTypeID: RGARunDeltaTypeID, SemanticsVersion: RGARunSemanticsVersion}
+	case RGAWireFormatPackedV3:
+		return RGAProtocol{StateTypeID: RGAPackedStateTypeID, DeltaTypeID: RGAPackedDeltaTypeID, SemanticsVersion: RGAPackedSemanticsVersion}
 	default:
 		return RGAProtocol{}
 	}
@@ -263,6 +285,8 @@ func (r *Runtime) Insert(handle uint64, offset int, value string) ([]byte, error
 		return document.InsertBinaryWithLimits(offset, value, r.options.Decoder)
 	case RGAWireFormatRunV2:
 		return document.InsertRunBinaryWithLimits(offset, value, r.options.Decoder)
+	case RGAWireFormatPackedV3:
+		return document.InsertPackedBinaryWithLimits(offset, value, r.options.Decoder)
 	default:
 		return nil, ErrInvalidOptions
 	}
@@ -280,6 +304,8 @@ func (r *Runtime) Delete(handle uint64, offset, count int) ([]byte, error) {
 		return document.DeleteBinaryWithLimits(offset, count, r.options.Decoder)
 	case RGAWireFormatRunV2:
 		return document.DeleteRunBinaryWithLimits(offset, count, r.options.Decoder)
+	case RGAWireFormatPackedV3:
+		return document.DeletePackedBinaryWithLimits(offset, count, r.options.Decoder)
 	default:
 		return nil, ErrInvalidOptions
 	}
@@ -301,6 +327,8 @@ func (r *Runtime) Replace(handle uint64, offset, count int, value string) ([]byt
 		return document.ReplaceBinaryWithLimits(offset, count, value, r.options.Decoder)
 	case RGAWireFormatRunV2:
 		return document.ReplaceRunBinaryWithLimits(offset, count, value, r.options.Decoder)
+	case RGAWireFormatPackedV3:
+		return document.ReplacePackedBinaryWithLimits(offset, count, value, r.options.Decoder)
 	default:
 		return nil, ErrInvalidOptions
 	}
@@ -320,6 +348,8 @@ func (r *Runtime) ApplyDelta(handle uint64, encoded []byte) error {
 		delta, err = text.UnmarshalRGADeltaWithLimits(encoded, r.options.Decoder)
 	case RGAWireFormatRunV2:
 		delta, err = text.UnmarshalRGARunDeltaWithLimits(encoded, r.options.Decoder)
+	case RGAWireFormatPackedV3:
+		delta, err = text.UnmarshalRGAPackedDeltaWithLimits(encoded, r.options.Decoder)
 	default:
 		return ErrInvalidOptions
 	}
@@ -428,6 +458,8 @@ func (r *Runtime) Snapshot(handle uint64) (RGASnapshot, error) {
 		saved, err = document.SnapshotCurrentStateWithLimits(r.options.Decoder)
 	case RGAWireFormatRunV2:
 		saved, err = document.SnapshotRunCurrentStateWithLimits(r.options.Decoder)
+	case RGAWireFormatPackedV3:
+		saved, err = document.SnapshotPackedCurrentStateWithLimits(r.options.Decoder)
 	default:
 		return RGASnapshot{}, ErrInvalidOptions
 	}

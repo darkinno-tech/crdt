@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -21,11 +24,13 @@ var (
 	bucketGroups = []byte("groups")
 	bucketEvents = []byte("events")
 	bucketDots   = []byte("dots")
+	bucketActors = []byte("actors")
 	bucketMeta   = []byte("meta")
 
-	keyHighWater = []byte("high-water")
-	keyCount     = []byte("count")
-	keyBytes     = []byte("bytes")
+	keyHighWater  = []byte("high-water")
+	keyCount      = []byte("count")
+	keyBytes      = []byte("bytes")
+	keyActorIndex = []byte("actor-index-v1")
 )
 
 // StoreConfig bounds retained canonical event data per replication group. Both
@@ -116,6 +121,9 @@ func (store *Store) Append(groupID string, change replica.Change) (AppendResult,
 	if store.closed.Load() {
 		return AppendResult{}, ErrClosed
 	}
+	if err := store.ensureActorIndex(groupID); err != nil {
+		return AppendResult{}, err
+	}
 	encoded, err := marshalChange(change)
 	if err != nil {
 		return AppendResult{}, err
@@ -133,8 +141,9 @@ func (store *Store) Append(groupID string, change replica.Change) (AppendResult,
 		}
 		events := group.Bucket(bucketEvents)
 		dots := group.Bucket(bucketDots)
+		actors := group.Bucket(bucketActors)
 		meta := group.Bucket(bucketMeta)
-		if events == nil || dots == nil || meta == nil {
+		if events == nil || dots == nil || actors == nil || meta == nil {
 			return ErrCorruptStore
 		}
 		if existing := dots.Get(dotKey); existing != nil {
@@ -162,6 +171,19 @@ func (store *Store) Append(groupID string, change replica.Change) (AppendResult,
 		if err := dots.Put(dotKey, appendDotBinding(sequence, digest)); err != nil {
 			return err
 		}
+		actorKey := []byte(change.Dot.Actor)
+		maximum, err := readUint64(actors.Get(actorKey))
+		if err != nil {
+			return err
+		}
+		if change.Dot.Counter > maximum {
+			if err := actors.Put(actorKey, sequenceKey(change.Dot.Counter)); err != nil {
+				return err
+			}
+		}
+		if err := meta.Put(keyActorIndex, []byte{1}); err != nil {
+			return err
+		}
 		if err := writeMeta(meta, sequence, count+1, usedBytes+uint64(len(encoded))); err != nil {
 			return err
 		}
@@ -175,6 +197,172 @@ func (store *Store) Append(groupID string, change replica.Change) (AppendResult,
 		return AppendResult{}, fmt.Errorf("append durable event: %w", err)
 	}
 	return result, nil
+}
+
+// CatchUp returns the complete bounded set of events not covered by vector.
+// The vector represents only contiguous locally installed Dot prefixes. A
+// vector ahead of retained log data, or a required suffix beyond the caller's
+// explicit limits, fails closed rather than silently declaring a client synced.
+func (store *Store) CatchUp(groupID string, vector replica.Frontier, maxEvents, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) ([]Event, uint64, error) {
+	if store == nil || store.db == nil || groupID == "" || maxEvents == 0 || maxBytes == 0 || maxMessageBytes <= 0 || maxActorBytes <= 0 {
+		return nil, 0, ErrInvalidConfig
+	}
+	if store.closed.Load() {
+		return nil, 0, ErrClosed
+	}
+	validatedVector, err := replica.NewFrontier(vector.Entries())
+	if err != nil {
+		return nil, 0, ErrInvalidConfig
+	}
+	if err := store.ensureActorIndex(groupID); err != nil {
+		return nil, 0, err
+	}
+	var events []Event
+	var highWater uint64
+	err = store.db.View(func(transaction *bolt.Tx) error {
+		group, err := store.groupBucket(transaction, groupID, false)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			if len(validatedVector.Entries()) != 0 {
+				return ErrReplayUnavailable
+			}
+			return nil
+		}
+		eventBucket := group.Bucket(bucketEvents)
+		dots := group.Bucket(bucketDots)
+		actors := group.Bucket(bucketActors)
+		meta := group.Bucket(bucketMeta)
+		if eventBucket == nil || dots == nil || actors == nil || meta == nil || !bytes.Equal(meta.Get(keyActorIndex), []byte{1}) {
+			return ErrCorruptStore
+		}
+		var errMeta error
+		highWater, _, _, errMeta = readMeta(meta)
+		if errMeta != nil {
+			return errMeta
+		}
+		for actor, counter := range validatedVector.Entries() {
+			maximum, err := readUint64(actors.Get([]byte(actor)))
+			if err != nil || maximum < counter {
+				return ErrReplayUnavailable
+			}
+		}
+		var usedBytes uint64
+		cursor := actors.Cursor()
+		for actorKey, maximumValue := cursor.First(); actorKey != nil; actorKey, maximumValue = cursor.Next() {
+			actor := string(actorKey)
+			maximum, err := readUint64(maximumValue)
+			if err != nil || maximum == 0 {
+				return ErrCorruptStore
+			}
+			current := validatedVector.Counter(actor)
+			if maximum <= current {
+				continue
+			}
+			prefix := dotPrefix(actor)
+			dotCursor := dots.Cursor()
+			first := append(append([]byte(nil), prefix...), sequenceKey(current+1)...)
+			for key, binding := dotCursor.Seek(first); key != nil && bytes.HasPrefix(key, prefix); key, binding = dotCursor.Next() {
+				dot, err := dotFromKey(key)
+				if err != nil || dot.Actor != actor || dot.Counter > maximum {
+					return ErrCorruptStore
+				}
+				sequence, _, err := parseDotBinding(binding)
+				if err != nil {
+					return err
+				}
+				encoded := eventBucket.Get(sequenceKey(sequence))
+				if encoded == nil || uint64(len(encoded)) > maxBytes-usedBytes || len(encoded) > maxMessageBytes || uint64(len(events)) >= maxEvents {
+					return ErrReplayUnavailable
+				}
+				storedDot, delta, err := unmarshalChange(encoded, maxMessageBytes, maxActorBytes)
+				if err != nil || storedDot != dot {
+					return ErrCorruptStore
+				}
+				change, err := replica.NewChangeWithPolicy(manifest, storedDot, delta, policy)
+				if err != nil {
+					return ErrCorruptStore
+				}
+				events = append(events, Event{Sequence: sequence, Change: change})
+				usedBytes += uint64(len(encoded))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrReplayUnavailable) || errors.Is(err, ErrCorruptStore) || errors.Is(err, ErrInvalidConfig) {
+			return nil, 0, err
+		}
+		return nil, 0, fmt.Errorf("state-vector catch-up: %w", err)
+	}
+	sort.Slice(events, func(left, right int) bool { return events[left].Sequence < events[right].Sequence })
+	return events, highWater, nil
+}
+
+func (store *Store) ensureActorIndex(groupID string) error {
+	if store == nil || store.db == nil || groupID == "" {
+		return ErrInvalidConfig
+	}
+	if store.closed.Load() {
+		return ErrClosed
+	}
+	err := store.db.Update(func(transaction *bolt.Tx) error {
+		group, err := store.groupBucket(transaction, groupID, false)
+		if err != nil || group == nil {
+			return err
+		}
+		meta := group.Bucket(bucketMeta)
+		events := group.Bucket(bucketEvents)
+		if meta == nil || events == nil {
+			return ErrCorruptStore
+		}
+		if bytes.Equal(meta.Get(keyActorIndex), []byte{1}) {
+			return nil
+		}
+		if group.Bucket(bucketActors) != nil {
+			if err := group.DeleteBucket(bucketActors); err != nil {
+				return err
+			}
+		}
+		actors, err := group.CreateBucket(bucketActors)
+		if err != nil {
+			return err
+		}
+		highWater, _, _, err := readMeta(meta)
+		if err != nil {
+			return err
+		}
+		cursor := events.Cursor()
+		key, value := cursor.First()
+		for expected := uint64(1); expected <= highWater; expected++ {
+			if key == nil || bytesToSequence(key) != expected || value == nil {
+				return ErrCorruptStore
+			}
+			dot, _, err := unmarshalChange(value, len(value), frame.DefaultLimits().MaxStringBytes)
+			if err != nil {
+				return ErrCorruptStore
+			}
+			maximum, err := readUint64(actors.Get([]byte(dot.Actor)))
+			if err != nil {
+				return err
+			}
+			if dot.Counter > maximum {
+				if err := actors.Put([]byte(dot.Actor), sequenceKey(dot.Counter)); err != nil {
+					return err
+				}
+			}
+			key, value = cursor.Next()
+		}
+		return meta.Put(keyActorIndex, []byte{1})
+	})
+	if err != nil {
+		if errors.Is(err, ErrCorruptStore) || errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrClosed) {
+			return err
+		}
+		return fmt.Errorf("build durable actor index: %w", err)
+	}
+	return nil
 }
 
 // Replay atomically reads every event after after in sequence order. It fails
@@ -265,12 +453,30 @@ func (store *Store) groupBucket(transaction *bolt.Tx, groupID string, create boo
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range [][]byte{bucketEvents, bucketDots, bucketMeta} {
+	for _, name := range [][]byte{bucketEvents, bucketDots, bucketActors, bucketMeta} {
 		if _, err := group.CreateBucketIfNotExists(name); err != nil {
 			return nil, err
 		}
 	}
 	return group, nil
+}
+
+func dotPrefix(actor string) []byte {
+	prefix := frame.AppendUvarint(nil, uint64(len(actor)))
+	return append(prefix, actor...)
+}
+
+func dotFromKey(key []byte) (replica.Dot, error) {
+	actor, position, ok := frame.ReadBytes(key, 0, frame.DefaultLimits().MaxStringBytes)
+	if !ok || len(key)-position != 8 {
+		return replica.Dot{}, ErrCorruptStore
+	}
+	counter := binary.BigEndian.Uint64(key[position:])
+	dot := replica.Dot{Actor: string(actor), Counter: counter}
+	if strings.TrimSpace(dot.Actor) == "" || counter == 0 {
+		return replica.Dot{}, ErrCorruptStore
+	}
+	return dot, nil
 }
 
 func makeDotKey(dot replica.Dot) []byte {

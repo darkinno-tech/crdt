@@ -7,8 +7,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- Rejected shared-document local mutations atomically before state or HLC
+  changes when their canonical update exceeds the configured output-frame
+  budget, preventing local-only writes without an outbox frame.
+- Rejected negative durable replay event and byte limits before their internal
+  unsigned conversion, preserving fail-closed replay resource bounds.
+
 ### Added
 
+- Added an explicitly selected packed-v3 Go/Wasm browser runtime artifact and
+  TypeScript manifest contract. Its bounded initial snapshots and local edits
+  retain the same scalar RGA semantics while avoiding run-v2 wire expansion
+  for dense large-text chains.
+- Added a bounded, Manifest-bound Tiptap rich-text profile and an
+  application-owned ProseMirror port for approved blocks, marks, hard breaks,
+  and codec-validated atomic inline embeds. Unknown editor tree structure
+  fails closed; stable rich-text v1 TypeIDs and frame semantics are unchanged.
 - Added disabled-by-default, manifest-bound WebSocket and HTTP/SSE live relay
   reference surfaces in `extensions`, plus runnable provider, race, fuzz,
   duplicate/reorder, concurrency, and loopback benchmark coverage.
@@ -32,6 +48,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Reduced allocations for first large linear RGA inserts and initial syncs by
+  batching sequence-pair storage, reusing verified local tag order, and
+  pre-sizing empty-document indexes without changing canonical wire bytes.
+- Avoided redundant sorting and packed wall-gap allocations when serializing a
+  verified linear RGA state, while retaining the existing canonical fallback
+  for branching, multi-replica, or unknown-tombstone states.
 - Added explicit output and recovery limits for RGA state/delta serialization
   and snapshot restoration, so embedders can use the same budgets at every
   browser-facing boundary.

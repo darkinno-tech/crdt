@@ -14,6 +14,7 @@
     { "name": "ListRGA", "state_id": 21, "delta_id": 22, "semantics_version": 1, "uses_hlc": true },
     { "name": "RichText", "state_id": 23, "delta_id": 24, "semantics_version": 1, "uses_hlc": true },
     { "name": "MoveRGA", "state_id": 25, "delta_id": 26, "semantics_version": 2, "uses_hlc": true },
-    { "name": "DocumentTree", "state_id": 27, "delta_id": 28, "semantics_version": 1, "uses_hlc": true }
+    { "name": "DocumentTree", "state_id": 27, "delta_id": 28, "semantics_version": 1, "uses_hlc": true },
+    { "name": "RGAPacked", "state_id": 29, "delta_id": 30, "semantics_version": 3, "uses_hlc": true }
   ]
 }

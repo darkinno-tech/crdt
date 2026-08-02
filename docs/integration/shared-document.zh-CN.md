@@ -112,10 +112,10 @@ if err := doc.ApplyUpdate(body); err != nil {
 父对象晚到的子帧都可以收敛；未完成依赖只在配置的 pending 上限内保留。CRC、profile
 或解码成功都不是身份认证或授权。
 
-同一个 `FrameLimits` 也约束本地发出的 update。它必须容纳 `DocumentOptions`
-允许的最大一次操作；若本地操作已改变状态但因 output-frame limit 返回错误，应持久化
-checkpoint，并在兼容的组预算下修复 outbox，不能静默丢弃。单个值和删除范围必须保持
-在已协商的 update 预算内。
+同一个 `FrameLimits` 也约束本地发出的 update。若一次本地操作超出该预算，会在改变
+state 或 HLC state 前返回 output-frame limit 错误，且不会调用 `OnUpdate`。该预算必须容纳
+`DocumentOptions` 允许的每一次单独操作；单个值和删除范围必须保持在已协商的 update
+预算内。成功的本地 frame 在此边界仅校验/编码一次，然后交给 outbox，不会再次序列化。
 
 ## 重启：State 和 HLC 必须一起保存
 

@@ -104,6 +104,75 @@ class CodeMirrorPort {
   }
 }
 
+class InstrumentedCodeMirrorPort {
+  constructor(value = "") {
+    this.value = value;
+    this.textReads = 0;
+  }
+
+  get state() {
+    return {
+      doc: {
+        length: this.value.length,
+        toString: () => {
+          this.textReads += 1;
+          return this.value;
+        },
+      },
+    };
+  }
+
+  dispatch({ changes }) {
+    this.value = `${this.value.slice(0, changes.from)}${changes.insert}${this.value.slice(changes.to)}`;
+  }
+
+  userReplace(from, to, insert) {
+    this.value = `${this.value.slice(0, from)}${insert}${this.value.slice(to)}`;
+    return nativeCodeMirrorUpdate([{ from, to, insert }]);
+  }
+
+  userMultiReplace(changes) {
+    let value = this.value;
+    let delta = 0;
+    for (const change of changes) {
+      const from = change.from + delta;
+      const to = change.to + delta;
+      value = `${value.slice(0, from)}${change.insert}${value.slice(to)}`;
+      delta += change.insert.length - (change.to - change.from);
+    }
+    this.value = value;
+    return nativeCodeMirrorUpdate(changes);
+  }
+}
+
+class InstrumentedRGA extends FakeRGA {
+  constructor(value, limits) {
+    super(value, limits);
+    this.textCalls = 0;
+  }
+
+  text() {
+    this.textCalls += 1;
+    return super.text();
+  }
+}
+
+function nativeCodeMirrorUpdate(changes) {
+  return {
+    docChanged: true,
+    changes: {
+      iterChanges(listener) {
+        let delta = 0;
+        for (const change of changes) {
+          const fromB = change.from + delta;
+          listener(change.from, change.to, fromB, fromB + change.insert.length, { toString: () => change.insert });
+          delta += change.insert.length - (change.to - change.from);
+        }
+      },
+    },
+  };
+}
+
 class TiptapPort {
   constructor(value = "") {
     this.value = tiptapJSON(value);
@@ -317,6 +386,71 @@ test("CodeMirror adapter sends user updates through its configured view listener
   binding.applyRemote(remote.replace(0, 0, "remote "));
   assert.equal(view.state.doc.toString(), "remote code\nreview");
   assert.equal(frames.length, 1);
+  assert.equal(binding.destroy(), true);
+});
+
+test("CodeMirror native single-range changes avoid full text projection and retain Unicode rune offsets", () => {
+  const document = new InstrumentedRGA("a🙂z");
+  const view = new InstrumentedCodeMirrorPort("a🙂z");
+  const frames = [];
+  const binding = bindCodeMirrorPlainText(document, view, { onLocalFrame: (frame) => frames.push(frame) });
+  const readsBeforeChange = view.textReads;
+  const textCallsBeforeChange = document.textCalls;
+
+  binding.applyViewUpdate(view.userReplace(1, 3, "ß"));
+  assert.equal(document.text(), "aßz");
+  assert.equal(view.state.doc.toString(), "aßz");
+  assert.equal(view.textReads, readsBeforeChange + 1); // The assertion above is the only new editor projection read.
+  assert.equal(document.textCalls, textCallsBeforeChange + 1); // The assertion above is the only new RGA projection read.
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(frames[0])), {
+    kind: "replace", offset: 1, count: 1, value: "ß",
+  });
+  assert.equal(binding.destroy(), true);
+});
+
+test("CodeMirror native changes retain rune offsets across incremental projection chunk boundaries", () => {
+  const initial = `${"a".repeat(4095)}🙂${"b".repeat(4096)}`;
+  const document = new FakeRGA(initial);
+  const view = new InstrumentedCodeMirrorPort(initial);
+  const frames = [];
+  const binding = bindCodeMirrorPlainText(document, view, { onLocalFrame: (frame) => frames.push(frame) });
+
+  binding.applyViewUpdate(view.userReplace(4095, 4097, "X"));
+  assert.equal(document.text(), `${"a".repeat(4095)}X${"b".repeat(4096)}`);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(frames[0])), {
+    kind: "replace", offset: 4095, count: 1, value: "X",
+  });
+  assert.equal(binding.destroy(), true);
+});
+
+test("CodeMirror multi-range transactions retain the one-frame atomic fallback", () => {
+  const document = new FakeRGA("abcd");
+  const view = new InstrumentedCodeMirrorPort("abcd");
+  const frames = [];
+  const binding = bindCodeMirrorPlainText(document, view, { onLocalFrame: (frame) => frames.push(frame) });
+
+  binding.applyViewUpdate(view.userMultiReplace([
+    { from: 0, to: 1, insert: "X" },
+    { from: 2, to: 3, insert: "Y" },
+  ]));
+  assert.equal(document.text(), "XbYd");
+  assert.equal(frames.length, 1);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(frames[0])), {
+    kind: "replace", offset: 0, count: 3, value: "XbY",
+  });
+  assert.equal(binding.destroy(), true);
+});
+
+test("CodeMirror native replacements enforce the negotiated bound before RGA mutation", () => {
+  const document = new FakeRGA("safe", { maxLocalEditBytes: 4, maxLocalEditRunes: 4 });
+  const view = new InstrumentedCodeMirrorPort("safe");
+  const frames = [];
+  const binding = bindCodeMirrorPlainText(document, view, { onLocalFrame: (frame) => frames.push(frame) });
+
+  assert.throws(() => binding.applyViewUpdate(view.userReplace(0, 4, "banana")), /resource_limit/);
+  assert.equal(document.text(), "safe");
+  assert.equal(view.state.doc.toString(), "safe");
+  assert.equal(frames.length, 0);
   assert.equal(binding.destroy(), true);
 });
 

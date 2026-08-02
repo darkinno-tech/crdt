@@ -12,6 +12,7 @@ func BenchmarkRGAMarshalLinearDocument(b *testing.B) {
 	}{
 		{name: "v1", marshal: value.MarshalBinary},
 		{name: "run_v2", marshal: value.MarshalRunBinary},
+		{name: "packed_v3", marshal: value.MarshalPackedBinary},
 	}
 	for _, benchmark := range benchmarks {
 		benchmark := benchmark

@@ -33,8 +33,10 @@ func (nodes runNodes) Swap(i, j int)      { nodes[i], nodes[j] = nodes[j], nodes
 // the node and tombstone maps, while preserving the short read-lock window
 // required by concurrent callers.
 type rgaRunState struct {
-	nodes      []runNode
-	tombstones []Position
+	nodes            []runNode
+	tombstones       []Position
+	nodesSorted      bool
+	tombstonesSorted bool
 }
 
 // runChildKey groups potential run successors by their parent and replica. A
@@ -158,8 +160,12 @@ func marshalRGARunStateWithEncoder(state rgaRunState, limits frame.DecoderLimits
 	if len(state.nodes) > limits.MaxElements || len(state.nodes) > limits.MaxTags || len(state.tombstones) > limits.MaxTags-len(state.nodes) {
 		return nil, frame.ErrFrameLimit
 	}
-	sort.Sort(runNodes(state.nodes))
-	sort.Slice(state.tombstones, func(i, j int) bool { return state.tombstones[i].Compare(state.tombstones[j]) < 0 })
+	if !state.nodesSorted {
+		sort.Sort(runNodes(state.nodes))
+	}
+	if !state.tombstonesSorted {
+		sort.Slice(state.tombstones, func(i, j int) bool { return state.tombstones[i].Compare(state.tombstones[j]) < 0 })
+	}
 	linear, err := validateCompleteRunState(state)
 	if err != nil {
 		return nil, err
@@ -258,6 +264,86 @@ func (r *RGA) captureRunState(withClock bool) (rgaRunState, clock.State, error) 
 	if len(r.pending) > 0 {
 		return rgaRunState{}, clock.State{}, ErrIncompleteState
 	}
+	state := r.captureRunStateLocked()
+	if withClock {
+		if r.clock == nil {
+			return rgaRunState{}, clock.State{}, ErrNilText
+		}
+		return state, r.clock.Snapshot(), nil
+	}
+	return state, clock.State{}, nil
+}
+
+// captureRunStateLocked copies the state while r.mu is read-locked. The
+// sequence index already stores entries in deterministic document order. When
+// that order is also one same-replica Position-sorted parent chain, it is the
+// canonical run order, so run and packed encoders can safely skip a redundant
+// O(n log n) sort. Any branching, multi-replica, or unknown-tombstone state
+// keeps the map-copy fallback and its existing canonical sort.
+func (r *RGA) captureRunStateLocked() rgaRunState {
+	state := rgaRunState{
+		nodes: make([]runNode, 0, len(r.nodes)),
+	}
+	if r.sequence == nil {
+		return r.captureRunStateFromMapsLocked()
+	}
+	root := r.sequence.entry(Position{})
+	expectedMarkers := 2 * (len(r.nodes) + 1)
+	if root == nil || len(r.sequence.pairs) != len(r.nodes)+1 || markerCount(r.sequence.root) != expectedMarkers {
+		return r.captureRunStateFromMapsLocked()
+	}
+
+	canonicalLinear := true
+	var previous runNode
+	traversedMarkers := 0
+	for current := root.next; current != nil; current = current.next {
+		traversedMarkers++
+		if traversedMarkers >= expectedMarkers {
+			return r.captureRunStateFromMapsLocked()
+		}
+		if current != &current.pair.entry {
+			continue
+		}
+		id := current.pair.position
+		item, exists := r.nodes[id]
+		if !exists {
+			return r.captureRunStateFromMapsLocked()
+		}
+		next := runNode{id: id, item: item}
+		if len(state.nodes) == 0 {
+			canonicalLinear = !item.parent.Valid()
+		} else if next.id.ReplicaID != previous.id.ReplicaID || next.id.Compare(previous.id) <= 0 || next.item.parent != previous.id {
+			canonicalLinear = false
+		}
+		state.nodes = append(state.nodes, next)
+		previous = next
+	}
+	if traversedMarkers != expectedMarkers-1 || len(state.nodes) != len(r.nodes) {
+		return r.captureRunStateFromMapsLocked()
+	}
+	state.nodesSorted = canonicalLinear
+	if !canonicalLinear {
+		state.tombstones = make([]Position, 0, len(r.tombstones))
+		for id := range r.tombstones {
+			state.tombstones = append(state.tombstones, id)
+		}
+		return state
+	}
+
+	state.tombstones = make([]Position, 0, len(r.tombstones))
+	for _, item := range state.nodes {
+		if _, deleted := r.tombstones[item.id]; deleted {
+			state.tombstones = append(state.tombstones, item.id)
+		}
+	}
+	if len(state.tombstones) == len(r.tombstones) {
+		state.tombstonesSorted = true
+		return state
+	}
+	return r.captureRunStateFromMapsLocked()
+}
+
+func (r *RGA) captureRunStateFromMapsLocked() rgaRunState {
 	state := rgaRunState{
 		nodes:      make([]runNode, 0, len(r.nodes)),
 		tombstones: make([]Position, 0, len(r.tombstones)),
@@ -268,13 +354,7 @@ func (r *RGA) captureRunState(withClock bool) (rgaRunState, clock.State, error) 
 	for id := range r.tombstones {
 		state.tombstones = append(state.tombstones, id)
 	}
-	if withClock {
-		if r.clock == nil {
-			return rgaRunState{}, clock.State{}, ErrNilText
-		}
-		return state, r.clock.Snapshot(), nil
-	}
-	return state, clock.State{}, nil
+	return state
 }
 
 // validateCompleteRunState keeps the same rejection behavior as map-backed

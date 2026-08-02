@@ -102,7 +102,9 @@ rendered, err := fragment.RenderFragment()
 nodes, depth 128, 32,768 attributes). It accepts one document root and text/
 element content; it rejects DTDs, comments, non-declaration processing
 instructions, namespaces, duplicate attributes, invalid XML characters, and
-extra top-level content. Rendering sorts attributes canonically and escapes
+extra top-level content. Only XML `S` characters (space, tab, CR, and LF) may
+follow the root; broader Unicode whitespace is content and is rejected rather
+than silently discarded. Rendering sorts attributes canonically and escapes
 text/attribute values through Go's `encoding/xml` encoder.
 
 This is **not** a claim of per-attribute or per-descendant mutable XML merge.
