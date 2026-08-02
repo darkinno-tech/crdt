@@ -13,12 +13,17 @@ import (
 
 type failingStringCodec struct{ stringCodec }
 
-func (failingStringCodec) Marshal(string) ([]byte, error) { return nil, errors.New("encode failure") }
+var (
+	errFailingStringCodecMarshal     = errors.New("encode failure")
+	errRejectingStringCodecUnmarshal = errors.New("decode failure")
+)
+
+func (failingStringCodec) Marshal(string) ([]byte, error) { return nil, errFailingStringCodecMarshal }
 
 type rejectingStringCodec struct{ stringCodec }
 
 func (rejectingStringCodec) Unmarshal([]byte) (string, error) {
-	return "", errors.New("decode failure")
+	return "", errRejectingStringCodecUnmarshal
 }
 
 type collidingStringCodec struct{ stringCodec }
@@ -48,8 +53,8 @@ func TestORSetStateSnapshotAndMergeErrorPaths(t *testing.T) {
 		"item": {
 			crdt.Tag{ReplicaID: "r"}: {},
 		},
-	}, nil, defaultLimits()); err == nil {
-		t.Fatal("marshalORSet accepted codec marshal failure")
+	}, nil, defaultLimits()); !errors.Is(err, errFailingStringCodecMarshal) {
+		t.Fatalf("marshalORSet error = %v, want wrapped codec failure", err)
 	}
 
 	counterValue, err := counter.NewGCounter("counter")
@@ -79,8 +84,8 @@ func TestORSetRejectsTypedNilAndSnapshotDecodeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewORSetFromSnapshot(saved, rejectingStringCodec{stringCodec{id: codec.id}}); !errors.Is(err, ErrInvalidCodec) {
-		t.Fatalf("snapshot decoder failure error = %v", err)
+	if _, err := NewORSetFromSnapshot(saved, rejectingStringCodec{stringCodec{id: codec.id}}); !errors.Is(err, ErrInvalidCodec) || !errors.Is(err, errRejectingStringCodecUnmarshal) {
+		t.Fatalf("snapshot decoder failure error = %v, want both invalid codec and codec cause", err)
 	}
 	if _, err := UnmarshalORSetDelta([]byte("bad"), nilCodec); !errors.Is(err, ErrInvalidCodec) {
 		t.Fatalf("typed nil delta codec error = %v", err)
@@ -137,17 +142,17 @@ func TestStatefulSetsBindCodecIDAtConstruction(t *testing.T) {
 func TestORSetRejectsNonCanonicalTagsAndCodecCollisions(t *testing.T) {
 	validTag := crdt.Tag{ReplicaID: "replica", WallTime: 2, Logical: 3}
 	encoded := appendTag(nil, validTag)
-	decoded, next, ok := readTag(encoded, 0, len(validTag.ReplicaID))
+	decoded, next, ok := readTag(encoded, len(validTag.ReplicaID))
 	if !ok || next != len(encoded) || decoded != validTag {
 		t.Fatalf("readTag() = %#v, %d, %v", decoded, next, ok)
 	}
-	if _, _, ok := readTag(encoded, 0, len(validTag.ReplicaID)-1); ok {
+	if _, _, ok := readTag(encoded, len(validTag.ReplicaID)-1); ok {
 		t.Fatal("readTag() accepted oversized replica ID")
 	}
-	if _, _, ok := readTag(appendTag(nil, crdt.Tag{}), 0, 16); ok {
+	if _, _, ok := readTag(appendTag(nil, crdt.Tag{}), 16); ok {
 		t.Fatal("readTag() accepted empty replica ID")
 	}
-	if _, _, ok := readTag([]byte{0x80}, 0, 16); ok {
+	if _, _, ok := readTag([]byte{0x80}, 16); ok {
 		t.Fatal("readTag() accepted truncated length")
 	}
 
@@ -179,6 +184,30 @@ func TestORSetRejectsNonCanonicalTagsAndCodecCollisions(t *testing.T) {
 		t.Fatalf("Snapshot() error = %v", err)
 	} else if _, ok := saved.ClockState(); !ok {
 		t.Fatal("Snapshot() did not preserve clock state")
+	}
+}
+
+func TestORSetBoundedCountConversions(t *testing.T) {
+	if _, ok := orSetLimit(0); ok {
+		t.Fatal("orSetLimit accepted zero")
+	}
+	if _, ok := orSetLimit(-1); ok {
+		t.Fatal("orSetLimit accepted negative value")
+	}
+	if got, ok := orSetLimit(3); !ok || got != 3 {
+		t.Fatalf("orSetLimit(3) = %d, %v", got, ok)
+	}
+	if _, ok := orSetCountAsUint64(-1); ok {
+		t.Fatal("orSetCountAsUint64 accepted negative value")
+	}
+	if got, ok := orSetCountAsUint64(3); !ok || got != 3 {
+		t.Fatalf("orSetCountAsUint64(3) = %d, %v", got, ok)
+	}
+	if _, ok := orSetMapCapacity(uint64(maxORSetInt) + 1); ok {
+		t.Fatal("orSetMapCapacity accepted an overflowing value")
+	}
+	if got, ok := orSetMapCapacity(3); !ok || got != 3 {
+		t.Fatalf("orSetMapCapacity(3) = %d, %v", got, ok)
 	}
 }
 
