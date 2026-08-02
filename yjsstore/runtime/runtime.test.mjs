@@ -166,6 +166,51 @@ test("real Yjs V2 stays format-pinned and synchronizes from a state vector", asy
   assert.equal(wrongFormat.body.code, "wrong_format");
 });
 
+test("pure Yjs deletions persist even though their state vector does not advance", async (context) => {
+  const running = await startStore(context);
+  for (const format of ["v1", "v2"]) {
+    const eventName = format === "v1" ? "update" : "updateV2";
+    const applyUpdate = format === "v1" ? Y.applyUpdate : Y.applyUpdateV2;
+    const document = testDocument(format);
+    const author = new Y.Doc();
+    const deleter = new Y.Doc();
+    const base = captureUpdate(author, eventName, () => author.getText("shared").insert(0, "delete-me"));
+    try {
+      const seeded = await request(running.endpoint, "/v1/yjs/apply", { document, update: toBase64(base) });
+      assert.equal(seeded.status, 200);
+      assert.equal(seeded.body.cursor, 1);
+      const beforeDelete = await request(running.endpoint, "/v1/yjs/state-vector", { document });
+
+      applyUpdate(deleter, base);
+      const sourceBeforeDelete = Y.encodeStateVector(deleter);
+      const deletion = captureUpdate(deleter, eventName, () => deleter.getText("shared").delete(0, deleter.getText("shared").length));
+      assert.deepEqual([...Y.encodeStateVector(deleter)], [...sourceBeforeDelete], `${format} deletion must not be inferred from a clock change`);
+
+      const first = await request(running.endpoint, "/v1/yjs/apply", { document, update: toBase64(deletion) });
+      assert.equal(first.status, 200);
+      assert.equal(first.body.applied, true, `${format} delete set must advance the durable cursor`);
+      assert.equal(first.body.cursor, 2);
+      const afterDelete = await request(running.endpoint, "/v1/yjs/state-vector", { document });
+      assert.deepEqual(afterDelete.body.stateVector, beforeDelete.body.stateVector, `${format} deletion leaves the state vector unchanged`);
+      const beforeDuplicate = await request(running.endpoint, "/v1/yjs/snapshot", { document });
+      const restored = new Y.Doc();
+      applyUpdate(restored, fromBase64(beforeDuplicate.body.update));
+      assert.equal(restored.getText("shared").toString(), "");
+      restored.destroy();
+
+      const duplicate = await request(running.endpoint, "/v1/yjs/apply", { document, update: toBase64(deletion) });
+      assert.equal(duplicate.status, 200);
+      assert.equal(duplicate.body.applied, false, `${format} duplicate delete must not persist twice`);
+      assert.equal(duplicate.body.cursor, 2);
+      const afterDuplicate = await request(running.endpoint, "/v1/yjs/snapshot", { document });
+      assert.deepEqual(afterDuplicate.body, beforeDuplicate.body);
+    } finally {
+      author.destroy();
+      deleter.destroy();
+    }
+  }
+});
+
 test("each request destroys its materialized Y.Doc after a durable operation", async (context) => {
   const running = await startStore(context);
   const document = testDocument("v1");
