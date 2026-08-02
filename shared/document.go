@@ -90,13 +90,13 @@ func NewWithLimits(replicaID string, limits frame.DecoderLimits) (*Document, err
 // NewWithOptions creates a document with explicit retention and frame limits.
 // An invalid frame budget is rejected before the document can be used.
 func NewWithOptions(replicaID string, options Options) (*Document, error) {
-	emptyUpdate, err := (documenttree.Delta{}).MarshalBinaryWithLimits(options.FrameLimits)
+	document, err := documenttree.NewWithOptionsAndOutputLimits(replicaID, options.DocumentOptions, options.FrameLimits)
+	if err != nil {
+		return nil, fmt.Errorf("shared: invalid document or frame limits: %w", err)
+	}
+	emptyUpdate, err := document.MarshalDeltaWithLimits(documenttree.Delta{}, options.FrameLimits)
 	if err != nil {
 		return nil, fmt.Errorf("shared: invalid frame limits: %w", err)
-	}
-	document, err := documenttree.NewWithOptions(replicaID, options.DocumentOptions)
-	if err != nil {
-		return nil, err
 	}
 	return newDocument(document, options, emptyUpdate), nil
 }
@@ -105,16 +105,16 @@ func NewWithOptions(replicaID string, options Options) (*Document, error) {
 // The checkpoint and its HLC state must have been persisted atomically before
 // reusing the same replica ID.
 func Restore(checkpoint Checkpoint, options Options) (*Document, error) {
-	emptyUpdate, err := (documenttree.Delta{}).MarshalBinaryWithLimits(options.FrameLimits)
+	document, err := documenttree.NewFromClockWithOptionsAndOutputLimits(checkpoint.ClockState, options.DocumentOptions, options.FrameLimits)
 	if err != nil {
-		return nil, fmt.Errorf("shared: invalid frame limits: %w", err)
-	}
-	document, err := documenttree.NewFromClockWithOptions(checkpoint.ClockState, options.DocumentOptions)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("shared: invalid document or frame limits: %w", err)
 	}
 	if err := document.UnmarshalBinaryWithLimits(checkpoint.State, options.FrameLimits); err != nil {
 		return nil, err
+	}
+	emptyUpdate, err := document.MarshalDeltaWithLimits(documenttree.Delta{}, options.FrameLimits)
+	if err != nil {
+		return nil, fmt.Errorf("shared: invalid frame limits: %w", err)
 	}
 	return newDocument(document, options, emptyUpdate), nil
 }
@@ -245,7 +245,7 @@ func (d *Document) State() crdt.StateSnapshot {
 }
 
 func (d *Document) emit(delta documenttree.Delta) error {
-	update, err := delta.MarshalBinaryWithLimits(d.options.FrameLimits)
+	update, err := d.document.MarshalLocalDelta(delta)
 	if err != nil {
 		return fmt.Errorf("shared: encode local update: %w", err)
 	}

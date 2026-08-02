@@ -53,7 +53,7 @@ export interface BindRGAPlainTextOptions {
  * before replacing the port value and cannot echo back into the outbox.
  */
 export class RGAPlainTextBinding {
-  #text: string;
+  readonly #projection: IncrementalTextProjection;
   #writing = false;
   #closed = false;
   readonly #unobserve: () => void;
@@ -66,12 +66,12 @@ export class RGAPlainTextBinding {
     if (typeof options.onLocalFrame !== "function") {
       throw new CRDTRuntimeError("invalid_binding_options");
     }
-    this.#text = document.text();
+    this.#projection = new IncrementalTextProjection(document.text());
     this.#unobserve = editor.observeText(() => this.#handleEditorChange());
     if (options.initialContent === "editor") {
       this.#replaceDocument(editor.readText());
     } else {
-      this.#writeEditor(this.#text);
+      this.#writeEditor(this.#projection.text());
     }
   }
 
@@ -80,8 +80,8 @@ export class RGAPlainTextBinding {
     this.#assertOpen();
     const selection = this.#captureSelectionSafely();
     this.document.applyDelta(frame);
-    this.#text = this.document.text();
-    this.#writeEditor(this.#text);
+    this.#projection.reset(this.document.text());
+    this.#writeEditor(this.#projection.text());
     if (selection !== undefined) {
       this.#restoreSelectionSafely(selection);
     }
@@ -99,8 +99,8 @@ export class RGAPlainTextBinding {
       return undefined;
     }
     return {
-      anchor: this.document.anchorAt(runeOffsetAtUTF16(this.#text, selection.anchor)),
-      head: this.document.anchorAt(runeOffsetAtUTF16(this.#text, selection.head)),
+      anchor: this.document.anchorAt(this.#projection.runeOffsetAtUTF16(selection.anchor)),
+      head: this.document.anchorAt(this.#projection.runeOffsetAtUTF16(selection.head)),
     };
   }
 
@@ -115,8 +115,8 @@ export class RGAPlainTextBinding {
       throw new CRDTRuntimeError("invalid_anchor");
     }
     port.writeSelection({
-      anchor: utf16OffsetAtRune(this.#text, this.document.resolveAnchor(selection.anchor)),
-      head: utf16OffsetAtRune(this.#text, this.document.resolveAnchor(selection.head)),
+      anchor: this.#projection.utf16OffsetAtRune(this.document.resolveAnchor(selection.anchor)),
+      head: this.#projection.utf16OffsetAtRune(this.document.resolveAnchor(selection.head)),
     });
     return true;
   }
@@ -142,17 +142,53 @@ export class RGAPlainTextBinding {
       // have rejected it during frame/state preflight. Restore the last
       // replicated projection so a rejected edit cannot remain as an
       // unreplicable editor-only fork.
-      this.#writeEditor(this.#text);
+      this.#writeEditor(this.#projection.text());
+      throw error;
+    }
+  }
+
+  /**
+   * Applies one editor-native UTF-16 replacement without re-reading or
+   * comparing the full editor projection. It is used only when an adapter can
+   * prove that its update contains exactly one coherent replacement range.
+   */
+  applyUTF16Replacement(change: EditorUTF16Replacement): void {
+    if (this.#closed || this.#writing) {
+      return;
+    }
+    try {
+      const replacement = this.#projection.prepareReplacement(change.from, change.to, change.insert);
+      if (change.newLength !== this.#projection.utf16Length() - (change.to - change.from) + change.insert.length) {
+        this.#handleEditorChange();
+        return;
+      }
+      if (replacement.isNoop) {
+        return;
+      }
+      assertBoundedReplacement(change.insert, this.document);
+      const frame = this.document.replace(
+        replacement.runeFrom,
+        replacement.runeTo - replacement.runeFrom,
+        change.insert,
+      );
+      this.#projection.commitReplacement(replacement);
+      this.options.onLocalFrame(frame);
+    } catch (error) {
+      // The editor already accepted this transaction. Restore the last
+      // replicated projection if its corresponding local RGA replacement is
+      // rejected, so no editor-only fork remains visible.
+      this.#writeEditor(this.#projection.text());
       throw error;
     }
   }
 
   #replaceDocument(next: string): void {
     this.#assertOpen();
-    if (next === this.#text) {
+    const previousText = this.#projection.text();
+    if (next === previousText) {
       return;
     }
-    const previousRunes = Array.from(this.#text);
+    const previousRunes = Array.from(previousText);
     const nextRunes = Array.from(next);
     let prefix = 0;
     while (prefix < previousRunes.length && prefix < nextRunes.length && previousRunes[prefix] === nextRunes[prefix]) {
@@ -168,10 +204,11 @@ export class RGAPlainTextBinding {
     const replacement = nextRunes.slice(prefix, nextEnd).join("");
     assertBoundedReplacement(replacement, this.document);
     const frame = this.document.replace(prefix, previousEnd - prefix, replacement);
-    this.#text = this.document.text();
-    if (this.#text !== next) {
+    const committed = this.document.text();
+    if (committed !== next) {
       throw new CRDTRuntimeError("binding_diverged");
     }
+    this.#projection.reset(committed);
     this.options.onLocalFrame(frame);
   }
 
@@ -320,17 +357,31 @@ export interface CodeMirrorTextPort {
   }): void;
 }
 
-/** The only CodeMirror update detail the binding needs to observe. */
+/** One CodeMirror change set, retained structurally to avoid a runtime dependency. */
+export interface CodeMirrorChangeSet {
+  iterChanges(listener: (
+    fromA: number,
+    toA: number,
+    fromB: number,
+    toB: number,
+    inserted: { toString(): string },
+  ) => void): void;
+}
+
+/** The CodeMirror update detail used by the plain-text binding. */
 export interface CodeMirrorViewUpdate {
   readonly docChanged: boolean;
+  /** The editor-native change coordinates; absent for backwards-compatible ports. */
+  readonly changes?: CodeMirrorChangeSet;
 }
 
 /**
  * Binds a CodeMirror 6 view without taking a runtime dependency on
  * `@codemirror/view`. Configure the host's `EditorView.updateListener` to
  * call `applyViewUpdate(update)` for every view update (see the integration
- * guide). CodeMirror positions are UTF-16, but this adapter only replaces the
- * full document; the RGA binding retains Unicode-scalar offsets internally.
+ * guide). Single-range CodeMirror transactions use their native UTF-16 change
+ * coordinates directly. Multi-range and legacy structural updates retain the
+ * full-document atomic fallback, rather than publishing a partial transaction.
  */
 export class CodeMirrorPlainTextBinding {
   #listener: (() => void) | undefined;
@@ -368,7 +419,13 @@ export class CodeMirrorPlainTextBinding {
 
   /** Pass every `EditorView.updateListener` event through this method. */
   applyViewUpdate(update: CodeMirrorViewUpdate): void {
-    if (update.docChanged) {
+    if (!update.docChanged) {
+      return;
+    }
+    const change = singleCodeMirrorReplacement(update, this.view.state.doc.length);
+    if (change !== undefined) {
+      this.#binding.applyUTF16Replacement(change);
+    } else {
       this.#listener?.();
     }
   }
@@ -702,6 +759,24 @@ export type {
   BlockNoteRichTextPort,
 } from "./blocknote.js";
 
+// Kept on the editor-binding entrypoint so a consumer can use a structural
+// Tiptap / ProseMirror port without importing Tiptap itself at runtime.
+export {
+  bindProseMirrorRichText,
+  bindTiptapRichText,
+  TiptapRichTextBinding,
+  TIPTAP_CORE_RICH_TEXT_SCHEMA_ID,
+} from "./tiptap.js";
+export type {
+  BindTiptapRichTextOptions,
+  ProseMirrorRichTextPort,
+  TiptapEmbedCodec,
+  TiptapEmbedArray,
+  TiptapEmbedObject,
+  TiptapEmbedValue,
+  TiptapRichTextPort,
+} from "./tiptap.js";
+
 function quillDeltaToDocumentOperations(delta: QuillRichTextDelta, codec: RichTextAttributeCodec): RichTextEditorOperation[] {
   if (!isRecord(delta) || (delta.ops !== undefined && !Array.isArray(delta.ops))) {
     throw new CRDTRuntimeError("unsupported_rich_text");
@@ -829,6 +904,286 @@ function tiptapJSONFromText(value: string): TiptapJSONNode {
 function hasOnlyKeys(value: unknown, allowed: readonly string[]): value is TiptapJSONNode {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     && Object.keys(value).every((key) => allowed.includes(key));
+}
+
+/** One coherent native editor replacement expressed in UTF-16 offsets. */
+export interface EditorUTF16Replacement {
+  readonly from: number;
+  readonly to: number;
+  readonly insert: string;
+  readonly newLength: number;
+}
+
+interface PreparedProjectionReplacement {
+  readonly runeFrom: number;
+  readonly runeTo: number;
+  readonly startChunk: number;
+  readonly removedChunks: number;
+  readonly replacement: readonly ProjectionChunk[];
+  readonly isNoop: boolean;
+}
+
+interface ProjectionChunk {
+  readonly text: string;
+  readonly runes: number;
+}
+
+const projectionChunkUTF16 = 4096;
+
+/**
+ * Maintains bounded-size UTF-16/rune chunks for local editor transactions.
+ * Updating one normal typing range changes one chunk and two Fenwick entries;
+ * rebuilding is reserved for a range that crosses chunk boundaries.
+ */
+class IncrementalTextProjection {
+  #chunks: ProjectionChunk[] = [];
+  #utf16 = new FenwickIndex([]);
+  #runes = new FenwickIndex([]);
+
+  constructor(value: string) {
+    this.reset(value);
+  }
+
+  reset(value: string): void {
+    this.#chunks = projectionChunks(value);
+    this.#rebuildIndexes();
+  }
+
+  text(): string {
+    return this.#chunks.map((chunk) => chunk.text).join("");
+  }
+
+  utf16Length(): number {
+    return this.#utf16.total();
+  }
+
+  runeOffsetAtUTF16(offset: number): number {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > this.#utf16.total()) {
+      throw new CRDTRuntimeError("range_error");
+    }
+    if (offset === this.#utf16.total()) {
+      return this.#runes.total();
+    }
+    const location = this.#locateUTF16(offset);
+    return this.#runes.prefix(location.chunk) + runeOffsetAtUTF16(projectionChunkAt(this.#chunks, location.chunk).text, location.offset);
+  }
+
+  utf16OffsetAtRune(offset: number): number {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > this.#runes.total()) {
+      throw new CRDTRuntimeError("range_error");
+    }
+    if (offset === this.#runes.total()) {
+      return this.#utf16.total();
+    }
+    const location = this.#runes.findContaining(offset);
+    return this.#utf16.prefix(location.index) + utf16OffsetAtRune(projectionChunkAt(this.#chunks, location.index).text, location.offset);
+  }
+
+  prepareReplacement(from: number, to: number, insert: string): PreparedProjectionReplacement {
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to > this.#utf16.total() || typeof insert !== "string") {
+      throw new CRDTRuntimeError("range_error");
+    }
+    const runeFrom = this.runeOffsetAtUTF16(from);
+    const runeTo = this.runeOffsetAtUTF16(to);
+    const start = this.#locateUTF16(from, true);
+    const end = this.#locateUTF16(to, true);
+    const startText = start.chunk === this.#chunks.length ? "" : projectionChunkAt(this.#chunks, start.chunk).text;
+    const endText = end.chunk === this.#chunks.length ? "" : projectionChunkAt(this.#chunks, end.chunk).text;
+    const prefix = startText.slice(0, start.offset);
+    const suffix = end.chunk === this.#chunks.length ? "" : endText.slice(end.offset);
+    const removedChunks = start.chunk === this.#chunks.length ? 0 : end.chunk - start.chunk + 1;
+    const replacement = projectionChunks(`${prefix}${insert}${suffix}`);
+    const oldLength = to - from;
+    const isNoop = oldLength === insert.length && this.#sliceUTF16(from, to) === insert;
+    return {
+      runeFrom,
+      runeTo,
+      startChunk: start.chunk,
+      removedChunks,
+      replacement,
+      isNoop,
+    };
+  }
+
+  commitReplacement(replacement: PreparedProjectionReplacement): void {
+    const changed = replacement.replacement;
+    if (replacement.removedChunks === changed.length) {
+      for (let index = 0; index < changed.length; index += 1) {
+        const chunkIndex = replacement.startChunk + index;
+        const previous = projectionChunkAt(this.#chunks, chunkIndex);
+        const next = projectionChunkAt(changed, index);
+        this.#chunks[chunkIndex] = next;
+        this.#utf16.add(chunkIndex, next.text.length - previous.text.length);
+        this.#runes.add(chunkIndex, next.runes - previous.runes);
+      }
+      return;
+    }
+    this.#chunks.splice(replacement.startChunk, replacement.removedChunks, ...changed);
+    this.#rebuildIndexes();
+  }
+
+  #locateUTF16(offset: number, allowEnd = false): { readonly chunk: number; readonly offset: number } {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > this.#utf16.total()) {
+      throw new CRDTRuntimeError("range_error");
+    }
+    if (offset === this.#utf16.total()) {
+      if (allowEnd || this.#chunks.length === 0) {
+        return { chunk: this.#chunks.length, offset: 0 };
+      }
+      throw new CRDTRuntimeError("range_error");
+    }
+    const location = this.#utf16.findContaining(offset);
+    return { chunk: location.index, offset: location.offset };
+  }
+
+  #sliceUTF16(from: number, to: number): string {
+    if (from === to) {
+      return "";
+    }
+    const start = this.#locateUTF16(from, true);
+    const end = this.#locateUTF16(to, true);
+    if (start.chunk === end.chunk) {
+      return projectionChunkAt(this.#chunks, start.chunk).text.slice(start.offset, end.offset);
+    }
+    const values = [projectionChunkAt(this.#chunks, start.chunk).text.slice(start.offset)];
+    for (let index = start.chunk + 1; index < end.chunk; index += 1) {
+      values.push(projectionChunkAt(this.#chunks, index).text);
+    }
+    if (end.chunk < this.#chunks.length) {
+      values.push(projectionChunkAt(this.#chunks, end.chunk).text.slice(0, end.offset));
+    }
+    return values.join("");
+  }
+
+  #rebuildIndexes(): void {
+    this.#utf16 = new FenwickIndex(this.#chunks.map((chunk) => chunk.text.length));
+    this.#runes = new FenwickIndex(this.#chunks.map((chunk) => chunk.runes));
+  }
+}
+
+class FenwickIndex {
+  readonly #tree: number[];
+
+  constructor(values: readonly number[]) {
+    this.#tree = Array(values.length + 1).fill(0);
+    for (let index = 0; index < values.length; index += 1) {
+      this.add(index, values[index]!);
+    }
+  }
+
+  total(): number {
+    return this.prefix(this.#tree.length - 1);
+  }
+
+  prefix(end: number): number {
+    let total = 0;
+    for (let index = end; index > 0; index -= index & -index) {
+      total += this.#tree[index]!;
+    }
+    return total;
+  }
+
+  add(index: number, delta: number): void {
+    for (let current = index + 1; current < this.#tree.length; current += current & -current) {
+      this.#tree[current]! += delta;
+    }
+  }
+
+  findContaining(offset: number): { readonly index: number; readonly offset: number } {
+    let index = 0;
+    let total = 0;
+    for (let bit = highestPowerOfTwoAtMost(this.#tree.length - 1); bit > 0; bit >>= 1) {
+      const next = index + bit;
+      if (next < this.#tree.length && total + this.#tree[next]! <= offset) {
+        index = next;
+        total += this.#tree[next]!;
+      }
+    }
+    if (index >= this.#tree.length - 1) {
+      throw new CRDTRuntimeError("range_error");
+    }
+    return { index, offset: offset - total };
+  }
+}
+
+function highestPowerOfTwoAtMost(value: number): number {
+  let result = 1;
+  while (result * 2 <= value) {
+    result *= 2;
+  }
+  return result;
+}
+
+function projectionChunkAt(chunks: readonly ProjectionChunk[], index: number): ProjectionChunk {
+  const chunk = chunks[index];
+  if (chunk === undefined) {
+    throw new CRDTRuntimeError("range_error");
+  }
+  return chunk;
+}
+
+function projectionChunks(value: string): ProjectionChunk[] {
+  const chunks: ProjectionChunk[] = [];
+  for (let start = 0; start < value.length;) {
+    let end = Math.min(start + projectionChunkUTF16, value.length);
+    if (end < value.length && isHighSurrogate(value.charCodeAt(end - 1)) && isLowSurrogate(value.charCodeAt(end))) {
+      end -= 1;
+    }
+    if (end === start) {
+      end = Math.min(start + 2, value.length);
+    }
+    const text = value.slice(start, end);
+    chunks.push({ text, runes: runeCount(text) });
+    start = end;
+  }
+  return chunks;
+}
+
+function runeCount(value: string): number {
+  let count = 0;
+  for (const _ of value) {
+    count += 1;
+  }
+  return count;
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
+}
+
+function singleCodeMirrorReplacement(
+  update: CodeMirrorViewUpdate,
+  documentLength: number,
+): EditorUTF16Replacement | undefined {
+  const changes = update.changes;
+  if (changes === undefined || typeof changes.iterChanges !== "function" || !Number.isSafeInteger(documentLength) || documentLength < 0) {
+    return undefined;
+  }
+  let result: EditorUTF16Replacement | undefined;
+  let invalid = false;
+  try {
+    changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+      if (result !== undefined || invalid || !Number.isSafeInteger(fromA) || !Number.isSafeInteger(toA) ||
+        !Number.isSafeInteger(fromB) || !Number.isSafeInteger(toB) || fromA < 0 || toA < fromA || fromB !== fromA || toB < fromB ||
+        inserted === null || inserted === undefined || typeof inserted.toString !== "function") {
+        invalid = true;
+        return;
+      }
+      const insert = inserted.toString();
+      if (typeof insert !== "string" || toB - fromB !== insert.length) {
+        invalid = true;
+        return;
+      }
+      result = { from: fromA, to: toA, insert, newLength: documentLength };
+    });
+  } catch {
+    return undefined;
+  }
+  return invalid ? undefined : result;
 }
 
 function selectionPort(value: PlainTextEditorPort): SelectionEditorPort | undefined {

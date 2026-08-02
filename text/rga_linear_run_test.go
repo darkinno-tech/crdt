@@ -1,6 +1,7 @@
 package text
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -45,6 +46,46 @@ func TestRGAResolvedLinearRunPreservesTombstonesAndPendingReplay(t *testing.T) {
 	}
 }
 
+func TestRGAPreparedLinearRunCacheIsValidatedAndReleasedAfterInsert(t *testing.T) {
+	const count = resolvedRunFastPathMinNodes * 2
+	source := mustRGA(t, "source")
+	prepared, _, err := source.prepareInsert(0, strings.Repeat("a", count), nil, Delta.MarshalBinaryWithLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, cached := prepared.cachedCanonicalNodeIDs()
+	if !cached || len(ids) != count {
+		t.Fatalf("prepared cached IDs = %d, %t; want %d, true", len(ids), cached, count)
+	}
+
+	target := mustRGA(t, "target")
+	if err := target.ApplyDelta(prepared); err != nil {
+		t.Fatal(err)
+	}
+	if got := target.String(); got != strings.Repeat("a", count) {
+		t.Fatalf("cached linear run text = %q", got)
+	}
+
+	invalidCache := prepared
+	invalidCache.canonicalNodeIDs = append([]Position(nil), prepared.canonicalNodeIDs...)
+	invalidCache.canonicalNodeIDs[0], invalidCache.canonicalNodeIDs[1] = invalidCache.canonicalNodeIDs[1], invalidCache.canonicalNodeIDs[0]
+	fallback := mustRGA(t, "fallback")
+	if err := fallback.ApplyDelta(invalidCache); err != nil {
+		t.Fatal(err)
+	}
+	if got := fallback.String(); got != target.String() {
+		t.Fatalf("invalid cache changed text = %q, want %q", got, target.String())
+	}
+
+	inserted, err := source.Insert(0, strings.Repeat("b", count))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inserted.canonicalNodeIDs) != 0 {
+		t.Fatalf("Insert retained %d cached IDs", len(inserted.canonicalNodeIDs))
+	}
+}
+
 func TestRGAResolvedLinearRunRejectsBranchingAndEnforcesLimitsAtomically(t *testing.T) {
 	const count = resolvedRunFastPathMinNodes
 	branching := Delta{nodes: make(map[Position]node, count), tombstones: map[Position]struct{}{}}
@@ -64,7 +105,7 @@ func TestRGAResolvedLinearRunRejectsBranchingAndEnforcesLimitsAtomically(t *test
 	limitedOptions.MaxNodes = count - 1
 	limited := mustRGAWithOptions(t, "limited", limitedOptions)
 	linear, _ := linearRunDeltaForTest(count)
-	if err := limited.ApplyDelta(linear); err != ErrResourceLimit {
+	if err := limited.ApplyDelta(linear); !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("ApplyDelta(linear over limit) = %v, want %v", err, ErrResourceLimit)
 	}
 	if got := limited.String(); got != "" || limited.PendingCount() != 0 || limited.State().ElementCount != 0 {

@@ -26,6 +26,12 @@ func TestRuntimeRunV2ThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
 	})
 }
 
+func TestRuntimePackedV3ThreeReplicaUnreliableDeliveryAndRecovery(t *testing.T) {
+	testRuntimeThreeReplicaUnreliableDeliveryAndRecovery(t, DefaultPackedRGAOptions(), RGAProtocol{
+		StateTypeID: RGAPackedStateTypeID, DeltaTypeID: RGAPackedDeltaTypeID, SemanticsVersion: RGAPackedSemanticsVersion,
+	})
+}
+
 // TestRuntimeRunV2InteroperatesWithNativeRGA proves the negotiated frame and
 // atomic snapshot contracts at the Go-to-browser-runtime boundary. The Node
 // Wasm artifact test exercises the same runtime from JavaScript separately.
@@ -93,6 +99,73 @@ func TestRuntimeRunV2InteroperatesWithNativeRGA(t *testing.T) {
 	}
 }
 
+// TestRuntimePackedV3InteroperatesWithNativeRGA proves that the browser
+// runtime uses the same explicitly negotiated compact state/delta frames as
+// the Go implementation, including an atomic snapshot round trip.
+func TestRuntimePackedV3InteroperatesWithNativeRGA(t *testing.T) {
+	options := DefaultPackedRGAOptions()
+	runtime, err := NewRuntime(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wasmHandle := mustCreate(t, runtime, "wasm")
+	native, err := text.NewWithOptions("native", options.Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nativeDelta, err := native.InsertPackedBinaryWithLimits(0, "native", options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustApply(t, runtime, wasmHandle, nativeDelta)
+	wasmDelta := mustInsert(t, runtime, wasmHandle, len([]rune(mustText(t, runtime, wasmHandle))), " + wasm")
+	decoded, err := text.UnmarshalRGAPackedDeltaWithLimits(wasmDelta, options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := native.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mustText(t, runtime, wasmHandle), native.String(); got != want {
+		t.Fatalf("native/runtime text = %q, want %q", got, want)
+	}
+
+	nativeSnapshot, err := native.SnapshotPackedCurrentStateWithLimits(options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockState, ok := nativeSnapshot.ClockState()
+	if !ok {
+		t.Fatal("native packed snapshot is missing clock state")
+	}
+	recovered, err := runtime.Restore(RGASnapshot{
+		State: nativeSnapshot.Bytes(), Frontier: nativeSnapshot.Frontier(), Clock: clockState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := mustText(t, runtime, recovered), native.String(); got != want {
+		t.Fatalf("runtime restored native snapshot = %q, want %q", got, want)
+	}
+
+	runtimeSnapshot, err := runtime.Snapshot(wasmHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := snapshot.NewWithClockState(runtimeSnapshot.State, runtimeSnapshot.Frontier, runtimeSnapshot.Clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeRecovered, err := text.NewFromSnapshotWithOptions(saved, options.Text, options.Decoder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := nativeRecovered.String(), native.String(); got != want {
+		t.Fatalf("native restored runtime snapshot = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeReplace(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -101,6 +174,7 @@ func TestRuntimeReplace(t *testing.T) {
 	}{
 		{"scalar-v1", DefaultRGAOptions(), RGADeltaTypeID},
 		{"run-v2", DefaultRunRGAOptions(), RGARunDeltaTypeID},
+		{"packed-v3", DefaultPackedRGAOptions(), RGAPackedDeltaTypeID},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime, err := NewRuntime(test.options)
@@ -352,6 +426,19 @@ func TestRuntimeRejectsUntrustedFramesWithoutMutation(t *testing.T) {
 	if got := mustText(t, runBounded, runBoundedHandle); got != "" {
 		t.Fatalf("rejected run local delta mutated text to %q", got)
 	}
+	packedOutputTight := DefaultPackedRGAOptions()
+	packedOutputTight.Decoder.MaxPayload = 1
+	packedBounded, err := NewRuntime(packedOutputTight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packedBoundedHandle := mustCreate(t, packedBounded, "packed-bounded")
+	if _, err := packedBounded.Insert(packedBoundedHandle, 0, "a"); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("oversized packed local delta error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := mustText(t, packedBounded, packedBoundedHandle); got != "" {
+		t.Fatalf("rejected packed local delta mutated text to %q", got)
+	}
 	if _, err := runtime.Insert(handle, 0, strings.Repeat("a", runtime.MaxLocalEditRunes()+1)); !errors.Is(err, frame.ErrFrameLimit) {
 		t.Fatalf("oversized local edit rune count error = %v, want %v", err, frame.ErrFrameLimit)
 	}
@@ -372,17 +459,36 @@ func TestRuntimeRejectsCrossWireFramesAndSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	packed, err := NewRuntime(DefaultPackedRGAOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
 	scalarSource := mustCreate(t, scalar, "scalar-source")
 	runSource := mustCreate(t, run, "run-source")
+	packedSource := mustCreate(t, packed, "packed-source")
 	scalarTarget := mustCreate(t, scalar, "scalar-target")
 	runTarget := mustCreate(t, run, "run-target")
+	packedTarget := mustCreate(t, packed, "packed-target")
 	scalarDelta := mustInsert(t, scalar, scalarSource, 0, "scalar")
 	runDelta := mustInsert(t, run, runSource, 0, "run")
+	packedDelta := mustInsert(t, packed, packedSource, 0, "packed")
 	if err := scalar.ApplyDelta(scalarTarget, runDelta); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("scalar runtime accepted run-v2 delta: %v", err)
 	}
 	if err := run.ApplyDelta(runTarget, scalarDelta); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("run-v2 runtime accepted scalar delta: %v", err)
+	}
+	if err := scalar.ApplyDelta(scalarTarget, packedDelta); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("scalar runtime accepted packed-v3 delta: %v", err)
+	}
+	if err := run.ApplyDelta(runTarget, packedDelta); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("run-v2 runtime accepted packed-v3 delta: %v", err)
+	}
+	if err := packed.ApplyDelta(packedTarget, scalarDelta); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("packed-v3 runtime accepted scalar delta: %v", err)
+	}
+	if err := packed.ApplyDelta(packedTarget, runDelta); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("packed-v3 runtime accepted run-v2 delta: %v", err)
 	}
 	scalarSnapshot, err := scalar.Snapshot(scalarSource)
 	if err != nil {
@@ -392,11 +498,71 @@ func TestRuntimeRejectsCrossWireFramesAndSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	packedSnapshot, err := packed.Snapshot(packedSource)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := scalar.Restore(runSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("scalar runtime restored run-v2 snapshot: %v", err)
 	}
 	if _, err := run.Restore(scalarSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("run-v2 runtime restored scalar snapshot: %v", err)
+	}
+	if _, err := scalar.Restore(packedSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("scalar runtime restored packed-v3 snapshot: %v", err)
+	}
+	if _, err := run.Restore(packedSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("run-v2 runtime restored packed-v3 snapshot: %v", err)
+	}
+	if _, err := packed.Restore(scalarSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("packed-v3 runtime restored scalar snapshot: %v", err)
+	}
+	if _, err := packed.Restore(runSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("packed-v3 runtime restored run-v2 snapshot: %v", err)
+	}
+}
+
+// TestRuntimePackedV3InitialSnapshotUsesTheCompactStateFrame exercises the
+// browser-sized initial-sync path. The source has to build the document in
+// bounded local edits, then the target restores exactly one manifest-selected
+// state frame. This must preserve every rune while materially reducing the
+// transfer compared with the same run-v2 document.
+func TestRuntimePackedV3InitialSnapshotUsesTheCompactStateFrame(t *testing.T) {
+	const initialRunes = 64 << 10
+	run, err := NewRuntime(DefaultRunRGAOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	packed, err := NewRuntime(DefaultPackedRGAOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runSource := mustCreate(t, run, "run-initial-source")
+	packedSource := mustCreate(t, packed, "packed-initial-source")
+	want := populateInitialDocument(t, run, runSource, initialRunes)
+	if got := populateInitialDocument(t, packed, packedSource, initialRunes); got != want {
+		t.Fatalf("initial source text = %q, want %q", got[:min(len(got), 64)], want[:min(len(want), 64)])
+	}
+	runSnapshot, err := run.Snapshot(runSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packedSnapshot, err := packed.Snapshot(packedSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packedSnapshot.State)*2 >= len(runSnapshot.State) {
+		t.Fatalf("packed initial state = %d bytes, run-v2 = %d bytes; expected at least 50%% reduction", len(packedSnapshot.State), len(runSnapshot.State))
+	}
+	restored, err := packed.Restore(packedSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustText(t, packed, restored); got != want {
+		t.Fatalf("packed initial restore differs: got %d runes, want %d", len([]rune(got)), initialRunes)
+	}
+	if _, err := run.Restore(packedSnapshot); !errors.Is(err, frame.ErrInvalidFrame) {
+		t.Fatalf("run-v2 runtime restored packed initial snapshot: %v", err)
 	}
 }
 
@@ -530,6 +696,17 @@ func mustText(t testing.TB, runtime *Runtime, handle uint64) string {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func populateInitialDocument(t testing.TB, runtime *Runtime, handle uint64, runes int) string {
+	t.Helper()
+	const maxChunkRunes = 12 << 10
+	for offset := 0; offset < runes; {
+		count := min(maxChunkRunes, runes-offset)
+		mustInsert(t, runtime, handle, offset, strings.Repeat("协", count))
+		offset += count
+	}
+	return mustText(t, runtime, handle)
 }
 
 func deliverDuplicatedAndShuffled(t testing.TB, runtime *Runtime, handle uint64, changes [][]byte, seed int64) {

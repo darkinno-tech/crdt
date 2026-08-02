@@ -22,6 +22,56 @@ handler 接受标准 `y-websocket` 二进制消息：
 验证：两个 Node client 完成初始同步、复制 `Y.Text` 变更并传播 awareness。这并不等同于已经
 证明任意不可信 Yjs update 的语义有效性。
 
+## 浏览器原生路径：不需要 Go/Wasm 或 manifest 协商
+
+当一个文档明确选择 Yjs 作为协作契约时，浏览器直接使用标准 Yjs client 和对应编辑器绑定即可，
+不需要 Go/Wasm runtime、frame decoder 或 `replica.Manifest`。可以直接使用维护中的上游
+binding，也可以使用可选的原生
+[`@darkinno/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md)；后者仍直接处理
+Yjs update 与 y-protocols awareness，并不混入本仓库的 Go 或 `native-ts-v1` 协议。
+
+```ts
+import * as Y from "yjs";
+import { WebsocketProvider } from "y-websocket";
+
+const document = new Y.Doc();
+const provider = new WebsocketProvider(
+  "wss://collab.example/yjs",
+  "notes",
+  document,
+);
+
+const text = document.getText("shared");
+// 按编辑器选择维护中的 adapter，例如 y-prosemirror、y-quill，
+// 或产品自有的 schema-preserving binding。
+```
+
+若需要带资源上限的 CodeMirror plain-text 增量表面，可将可选原生 binding 绑定到同一个
+`document` 与 `Y.Text`，但不能为同一文档配置第二个传输 owner。其 limit、cursor 模型和富文本
+边界见 [原生编辑器 binding 指南](yjs-native-editor-bindings.md)。
+
+将 `YJSHandler` 挂到 `/yjs/` 后，该 client 即连接 `/yjs/notes`，无需额外 adapter
+协议。浏览器鉴权应使用同源（或正确 scope）的 Secure、HttpOnly session cookie。浏览器
+WebSocket 不能附带 `Authorization` header；把长期 bearer token 放进
+`WebsocketProvider` query 参数很容易被 URL、代理日志和诊断信息泄露。若跨站部署无法使用
+cookie，应由已认证 HTTPS endpoint 签发极短期、绑定 room、单次使用的 connection ticket，
+并在全部代理中脱敏；ticket 的重放保护属于应用自身的安全契约。
+
+`Authenticate` 仍会在升级前执行，因此 cookie 校验保持为普通应用认证：
+
+```go
+Authenticate: func(request *http.Request) (extensions.Peer, error) {
+    session, err := authenticateSessionCookie(request)
+    if err != nil {
+        return extensions.Peer{}, extensions.ErrUnauthorized
+    }
+    return extensions.Peer{ID: session.Subject}, nil
+},
+```
+
+provider URL 和 room 选择应由产品配置决定，不要让页面选择未配置的 room、store identity、
+schema、epoch 或字节限制。
+
 ## 挂载一个显式 room
 
 room 必须在启动时配置；不可信 URL 不能创建会被服务端保留的状态。

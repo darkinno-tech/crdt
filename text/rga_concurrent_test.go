@@ -78,7 +78,15 @@ func TestRGAConcurrentMutationReadAndRecovery(t *testing.T) {
 				errs <- err
 				return
 			}
+			if _, err := value.MarshalPackedBinary(); err != nil {
+				errs <- err
+				return
+			}
 			if _, err := value.SnapshotRunCurrentState(); err != nil {
+				errs <- err
+				return
+			}
+			if _, err := value.SnapshotPackedCurrentState(); err != nil {
 				errs <- err
 				return
 			}

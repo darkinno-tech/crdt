@@ -128,12 +128,13 @@ parent-before-child frames are safe: valid dependencies are retained only
 within the configured pending-work bounds. A checksum, a profile, or a
 successful decode is never authentication or authorization.
 
-The same `FrameLimits` bound outbound updates. Choose them to accommodate the
-largest single local operation permitted by `DocumentOptions`; if a local
-operation returns an output-frame limit error after it changed local state,
-durably checkpoint that state and repair the outbox under a compatible group
-budget rather than silently dropping it. Keep individual values and delete
-ranges within the negotiated update budget.
+The same `FrameLimits` bound outbound updates. A local operation that exceeds
+that budget returns an output-frame limit error before it changes state or HLC
+state, and it does not call `OnUpdate`. Choose the limits to accommodate every
+single permitted local operation; keep individual values and delete ranges
+within the negotiated update budget. A successful local frame is validated
+once at that boundary and then handed to the outbox without a second
+serialization pass.
 
 ## Persist before reusing an ID
 

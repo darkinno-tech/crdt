@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/DarkInno/crdt"
+	"github.com/DarkInno/crdt/clock"
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/replica"
 	"github.com/DarkInno/crdt/snapshot"
@@ -387,6 +388,102 @@ func TestDocumentTreeLocalLimitsRejectBeforeAdvancingClockOrState(t *testing.T) 
 	}
 	if clockAfter := depth.ClockState(); clockAfter != clockBefore {
 		t.Fatalf("depth limit advanced clock: got %#v, want %#v", clockAfter, clockBefore)
+	}
+}
+
+func TestDocumentTreeOutputBudgetRejectsAtomicallyAndReusesLocalFrame(t *testing.T) {
+	limits := frame.DefaultLimits()
+	limits.MaxTags = 4
+	document, err := NewWithOptionsAndOutputLimits("writer", DefaultOptions(), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, rootDelta, err := document.CreateRootMap("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := document.MarshalLocalDelta(rootDelta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnmarshalDeltaWithOptions(encoded, DefaultOptions(), limits); err != nil {
+		t.Fatalf("local frame decode = %v", err)
+	}
+	canonical, err := document.MarshalDeltaWithLimits(rootDelta, limits)
+	if err != nil || !bytes.Equal(encoded, canonical) {
+		t.Fatalf("local frame = %x, canonical = %x, err = %v", encoded, canonical, err)
+	}
+	encoded[0] ^= 0xff
+	owned, err := document.MarshalLocalDelta(rootDelta)
+	if err != nil || !bytes.Equal(owned, canonical) {
+		t.Fatalf("local frame ownership = %x, want %x, err = %v", owned, canonical, err)
+	}
+
+	stateBefore, err := document.MarshalBinaryWithLimits(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockBefore := document.ClockState()
+	if _, _, err := root.CreateMap("nested"); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("nested output budget = %v", err)
+	}
+	stateAfter, err := document.MarshalBinaryWithLimits(limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateAfter, stateBefore) || document.ClockState() != clockBefore {
+		t.Fatalf("rejected local delta changed document\n got=%x %#v\nwant=%x %#v", stateAfter, document.ClockState(), stateBefore, clockBefore)
+	}
+	if _, ok := root.Map("nested"); ok {
+		t.Fatal("rejected nested map is visible")
+	}
+
+	invalid := frame.DefaultLimits()
+	invalid.MaxFrameBytes = 1
+	if _, err := NewFromClockWithOptionsAndOutputLimits(clock.State{ReplicaID: "writer"}, DefaultOptions(), invalid); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("invalid output budget = %v", err)
+	}
+
+	unbounded := mustDocument(t, "unbounded")
+	_, unboundedDelta, err := unbounded.CreateRootMap("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := unbounded.MarshalLocalDelta(unboundedDelta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := unboundedDelta.MarshalBinary()
+	if err != nil || !bytes.Equal(wire, want) {
+		t.Fatalf("unbounded local frame = %x, want %x, err = %v", wire, want, err)
+	}
+
+	var nilDocument *Document
+	if _, err := nilDocument.MarshalDeltaWithLimits(Delta{}, limits); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("nil delta marshal = %v", err)
+	}
+	if _, err := nilDocument.MarshalLocalDelta(Delta{}); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("nil local marshal = %v", err)
+	}
+
+	bare := &Document{options: DefaultOptions()}
+	if _, _, err := bare.CreateRootMap("workspace"); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("missing clock root = %v", err)
+	}
+	if err := bare.ApplyDelta(Delta{}); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("missing clock apply = %v", err)
+	}
+	if _, _, err := bare.MarshalBinaryWithClockStateAndLimits(limits); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("missing clock checkpoint = %v", err)
+	}
+	if _, err := bare.SnapshotCurrentStateWithLimits(limits); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("missing clock snapshot = %v", err)
+	}
+	if err := bare.applyLocalLocked(nil, nil); !errors.Is(err, ErrInvalidDelta) {
+		t.Fatalf("nil local delta = %v", err)
+	}
+	if err := bare.applyLocalLocked(&Delta{}, nil); !errors.Is(err, ErrNilDocument) {
+		t.Fatalf("nil local clock = %v", err)
 	}
 }
 

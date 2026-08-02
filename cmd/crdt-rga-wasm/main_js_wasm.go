@@ -1,11 +1,11 @@
 //go:build js && wasm
 
 // crdt-rga-wasm exposes the bounded RGA browser runtime through one small
-// syscall/js surface. The default artifact uses compact run-v2 frames; an
-// explicitly built legacy v1 artifact remains available for migration. It
-// deliberately does not provide networking, identity, manifest negotiation,
-// persistence, or authorization; applications own those boundaries before
-// passing framed bytes to this module.
+// syscall/js surface. The default artifact uses compact run-v2 frames; legacy
+// v1 and explicitly negotiated packed-v3 artifacts remain available for their
+// respective manifest groups. It deliberately does not provide networking,
+// identity, manifest negotiation, persistence, or authorization; applications
+// own those boundaries before passing framed bytes to this module.
 package main
 
 import (
@@ -258,6 +258,8 @@ func runtimeOptions() (clientwasm.RGAOptions, error) {
 		return clientwasm.DefaultRunRGAOptions(), nil
 	case "v1":
 		return clientwasm.DefaultRGAOptions(), nil
+	case "packed-v3":
+		return clientwasm.DefaultPackedRGAOptions(), nil
 	default:
 		return clientwasm.RGAOptions{}, errors.New("wasm: unsupported build wire format")
 	}

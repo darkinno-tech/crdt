@@ -25,6 +25,18 @@ func TestLegacyFrameTypeUsesScalarV1Contract(t *testing.T) {
 	}
 }
 
+func TestPackedFrameTypeUsesDistinctV3Contract(t *testing.T) {
+	if PackedV3SemanticsVersion != 3 {
+		t.Fatalf("PackedV3SemanticsVersion = %d, want 3", PackedV3SemanticsVersion)
+	}
+	if got, want := PackedFrameType(), (crdt.FrameType{StateID: crdt.TypeIDRGAPackedState, DeltaID: crdt.TypeIDRGAPackedDelta, SemanticsVersion: PackedV3SemanticsVersion, UsesHLC: true}); got != want {
+		t.Fatalf("PackedFrameType() = %#v, want %#v", got, want)
+	}
+	if PackedFrameType() == StableFrameType() {
+		t.Fatal("packed-v3 unexpectedly aliases default run-v2")
+	}
+}
+
 func TestRGARetainsPositionUntilCompaction(t *testing.T) {
 	value := mustRGA(t, "writer")
 	insert := mustInsertRGA(t, value, 0, "a")

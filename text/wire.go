@@ -64,7 +64,11 @@ func marshalRGAWithLimits(typeID uint64, nodes map[Position]node, tombstones map
 		if err := addWireTagSize(&payloadSize, id, limits); err != nil {
 			return nil, err
 		}
-		additional := frame.UvarintSize(uint64(item.rune))
+		scalar, ok := encodeRunScalar(item.rune)
+		if !ok {
+			return nil, frame.ErrInvalidFrame
+		}
+		additional := frame.UvarintSize(scalar)
 		if item.parent.Valid() {
 			additional += 1 + frame.TagSize(item.parent)
 		} else {
@@ -92,6 +96,10 @@ func marshalRGAWithLimits(typeID uint64, nodes map[Position]node, tombstones map
 		output := frame.AppendUvarint(payload[:0], uint64(len(ids)))
 		for _, id := range ids {
 			item := nodes[id]
+			scalar, ok := encodeRunScalar(item.rune)
+			if !ok {
+				return frame.ErrInvalidFrame
+			}
 			output = frame.AppendTag(output, id)
 			if item.parent.Valid() {
 				output = frame.AppendUvarint(output, 1)
@@ -99,7 +107,7 @@ func marshalRGAWithLimits(typeID uint64, nodes map[Position]node, tombstones map
 			} else {
 				output = frame.AppendUvarint(output, 0)
 			}
-			output = frame.AppendUvarint(output, uint64(item.rune))
+			output = frame.AppendUvarint(output, scalar)
 		}
 		output = frame.AppendUvarint(output, uint64(len(tombIDs)))
 		for _, id := range tombIDs {
@@ -237,6 +245,8 @@ func NewFromSnapshot(saved snapshot.Snapshot) (*RGA, error) {
 		unmarshal = r.UnmarshalBinary
 	case crdt.TypeIDRGARunState:
 		unmarshal = r.UnmarshalRunBinary
+	case crdt.TypeIDRGAPackedState:
+		unmarshal = r.UnmarshalPackedBinary
 	default:
 		return nil, ErrInvalidDelta
 	}
@@ -270,6 +280,8 @@ func NewFromSnapshotWithOptions(saved snapshot.Snapshot, options Options, limits
 		unmarshal = func(data []byte) error { return r.UnmarshalBinaryWithLimits(data, limits) }
 	case crdt.TypeIDRGARunState:
 		unmarshal = func(data []byte) error { return r.UnmarshalRunBinaryWithLimits(data, limits) }
+	case crdt.TypeIDRGAPackedState:
+		unmarshal = func(data []byte) error { return r.UnmarshalPackedBinaryWithLimits(data, limits) }
 	default:
 		return nil, ErrInvalidDelta
 	}
@@ -305,13 +317,14 @@ func unmarshalRGA(data []byte, expectedType uint64, limits frame.DecoderLimits, 
 	}
 	pos := 0
 	count, next, ok := frame.ReadUvarint(decoded.Payload, pos)
-	if !ok || count > uint64(limits.MaxElements) || count > uint64(limits.MaxTags) {
+	countInt, countFitsInt := runCountAsInt(count)
+	if !ok || !countFitsInt || limits.MaxElements < 0 || limits.MaxTags < 0 || countInt > limits.MaxElements || countInt > limits.MaxTags {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	pos = next
-	nodes := make(map[Position]node, int(count))
+	nodes := make(map[Position]node, countInt)
 	var previous Position
-	for index := uint64(0); index < count; index++ {
+	for index := 0; index < countInt; index++ {
 		id, afterID, ok := frame.ReadTag(decoded.Payload, pos, limits.MaxStringBytes)
 		if !ok || (index > 0 && previous.Compare(id) >= 0) {
 			return nil, nil, frame.ErrInvalidFrame
@@ -331,24 +344,26 @@ func unmarshalRGA(data []byte, expectedType uint64, limits frame.DecoderLimits, 
 			pos = next
 		}
 		runeValue, next, ok := frame.ReadUvarint(decoded.Payload, pos)
-		if !ok || runeValue > uint64(^uint32(0)) {
+		scalar, validScalar := decodeRunScalar(runeValue)
+		if !ok || !validScalar {
 			return nil, nil, frame.ErrInvalidFrame
 		}
 		pos = next
-		item := node{parent: parent, rune: rune(runeValue)}
+		item := node{parent: parent, rune: scalar}
 		if err := validateDelta(Delta{nodes: map[Position]node{id: item}}); err != nil {
 			return nil, nil, frame.ErrInvalidFrame
 		}
 		nodes[id], previous = item, id
 	}
 	tombCount, next, ok := frame.ReadUvarint(decoded.Payload, pos)
-	if !ok || tombCount > uint64(limits.MaxTags-int(count)) {
+	tombstoneCount, tombstonesFitInt := runCountAsInt(tombCount)
+	if !ok || !tombstonesFitInt || tombstoneCount > limits.MaxTags-countInt {
 		return nil, nil, frame.ErrInvalidFrame
 	}
 	pos = next
-	tombstones := make(map[Position]struct{}, int(tombCount))
+	tombstones := make(map[Position]struct{}, tombstoneCount)
 	var previousTomb Position
-	for index := uint64(0); index < tombCount; index++ {
+	for index := 0; index < tombstoneCount; index++ {
 		id, next, ok := frame.ReadTag(decoded.Payload, pos, limits.MaxStringBytes)
 		if !ok || (index > 0 && previousTomb.Compare(id) >= 0) {
 			return nil, nil, frame.ErrInvalidFrame

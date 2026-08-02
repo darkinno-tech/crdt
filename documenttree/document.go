@@ -242,18 +242,24 @@ func cloneValue(value Value) Value {
 }
 
 // Delta is an opaque, joinable partial document-tree state. Local mutation or
-// UnmarshalDelta are the only ways to construct a meaningful Delta.
-type Delta struct{ state documentState }
+// UnmarshalDelta are the only ways to construct a meaningful Delta. A local
+// delta may retain its already-validated canonical outbox frame so a facade
+// can hand it off without serializing the same mutation twice.
+type Delta struct {
+	state documentState
+	frame []byte
+}
 
 // Document is a bounded collection of LWW maps and RGA arrays. The document
 // lock protects every object so a mutation that creates a child is atomic with
 // its parent reference; handles never carry independent mutable state.
 type Document struct {
-	mu        sync.RWMutex
-	replicaID string
-	clock     *clock.HLC
-	options   Options
-	state     documentState
+	mu           sync.RWMutex
+	replicaID    string
+	clock        *clock.HLC
+	options      Options
+	outputLimits *frame.DecoderLimits
+	state        documentState
 }
 
 var _ crdt.CRDT[*Document] = (*Document)(nil)
@@ -269,8 +275,28 @@ func NewWithOptions(replicaID string, options Options) (*Document, error) {
 	return NewFromClockWithOptions(clock.State{ReplicaID: replicaID}, options)
 }
 
+// NewWithOptionsAndOutputLimits constructs a document that rejects a local
+// mutation before it changes state when its canonical delta cannot fit the
+// selected outbox frame budget. Remote decoding remains independently bounded
+// by the limits passed to UnmarshalDeltaWithOptions.
+func NewWithOptionsAndOutputLimits(replicaID string, options Options, outputLimits frame.DecoderLimits) (*Document, error) {
+	return NewFromClockWithOptionsAndOutputLimits(clock.State{ReplicaID: replicaID}, options, outputLimits)
+}
+
 // NewFromClockWithOptions restores an empty document using a persisted HLC.
 func NewFromClockWithOptions(state clock.State, options Options) (*Document, error) {
+	return newFromClockWithOptions(state, options, nil)
+}
+
+// NewFromClockWithOptionsAndOutputLimits restores a document with explicit
+// retained-state and local outbox budgets. The output budget is checked before
+// every local mutation is committed, so an encoding failure cannot create a
+// local-only update.
+func NewFromClockWithOptionsAndOutputLimits(state clock.State, options Options, outputLimits frame.DecoderLimits) (*Document, error) {
+	return newFromClockWithOptions(state, options, &outputLimits)
+}
+
+func newFromClockWithOptions(state clock.State, options Options, outputLimits *frame.DecoderLimits) (*Document, error) {
 	if !(crdt.Tag{ReplicaID: state.ReplicaID}).Valid() {
 		return nil, ErrInvalidReplica
 	}
@@ -281,16 +307,30 @@ func NewFromClockWithOptions(state clock.State, options Options) (*Document, err
 	if err != nil {
 		return nil, err
 	}
-	return &Document{replicaID: state.ReplicaID, clock: hlc, options: options, state: newDocumentState()}, nil
+	document := &Document{replicaID: state.ReplicaID, clock: hlc, options: options, state: newDocumentState()}
+	if outputLimits != nil {
+		limits := *outputLimits
+		if _, err := marshalState(crdt.TypeIDDocumentTreeDelta, newDocumentState(), options, limits, true); err != nil {
+			return nil, err
+		}
+		document.outputLimits = &limits
+	}
+	return document, nil
 }
 
 // ClockState returns the state that must be atomically persisted with a
 // complete document snapshot before this replica ID is used after restart.
 func (d *Document) ClockState() clock.State {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return clock.State{}
 	}
-	return d.clock.Snapshot()
+	d.mu.RLock()
+	hlc := d.clock
+	d.mu.RUnlock()
+	if hlc == nil {
+		return clock.State{}
+	}
+	return hlc.Snapshot()
 }
 
 // CreateRootMap creates one named map root, or returns the current map root
@@ -312,7 +352,7 @@ func (d *Document) CreateRootArray(name string) (*Array, Delta, error) {
 }
 
 func (d *Document) createRoot(name string, kind Kind) (*Map, Delta, error) {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return nil, Delta{}, ErrNilDocument
 	}
 	if !d.validName(name, d.options.MaxKeyBytes) {
@@ -320,6 +360,9 @@ func (d *Document) createRoot(name string, kind Kind) (*Map, Delta, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.clock == nil {
+		return nil, Delta{}, ErrNilDocument
+	}
 	if current, exists := d.state.roots[name]; exists {
 		if current.kind != kind {
 			return nil, Delta{}, ErrTypeMismatch
@@ -331,7 +374,7 @@ func (d *Document) createRoot(name string, kind Kind) (*Map, Delta, error) {
 	if (!rootExists(d.state.roots, name) && len(d.state.roots) >= d.options.MaxRoots) || len(d.state.objects) >= d.options.MaxObjects {
 		return nil, Delta{}, ErrResourceLimit
 	}
-	id, err := d.clock.Now()
+	id, nextClock, err := d.nextLocalTagLocked()
 	if err != nil {
 		return nil, Delta{}, err
 	}
@@ -339,7 +382,7 @@ func (d *Document) createRoot(name string, kind Kind) (*Map, Delta, error) {
 	state.roots[name] = rootRecord{name: name, id: id, kind: kind}
 	state.objects[id] = objectDecl{id: id, kind: kind, owner: objectOwner{kind: ownerRoot, rootName: name}}
 	delta := Delta{state: state}
-	if err := d.applyLocalLocked(delta); err != nil {
+	if err := d.applyLocalLocked(&delta, nextClock); err != nil {
 		return nil, Delta{}, err
 	}
 	return &Map{document: d, id: id}, delta, nil
@@ -400,7 +443,7 @@ func (d *Document) Array(id ObjectID) (*Array, bool) {
 // records for parent-before-child reordering but never serializes them as a
 // complete state.
 func (d *Document) ApplyDelta(delta Delta) error {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return ErrNilDocument
 	}
 	if err := validateState(delta.state, d.options, true); err != nil {
@@ -408,6 +451,9 @@ func (d *Document) ApplyDelta(delta Delta) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.clock == nil {
+		return ErrNilDocument
+	}
 	candidate, changed, greatest, err := joinState(d.state, delta.state, d.options)
 	if err != nil {
 		return err
@@ -424,7 +470,20 @@ func (d *Document) ApplyDelta(delta Delta) error {
 	return nil
 }
 
-func (d *Document) applyLocalLocked(delta Delta) error {
+func (d *Document) applyLocalLocked(delta *Delta, nextClock *clock.HLC) error {
+	if delta == nil {
+		return ErrInvalidDelta
+	}
+	if nextClock == nil {
+		return ErrNilDocument
+	}
+	if d.outputLimits != nil {
+		encoded, err := marshalState(crdt.TypeIDDocumentTreeDelta, delta.state, d.options, *d.outputLimits, true)
+		if err != nil {
+			return err
+		}
+		delta.frame = encoded
+	}
 	candidate, changed, _, err := joinState(d.state, delta.state, d.options)
 	if err != nil {
 		return err
@@ -432,13 +491,32 @@ func (d *Document) applyLocalLocked(delta Delta) error {
 	if changed {
 		d.state = candidate
 	}
+	d.clock = nextClock
 	return nil
+}
+
+// nextLocalTagLocked creates a candidate clock and tag without changing d.
+// The caller installs the candidate only after all local-state and frame
+// preflights pass, preserving the checkpoint's state/HLC atomicity on error.
+func (d *Document) nextLocalTagLocked() (crdt.Tag, *clock.HLC, error) {
+	if d == nil || d.clock == nil {
+		return crdt.Tag{}, nil, ErrNilDocument
+	}
+	nextClock, err := clock.NewHLCFromState(d.clock.Snapshot())
+	if err != nil {
+		return crdt.Tag{}, nil, err
+	}
+	tag, err := nextClock.Now()
+	if err != nil {
+		return crdt.Tag{}, nil, err
+	}
+	return tag, nextClock, nil
 }
 
 // Merge joins another complete or incomplete document state without exposing
 // mutable internals. Both documents retain their independent HLC identities.
 func (d *Document) Merge(other *Document) error {
-	if d == nil || other == nil || d.clock == nil || other.clock == nil {
+	if d == nil || other == nil {
 		return ErrNilDocument
 	}
 	if d == other {
@@ -484,6 +562,34 @@ func (d *Document) MarshalBinaryWithLimits(limits frame.DecoderLimits) ([]byte, 
 	return marshalState(crdt.TypeIDDocumentTreeState, state, d.options, limits, false)
 }
 
+// MarshalDeltaWithLimits encodes delta using this document's retained-value
+// policy and an explicit transport budget. Documents created with an output
+// budget have already checked the same encoding before accepting local delta,
+// so this is the safe outbox handoff for those mutations.
+func (d *Document) MarshalDeltaWithLimits(delta Delta, limits frame.DecoderLimits) ([]byte, error) {
+	if d == nil {
+		return nil, ErrNilDocument
+	}
+	return marshalState(crdt.TypeIDDocumentTreeDelta, delta.state, d.options, limits, true)
+}
+
+// MarshalLocalDelta returns the already-validated frame for a delta returned
+// by a local mutation on d when d has an output budget. It otherwise encodes
+// with that budget. Callers must use it only with a delta from this document;
+// untrusted deltas must go through UnmarshalDeltaWithOptions instead.
+func (d *Document) MarshalLocalDelta(delta Delta) ([]byte, error) {
+	if d == nil {
+		return nil, ErrNilDocument
+	}
+	if delta.frame != nil {
+		return append([]byte(nil), delta.frame...), nil
+	}
+	if d.outputLimits == nil {
+		return d.MarshalDeltaWithLimits(delta, frame.DefaultLimits())
+	}
+	return d.MarshalDeltaWithLimits(delta, *d.outputLimits)
+}
+
 // MarshalBinaryWithClockState returns state and the HLC state to persist in
 // one transaction before a replica ID can be reused.
 func (d *Document) MarshalBinaryWithClockState() ([]byte, clock.State, error) {
@@ -491,10 +597,14 @@ func (d *Document) MarshalBinaryWithClockState() ([]byte, clock.State, error) {
 }
 
 func (d *Document) MarshalBinaryWithClockStateAndLimits(limits frame.DecoderLimits) ([]byte, clock.State, error) {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return nil, clock.State{}, ErrNilDocument
 	}
 	d.mu.RLock()
+	if d.clock == nil {
+		d.mu.RUnlock()
+		return nil, clock.State{}, ErrNilDocument
+	}
 	state, clockState := d.state.clone(), d.clock.Snapshot()
 	d.mu.RUnlock()
 	encoded, err := marshalState(crdt.TypeIDDocumentTreeState, state, d.options, limits, false)
@@ -507,10 +617,14 @@ func (d *Document) SnapshotCurrentState() (snapshot.Snapshot, error) {
 }
 
 func (d *Document) SnapshotCurrentStateWithLimits(limits frame.DecoderLimits) (snapshot.Snapshot, error) {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return snapshot.Snapshot{}, ErrNilDocument
 	}
 	d.mu.RLock()
+	if d.clock == nil {
+		d.mu.RUnlock()
+		return snapshot.Snapshot{}, ErrNilDocument
+	}
 	state, clockState := d.state.clone(), d.clock.Snapshot()
 	d.mu.RUnlock()
 	encoded, err := marshalState(crdt.TypeIDDocumentTreeState, state, d.options, limits, false)
@@ -557,7 +671,7 @@ func (d *Document) UnmarshalBinary(data []byte) error {
 }
 
 func (d *Document) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLimits) error {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return ErrNilDocument
 	}
 	state, err := unmarshalState(data, crdt.TypeIDDocumentTreeState, d.options, limits, false)
@@ -567,6 +681,9 @@ func (d *Document) UnmarshalBinaryWithLimits(data []byte, limits frame.DecoderLi
 	greatest := greatestStateTag(state)
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.clock == nil {
+		return ErrNilDocument
+	}
 	if greatest.Valid() {
 		if err := d.clock.Witness(greatest); err != nil {
 			return err
@@ -769,7 +886,7 @@ func (a *Array) Delete(index, count int) (Delta, error) {
 		}
 	}
 	delta := Delta{state: state}
-	if err := a.document.applyLocalLocked(delta); err != nil {
+	if err := a.document.applyLocalLocked(&delta, a.document.clock); err != nil {
 		return Delta{}, err
 	}
 	return delta, nil
@@ -792,7 +909,7 @@ func (a *Array) Array(index int) (*Array, bool) {
 }
 
 func (d *Document) setMapValue(target ObjectID, key string, value Value) (Delta, error) {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return Delta{}, ErrNilDocument
 	}
 	if !d.validName(key, d.options.MaxKeyBytes) {
@@ -803,6 +920,9 @@ func (d *Document) setMapValue(target ObjectID, key string, value Value) (Delta,
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.clock == nil {
+		return Delta{}, ErrNilDocument
+	}
 	if !d.isObjectKindLocked(target, KindMap) {
 		return Delta{}, ErrUnknownObject
 	}
@@ -810,21 +930,21 @@ func (d *Document) setMapValue(target ObjectID, key string, value Value) (Delta,
 	if _, exists := entries[key]; !exists && countMapEntries(d.state) >= d.options.MaxMapEntries {
 		return Delta{}, ErrResourceLimit
 	}
-	tag, err := d.clock.Now()
+	tag, nextClock, err := d.nextLocalTagLocked()
 	if err != nil {
 		return Delta{}, err
 	}
 	state := newDocumentState()
 	state.maps[target] = map[string]mapEntry{key: {tag: tag, present: true, value: cloneValue(value)}}
 	delta := Delta{state: state}
-	if err := d.applyLocalLocked(delta); err != nil {
+	if err := d.applyLocalLocked(&delta, nextClock); err != nil {
 		return Delta{}, err
 	}
 	return delta, nil
 }
 
 func (d *Document) deleteMapValue(target ObjectID, key string) (Delta, error) {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return Delta{}, ErrNilDocument
 	}
 	if !d.validName(key, d.options.MaxKeyBytes) {
@@ -832,6 +952,9 @@ func (d *Document) deleteMapValue(target ObjectID, key string) (Delta, error) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.clock == nil {
+		return Delta{}, ErrNilDocument
+	}
 	if !d.isObjectKindLocked(target, KindMap) {
 		return Delta{}, ErrUnknownObject
 	}
@@ -839,21 +962,21 @@ func (d *Document) deleteMapValue(target ObjectID, key string) (Delta, error) {
 	if _, exists := entries[key]; !exists && countMapEntries(d.state) >= d.options.MaxMapEntries {
 		return Delta{}, ErrResourceLimit
 	}
-	tag, err := d.clock.Now()
+	tag, nextClock, err := d.nextLocalTagLocked()
 	if err != nil {
 		return Delta{}, err
 	}
 	state := newDocumentState()
 	state.maps[target] = map[string]mapEntry{key: {tag: tag}}
 	delta := Delta{state: state}
-	if err := d.applyLocalLocked(delta); err != nil {
+	if err := d.applyLocalLocked(&delta, nextClock); err != nil {
 		return Delta{}, err
 	}
 	return delta, nil
 }
 
 func (d *Document) createMapChild(target ObjectID, key string, kind Kind) (*Map, Delta, error) {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return nil, Delta{}, ErrNilDocument
 	}
 	if !d.validName(key, d.options.MaxKeyBytes) {
@@ -861,6 +984,9 @@ func (d *Document) createMapChild(target ObjectID, key string, kind Kind) (*Map,
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.clock == nil {
+		return nil, Delta{}, ErrNilDocument
+	}
 	if !d.isObjectKindLocked(target, KindMap) {
 		return nil, Delta{}, ErrUnknownObject
 	}
@@ -874,7 +1000,7 @@ func (d *Document) createMapChild(target ObjectID, key string, kind Kind) (*Map,
 	if _, exists := entries[key]; !exists && countMapEntries(d.state) >= d.options.MaxMapEntries {
 		return nil, Delta{}, ErrResourceLimit
 	}
-	id, err := d.clock.Now()
+	id, nextClock, err := d.nextLocalTagLocked()
 	if err != nil {
 		return nil, Delta{}, err
 	}
@@ -882,14 +1008,14 @@ func (d *Document) createMapChild(target ObjectID, key string, kind Kind) (*Map,
 	state.objects[id] = objectDecl{id: id, kind: kind, owner: objectOwner{kind: ownerMap, parent: target, key: key}}
 	state.maps[target] = map[string]mapEntry{key: {tag: id, present: true, value: Value{Kind: ValueObject, Object: ObjectRef{ID: id, Kind: kind}}}}
 	delta := Delta{state: state}
-	if err := d.applyLocalLocked(delta); err != nil {
+	if err := d.applyLocalLocked(&delta, nextClock); err != nil {
 		return nil, Delta{}, err
 	}
 	return &Map{document: d, id: id}, delta, nil
 }
 
 func (d *Document) insertArrayValue(target ObjectID, index int, value Value, childKind Kind) (Delta, error) {
-	if d == nil || d.clock == nil {
+	if d == nil {
 		return Delta{}, ErrNilDocument
 	}
 	if childKind != 0 && !childKind.valid() {
@@ -902,6 +1028,9 @@ func (d *Document) insertArrayValue(target ObjectID, index int, value Value, chi
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.clock == nil {
+		return Delta{}, ErrNilDocument
+	}
 	if !d.isObjectKindLocked(target, KindArray) {
 		return Delta{}, ErrUnknownObject
 	}
@@ -915,7 +1044,7 @@ func (d *Document) insertArrayValue(target ObjectID, index int, value Value, chi
 	if childKind != 0 && d.childDepthLocked(target) > d.options.MaxDepth {
 		return Delta{}, ErrResourceLimit
 	}
-	id, err := d.clock.Now()
+	id, nextClock, err := d.nextLocalTagLocked()
 	if err != nil {
 		return Delta{}, err
 	}
@@ -930,7 +1059,7 @@ func (d *Document) insertArrayValue(target ObjectID, index int, value Value, chi
 	}
 	state.arrays[target] = map[ObjectID]arrayNode{id: {id: id, parent: parent, value: cloneValue(value)}}
 	delta := Delta{state: state}
-	if err := d.applyLocalLocked(delta); err != nil {
+	if err := d.applyLocalLocked(&delta, nextClock); err != nil {
 		return Delta{}, err
 	}
 	return delta, nil

@@ -6,13 +6,13 @@ import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
 import { MemoryRGAWasmBrowserPersistence, openRGAWasmBrowserDocument } from "../dist/browser.js";
-import { RGA_PROTOCOL_RUN_V2, RGA_PROTOCOL_V1, initRGAWasm } from "../dist/wasm.js";
+import { RGA_PROTOCOL_PACKED_V3, RGA_PROTOCOL_RUN_V2, RGA_PROTOCOL_V1, initRGAWasm } from "../dist/wasm.js";
 
 const wasmDirectory = process.env.CRDT_WASM_DIR;
 if (typeof wasmDirectory !== "string" || wasmDirectory === "") {
   throw new Error("CRDT_WASM_DIR must point to artifacts built by make wasm");
 }
-const expectedProtocol = process.env.CRDT_RGA_PROTOCOL === "v1" ? RGA_PROTOCOL_V1 : RGA_PROTOCOL_RUN_V2;
+const expectedProtocol = protocolForArtifact(process.env.CRDT_RGA_PROTOCOL);
 
 await import(pathToFileURL(join(wasmDirectory, "wasm_exec.js")).href);
 const assets = await startAssetServer(wasmDirectory);
@@ -124,6 +124,26 @@ test("three offline Wasm RGA browser actors converge after reverse duplicate del
   }
 });
 
+test("packed-v3 Wasm restores one bounded 64Ki-rune initial snapshot", (t) => {
+  if (expectedProtocol !== RGA_PROTOCOL_PACKED_V3) {
+    t.skip("requires the separately built packed-v3 artifact");
+    return;
+  }
+  const source = runtime.create("packed-initial-source");
+  const initialRunes = 64 << 10;
+  const chunkRunes = 12 << 10;
+  const value = "协".repeat(initialRunes);
+  for (let offset = 0; offset < initialRunes; offset += chunkRunes) {
+    source.insert(offset, value.slice(offset, Math.min(offset + chunkRunes, initialRunes)));
+  }
+  const snapshot = source.snapshot();
+  assert.ok(snapshot.state.byteLength < 256 << 10, `packed state is ${snapshot.state.byteLength} bytes`);
+  const receiver = runtime.restore(snapshot);
+  assert.equal(receiver.text(), value);
+  assert.equal(source.close(), true);
+  assert.equal(receiver.close(), true);
+});
+
 test("an RGA receipt never checkpoints a later local frame whose append has failed", async () => {
   const persistence = new FailSecondRGAAppendPersistence();
   const document = await openRGAWasmBrowserDocument({
@@ -188,6 +208,13 @@ async function waitFor(predicate) {
     if (Date.now() >= deadline) throw new Error("live Wasm RGA multi-tab delivery timed out");
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+function protocolForArtifact(value) {
+  if (value === undefined || value === "run-v2") return RGA_PROTOCOL_RUN_V2;
+  if (value === "v1") return RGA_PROTOCOL_V1;
+  if (value === "packed-v3") return RGA_PROTOCOL_PACKED_V3;
+  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, or v1");
 }
 
 async function startAssetServer(directory) {

@@ -105,6 +105,8 @@ func (r *RGA) MarshalDeltaSinceBaseWithLimits(base SnapshotBase, limits frame.De
 		return marshalRGAWithLimits(crdt.TypeIDRGADelta, delta.nodes, delta.tombstones, limits)
 	case crdt.TypeIDRGARunState:
 		return marshalRGARun(crdt.TypeIDRGARunDelta, delta.nodes, delta.tombstones, limits)
+	case crdt.TypeIDRGAPackedState:
+		return marshalRGAPacked(crdt.TypeIDRGAPackedDelta, delta.nodes, delta.tombstones, limits)
 	default:
 		return nil, ErrInvalidSnapshot
 	}
@@ -174,6 +176,8 @@ func rgaSnapshotState(base snapshot.Snapshot, limits frame.DecoderLimits) (uint6
 		nodes, tombstones, err = unmarshalRGA(data, crdt.TypeIDRGAState, limits, true)
 	case crdt.TypeIDRGARunState:
 		nodes, tombstones, err = unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true)
+	case crdt.TypeIDRGAPackedState:
+		nodes, tombstones, err = unmarshalRGAPacked(data, crdt.TypeIDRGAPackedState, limits, true)
 	default:
 		return 0, nil, nil, ErrInvalidSnapshot
 	}
