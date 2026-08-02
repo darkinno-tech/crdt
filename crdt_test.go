@@ -97,6 +97,7 @@ func TestFrameTypeRegistryAdmitsOnlyImplementedProtocols(t *testing.T) {
 		{TypeIDListRGAState, TypeIDListRGADelta, SemanticsVersionListRGA, true},
 		{TypeIDRichTextState, TypeIDRichTextDelta, SemanticsVersionRichText, true},
 		{TypeIDMoveRGAState, TypeIDMoveRGADelta, SemanticsVersionMoveRGA, true},
+		{TypeIDDocumentTreeState, TypeIDDocumentTreeDelta, SemanticsVersionDocumentTree, true},
 	} {
 		kind, ok := FrameTypeForState(test.stateID)
 		if !ok || kind.DeltaID != test.deltaID || kind.SemanticsVersion != test.semanticsVersion || kind.UsesHLC != test.usesHLC {
@@ -169,6 +170,9 @@ func TestProtocolPolicyIncludesEveryStableProtocolByDefault(t *testing.T) {
 	}
 	if !(ProtocolPolicy{}).SupportsFrame(TypeIDDocumentTreeState) || !(ProtocolPolicy{}).SupportsFrame(TypeIDDocumentTreeDelta) {
 		t.Fatal("default policy omitted document-tree frames")
+	}
+	if (ProtocolPolicy{}).SupportsFrame(27) || (ProtocolPolicy{}).SupportsFrame(28) {
+		t.Fatal("default policy admitted retired document-tree-v1 frames")
 	}
 }
 

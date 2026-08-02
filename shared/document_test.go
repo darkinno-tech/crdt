@@ -240,7 +240,7 @@ func TestDocumentErrorsAndOptions(t *testing.T) {
 	if err := nilArray.Insert(0, nil); !errors.Is(err, ErrNilArray) {
 		t.Fatalf("nil array insert = %v", err)
 	}
-	if profile := Profile(); profile.ID != "document/tree-v1" || profile.RequiresCodecID {
+	if profile := Profile(); profile.ID != "document/tree-v2" || profile.RequiresCodecID {
 		t.Fatalf("profile = %#v", profile)
 	}
 }
