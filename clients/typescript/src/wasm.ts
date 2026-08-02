@@ -5,6 +5,10 @@ import type { RichTextEditorOperation, RichTextSpan } from "./bindings.js";
 export const RGA_WASM_GLOBAL = "__darkinnoCRDTRGA";
 const MAX_UINT64 = (1n << 64n) - 1n;
 const TEXT_ENCODER = new TextEncoder();
+// The Go runtime publishes one process-global API. Serialize the first startup
+// so concurrent lazy imports cannot download, instantiate, and race to replace
+// that API with different Wasm instances.
+let pendingRGAWasmStartup: Promise<RawRGAAPI> | undefined;
 
 /** One exact RGA frame contract selected by an authenticated manifest. */
 export interface RGAProtocolExpectation {
@@ -348,6 +352,22 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
     return new RGAWasmRuntime(existing, readAndValidateProtocol(existing, expectedProtocol));
   }
 
+  const startup = pendingRGAWasmStartup ?? startRGAWasm(options);
+  pendingRGAWasmStartup = startup;
+  try {
+    const api = await startup;
+    return new RGAWasmRuntime(api, readAndValidateProtocol(api, expectedProtocol));
+  } finally {
+    // A failed startup must be retryable. A successful startup is subsequently
+    // found through the installed global, so retaining its Promise would only
+    // keep response and instance references alive.
+    if (pendingRGAWasmStartup === startup) {
+      pendingRGAWasmStartup = undefined;
+    }
+  }
+}
+
+async function startRGAWasm(options: InitRGAWasmOptions): Promise<RawRGAAPI> {
   const GoConstructor = globalThis.Go;
   if (typeof GoConstructor !== "function") {
     throw new CRDTRuntimeError("missing_wasm_exec");
@@ -379,8 +399,7 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
       runFailure = error;
     });
 
-  const api = await waitForAPI(options.startupTimeoutMs ?? 5_000, () => runFailure);
-  return new RGAWasmRuntime(api, readAndValidateProtocol(api, expectedProtocol));
+  return waitForAPI(options.startupTimeoutMs ?? 5_000, () => runFailure);
 }
 
 /**
