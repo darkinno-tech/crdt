@@ -1,6 +1,7 @@
 package replica
 
 import (
+	"errors"
 	"math/rand"
 	"strconv"
 	"testing"
@@ -69,7 +70,7 @@ func TestInboxRejectsUnvalidatedInternallyConstructedChange(t *testing.T) {
 		manifest: manifest,
 		delta:    []byte("not a frame"),
 	}
-	if _, err := inbox.Receive(forged); err != ErrInvalidChange {
+	if _, err := inbox.Receive(forged); !errors.Is(err, ErrInvalidChange) {
 		t.Fatalf("Receive(unvalidated forged change) = %v, want %v", err, ErrInvalidChange)
 	}
 	if got := inbox.Frontier().Counter("writer"); got != 0 {
