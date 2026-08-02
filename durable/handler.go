@@ -27,6 +27,8 @@ const (
 	defaultReplayEvents       = 4096
 	defaultReplayBytes        = 32 << 20
 	defaultStateVectorEntries = 256
+	defaultMerkleLeaves       = 4096
+	defaultMerkleBytes        = 4 << 20
 	defaultHandshakeTimeout   = 10 * time.Second
 	defaultWriteTimeout       = 10 * time.Second
 	defaultPingInterval       = 30 * time.Second
@@ -52,6 +54,8 @@ type Config struct {
 	MaxReplayEvents        int
 	MaxReplayBytes         int
 	MaxStateVectorEntries  int
+	MaxMerkleLeaves        int
+	MaxMerkleBytes         int
 	HandshakeTimeout       time.Duration
 	WriteTimeout           time.Duration
 	PingInterval           time.Duration
@@ -70,6 +74,8 @@ type limits struct {
 	maxReplayEvents       uint64
 	maxReplayBytes        uint64
 	maxStateVectorEntries int
+	maxMerkleLeaves       uint64
+	maxMerkleBytes        uint64
 	handshakeTimeout      time.Duration
 	writeTimeout          time.Duration
 	pingInterval          time.Duration
@@ -195,8 +201,15 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	protocols := []string{Subprotocol}
+	if merkleStore, supportsMerkle := handler.store.(MerkleLog); supportsMerkle && merkleStore.MerkleEnabled() {
+		protocols = append([]string{MerkleSubprotocol}, protocols...)
+	}
 	if _, supportsStateVector := handler.store.(StateVectorLog); supportsStateVector {
-		protocols = []string{StateVectorSubprotocol, Subprotocol}
+		if len(protocols) == 1 {
+			protocols = append([]string{StateVectorSubprotocol}, protocols...)
+		} else {
+			protocols = append(protocols[:1], append([]string{StateVectorSubprotocol}, protocols[1:]...)...)
+		}
 	}
 	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{
 		Subprotocols:    protocols,
@@ -207,7 +220,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.record("handshake", handshakeStarted, err)
 		return
 	}
-	if connection.Subprotocol() != Subprotocol && connection.Subprotocol() != StateVectorSubprotocol {
+	if connection.Subprotocol() != Subprotocol && connection.Subprotocol() != StateVectorSubprotocol && connection.Subprotocol() != MerkleSubprotocol {
 		handler.record("handshake", handshakeStarted, errInvalidWire)
 		_ = connection.CloseNow()
 		return
@@ -222,13 +235,54 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	client := newServerPeer(connection, handler.limits.maxQueuedEvents, handler.limits.maxQueuedBytes, handler.limits.writeTimeout)
+	defer group.remove(client)
+	defer client.close()
 	handler.record("handshake", handshakeStarted, nil)
 	replayStarted := handler.started()
-	replay, highWater, err := group.subscribe(handler.store, client, subscription, handler.limits)
+	var (
+		replay    []Event
+		highWater uint64
+		boundary  MerkleBoundary
+	)
+	if connection.Subprotocol() == MerkleSubprotocol {
+		var snapshot MerkleSnapshot
+		snapshot, err = group.subscribeMerkle(handler.store, client, subscription, handler.limits)
+		if err == nil {
+			boundary = MerkleBoundary{Root: snapshot.Root, HighWater: snapshot.HighWater, HLC: snapshot.HLC}
+			highWater = snapshot.HighWater
+			welcome, marshalErr := marshalMerkleWelcome(group.manifest, boundary)
+			if marshalErr != nil || connection.Write(handshakeContext, websocket.MessageText, welcome) != nil {
+				return
+			}
+			if subscription.merkleRoot != nil && *subscription.merkleRoot != snapshot.Root {
+				chunks, chunkErr := marshalMerkleInventoryChunks(snapshot.Leaves, controlLimit(handler.limits.maxMessageBytes))
+				if chunkErr != nil {
+					err = chunkErr
+				} else {
+					for _, chunk := range chunks {
+						if connection.Write(handshakeContext, websocket.MessageText, chunk) != nil {
+							return
+						}
+					}
+					var identities []crdt.Tag
+					identities, err = readMerkleRequest(handshakeContext, connection, handler.limits)
+					if err == nil && !snapshotContainsMerkleIdentities(snapshot, identities) {
+						err = errInvalidWire
+					}
+					if err == nil {
+						merkleStore := handler.store.(MerkleLog)
+						replay, err = merkleStore.MerkleEvents(group.manifest.GroupID, identities, handler.limits.maxReplayEvents, handler.limits.maxReplayBytes, group.manifest, group.policy, handler.limits.maxMessageBytes, handler.limits.maxActorBytes)
+					}
+				}
+			}
+		}
+	} else {
+		replay, highWater, err = group.subscribe(handler.store, client, subscription, handler.limits)
+	}
 	if err != nil {
 		handler.record("replay", replayStarted, err)
-		if errors.Is(err, ErrReplayUnavailable) {
-			if message, marshalErr := marshalError("replay_unavailable"); marshalErr == nil {
+		if errors.Is(err, ErrReplayUnavailable) || errors.Is(err, ErrAntiEntropyUnavailable) {
+			if message, marshalErr := marshalError(errorCodeFor(err)); marshalErr == nil {
 				_ = connection.Write(handshakeContext, websocket.MessageText, message)
 			}
 		}
@@ -236,11 +290,11 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	handler.record("replay", replayStarted, nil)
-	defer group.remove(client)
-	defer client.close()
-	welcome, err := marshalWelcomeForSubprotocol(connection.Subprotocol(), group.manifest, highWater)
-	if err != nil || connection.Write(handshakeContext, websocket.MessageText, welcome) != nil {
-		return
+	if connection.Subprotocol() != MerkleSubprotocol {
+		welcome, err := marshalWelcomeForSubprotocol(connection.Subprotocol(), group.manifest, highWater)
+		if err != nil || connection.Write(handshakeContext, websocket.MessageText, welcome) != nil {
+			return
+		}
 	}
 	for _, event := range replay {
 		if !client.writeEvent(handshakeContext, event) {
@@ -249,6 +303,11 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 	if connection.Subprotocol() == StateVectorSubprotocol {
 		complete, err := marshalCatchUpComplete(highWater)
+		if err != nil || connection.Write(handshakeContext, websocket.MessageText, complete) != nil {
+			return
+		}
+	} else if connection.Subprotocol() == MerkleSubprotocol {
+		complete, err := marshalMerkleComplete(boundary)
 		if err != nil || connection.Write(handshakeContext, websocket.MessageText, complete) != nil {
 			return
 		}
@@ -264,8 +323,9 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 }
 
 type subscriptionRequest struct {
-	resume uint64
-	vector *replica.Frontier
+	resume     uint64
+	vector     *replica.Frontier
+	merkleRoot *[32]byte
 }
 
 func (handler *Handler) serverHandshake(ctx context.Context, connection *websocket.Conn, peer Peer) (*Group, subscriptionRequest, error) {
@@ -275,7 +335,14 @@ func (handler *Handler) serverHandshake(ctx context.Context, connection *websock
 	}
 	var remote replica.Manifest
 	request := subscriptionRequest{}
-	if connection.Subprotocol() == StateVectorSubprotocol {
+	if connection.Subprotocol() == MerkleSubprotocol {
+		parsedRemote, root, parseErr := unmarshalMerkleHello(data)
+		if parseErr != nil {
+			return nil, subscriptionRequest{}, parseErr
+		}
+		remote = parsedRemote
+		request.merkleRoot = &root
+	} else if connection.Subprotocol() == StateVectorSubprotocol {
 		vector, parsedRemote, parseErr := stateVectorHandshake(data, handler.limits)
 		if parseErr != nil {
 			return nil, subscriptionRequest{}, parseErr
@@ -322,6 +389,65 @@ func (group *Group) subscribe(store Log, peer *serverPeer, request subscriptionR
 	}
 	group.peers[peer] = struct{}{}
 	return events, highWater, nil
+}
+
+func (group *Group) subscribeMerkle(store Log, peer *serverPeer, request subscriptionRequest, limits limits) (MerkleSnapshot, error) {
+	if request.merkleRoot == nil {
+		return MerkleSnapshot{}, errInvalidWire
+	}
+	merkleStore, ok := store.(MerkleLog)
+	if !ok || !merkleStore.MerkleEnabled() {
+		return MerkleSnapshot{}, ErrAntiEntropyUnavailable
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	snapshot, err := merkleStore.MerkleSnapshot(group.manifest.GroupID, limits.maxMerkleLeaves, limits.maxMerkleBytes, group.manifest, group.policy, limits.maxMessageBytes, limits.maxActorBytes)
+	if err != nil {
+		return MerkleSnapshot{}, err
+	}
+	group.peers[peer] = struct{}{}
+	return snapshot, nil
+}
+
+func readMerkleRequest(ctx context.Context, connection *websocket.Conn, limits limits) ([]crdt.Tag, error) {
+	identities := make([]crdt.Tag, 0)
+	for {
+		messageType, data, err := connection.Read(ctx)
+		if err != nil || messageType != websocket.MessageText {
+			return nil, errInvalidWire
+		}
+		part, done, err := unmarshalMerkleRequest(data, limits.maxActorBytes)
+		if err != nil || uint64(len(part)) > limits.maxMerkleLeaves-uint64(len(identities)) {
+			return nil, errInvalidWire
+		}
+		identities = append(identities, part...)
+		if done {
+			if err := validateMerkleIdentityRequest(identities, limits.maxMerkleLeaves, limits.maxMerkleBytes, limits.maxActorBytes); err != nil {
+				return nil, errInvalidWire
+			}
+			return identities, nil
+		}
+	}
+}
+
+func snapshotContainsMerkleIdentities(snapshot MerkleSnapshot, identities []crdt.Tag) bool {
+	leaves := make(map[string]struct{}, len(snapshot.Leaves))
+	for _, leaf := range snapshot.Leaves {
+		leaves[merkleLeafKey(leaf.HLC)] = struct{}{}
+	}
+	for _, identity := range identities {
+		if _, exists := leaves[merkleLeafKey(identity)]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func errorCodeFor(err error) string {
+	if errors.Is(err, ErrAntiEntropyUnavailable) {
+		return "anti_entropy_unavailable"
+	}
+	return "replay_unavailable"
 }
 
 func stateVectorHandshake(data []byte, limits limits) (replica.Frontier, replica.Manifest, error) {
@@ -395,6 +521,9 @@ func (group *Group) publish(peer Peer, data []byte, handler *Handler) (err error
 	}
 	if err := group.validate(change.Delta()); err != nil {
 		return fmt.Errorf("validate concrete delta: %w", err)
+	}
+	if merkleStore, supported := handler.store.(MerkleLog); supported && merkleStore.MerkleEnabled() && len(data) > handler.limits.maxMessageBytes-maxMerkleEventOverhead(handler.limits.maxActorBytes) {
+		return errInvalidWire
 	}
 	group.mu.Lock()
 	defer group.mu.Unlock()
@@ -496,7 +625,7 @@ func newServerPeer(connection *websocket.Conn, maxEvents, maxBytes int, writeTim
 }
 
 func (peer *serverPeer) enqueue(event Event) bool {
-	encoded, err := marshalEvent(event)
+	encoded, err := marshalEventForSubprotocol(peer.subprotocol(), event)
 	if err != nil {
 		return false
 	}
@@ -515,7 +644,7 @@ func (peer *serverPeer) enqueue(event Event) bool {
 }
 
 func (peer *serverPeer) writeEvent(parent context.Context, event Event) bool {
-	encoded, err := marshalEvent(event)
+	encoded, err := marshalEventForSubprotocol(peer.subprotocol(), event)
 	if err != nil {
 		return false
 	}
@@ -523,6 +652,23 @@ func (peer *serverPeer) writeEvent(parent context.Context, event Event) bool {
 	err = peer.connection.Write(writeContext, websocket.MessageBinary, encoded)
 	cancel()
 	return err == nil
+}
+
+func (peer *serverPeer) subprotocol() string {
+	if peer == nil || peer.connection == nil {
+		return Subprotocol
+	}
+	return peer.connection.Subprotocol()
+}
+
+func marshalEventForSubprotocol(subprotocol string, event Event) ([]byte, error) {
+	if subprotocol == MerkleSubprotocol {
+		return marshalMerkleEvent(event)
+	}
+	if subprotocol == Subprotocol || subprotocol == StateVectorSubprotocol {
+		return marshalEvent(event)
+	}
+	return nil, errInvalidWire
 }
 
 func (peer *serverPeer) writeLoop() {
@@ -570,7 +716,7 @@ func (peer *serverPeer) isClosed() bool {
 }
 
 func normalizeLimits(config Config) (limits, error) {
-	if config.MaxReplayEvents < 0 || config.MaxReplayBytes < 0 {
+	if config.MaxReplayEvents < 0 || config.MaxReplayBytes < 0 || config.MaxMerkleLeaves < 0 || config.MaxMerkleBytes < 0 {
 		return limits{}, ErrInvalidConfig
 	}
 	result := limits{
@@ -581,6 +727,8 @@ func normalizeLimits(config Config) (limits, error) {
 		maxReplayEvents:       uint64(config.MaxReplayEvents),
 		maxReplayBytes:        uint64(config.MaxReplayBytes),
 		maxStateVectorEntries: config.MaxStateVectorEntries,
+		maxMerkleLeaves:       uint64(config.MaxMerkleLeaves),
+		maxMerkleBytes:        uint64(config.MaxMerkleBytes),
 		handshakeTimeout:      config.HandshakeTimeout,
 		writeTimeout:          config.WriteTimeout,
 		pingInterval:          config.PingInterval,
@@ -607,6 +755,12 @@ func normalizeLimits(config Config) (limits, error) {
 	if result.maxStateVectorEntries == 0 {
 		result.maxStateVectorEntries = defaultStateVectorEntries
 	}
+	if result.maxMerkleLeaves == 0 {
+		result.maxMerkleLeaves = defaultMerkleLeaves
+	}
+	if result.maxMerkleBytes == 0 {
+		result.maxMerkleBytes = defaultMerkleBytes
+	}
 	if result.handshakeTimeout == 0 {
 		result.handshakeTimeout = defaultHandshakeTimeout
 	}
@@ -621,7 +775,7 @@ func normalizeLimits(config Config) (limits, error) {
 	}
 	frameLimits := frame.DefaultLimits()
 	maxWireBytes := frameLimits.MaxFrameBytes + result.maxActorBytes + 1 + 3*binary.MaxVarintLen64
-	if result.maxMessageBytes < 1024 || result.maxMessageBytes > maxWireBytes || result.maxActorBytes <= 0 || result.maxActorBytes > frameLimits.MaxStringBytes || result.maxQueuedEvents <= 0 || result.maxQueuedBytes < result.maxMessageBytes || result.maxReplayEvents == 0 || result.maxReplayBytes < uint64(result.maxMessageBytes) || result.maxStateVectorEntries <= 0 || result.handshakeTimeout <= 0 || result.writeTimeout <= 0 || result.pingInterval <= 0 || result.pingTimeout <= 0 {
+	if result.maxMessageBytes < 1024 || result.maxMessageBytes > maxWireBytes || result.maxActorBytes <= 0 || result.maxActorBytes > frameLimits.MaxStringBytes || result.maxQueuedEvents <= 0 || result.maxQueuedBytes < result.maxMessageBytes || result.maxReplayEvents == 0 || result.maxReplayBytes < uint64(result.maxMessageBytes) || result.maxStateVectorEntries <= 0 || result.maxMerkleLeaves == 0 || result.maxMerkleBytes < uint64(result.maxActorBytes+32) || result.handshakeTimeout <= 0 || result.writeTimeout <= 0 || result.pingInterval <= 0 || result.pingTimeout <= 0 {
 		return limits{}, ErrInvalidConfig
 	}
 	return result, nil
