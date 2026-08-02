@@ -92,6 +92,40 @@ test("browser document compacts only after receipt and restores the compacted st
   await restored.close();
 });
 
+test("browser persistence restores the sparse state vector after compaction", async () => {
+  const persistence = new MemoryNativeBrowserPersistence();
+  const document = await openNativeBrowserDocument({
+    documentID: "state-vector-compact",
+    replicaID: "writer",
+    persistence,
+    persistenceLimits: {
+      compactAfterUpdates: 1,
+      compactAfterBytes: 1,
+      maxUpdates: 100,
+      maxBytes: 1 << 20,
+    },
+    transport: {
+      send() {},
+      subscribe() {
+        return () => {};
+      },
+    },
+  });
+  document.getMap("metadata").set("title", "compacted");
+  await document.flush();
+  const vector = document.getStateVector();
+  await document.close();
+
+  const restored = await openNativeBrowserDocument({
+    documentID: "state-vector-compact",
+    replicaID: "writer",
+    persistence,
+  });
+  assert.deepEqual(restored.getStateVector(), vector);
+  assert.deepEqual(restored.encodeStateAsUpdates(vector), []);
+  await restored.close();
+});
+
 test("browser document leaves an outbox entry intact when a receipt transport fails", async () => {
   const persistence = new MemoryNativeBrowserPersistence();
   const document = await openNativeBrowserDocument({
