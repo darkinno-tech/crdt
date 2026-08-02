@@ -75,13 +75,15 @@ func DefaultRichTextOptions() RichTextOptions {
 }
 
 func (o RichTextOptions) valid() bool {
+	anchorLimits := richTextAnchorEncodingLimits(o.Decoder.MaxStringBytes)
 	return o.Document.Text.MaxNodes > 0 && o.Document.Text.MaxTombstones > 0 &&
 		o.Document.Text.MaxPendingNodes > 0 && o.Document.Text.MaxPendingBytes > 0 &&
 		o.Document.MaxMarkEntries > 0 && o.Document.MaxAttributesPerOperation > 0 &&
 		o.Decoder.MaxFrameBytes > 0 && o.Decoder.MaxPayload > 0 && o.Decoder.MaxPayload <= o.Decoder.MaxFrameBytes &&
 		o.Decoder.MaxCodecID > 0 && o.Decoder.MaxElements > 0 && o.Decoder.MaxTags > 0 && o.Decoder.MaxStringBytes > 0 &&
 		o.MaxLocalEditRunes > 0 && o.MaxLocalEditRunes <= o.Document.Text.MaxNodes &&
-		o.MaxLocalEditBytes > 0 && o.MaxLocalEditBytes <= o.Decoder.MaxFrameBytes && o.MaxLocalEditorOps > 0
+		o.MaxLocalEditBytes > 0 && o.MaxLocalEditBytes <= o.Decoder.MaxFrameBytes && o.MaxLocalEditorOps > 0 &&
+		anchorLimits.MaxBytes > 0 && anchorLimits.MaxReplicaIDBytes > 0
 }
 
 // RichTextSnapshot is the complete persistence unit for one browser document.
@@ -140,6 +142,16 @@ func (r *RichTextRuntime) MaxStringBytes() int {
 		return 0
 	}
 	return r.options.Decoder.MaxStringBytes
+}
+
+// MaxAnchorBytes reports the maximum versioned anchor-range metadata payload
+// accepted by this browser runtime. It is deliberately separate from CRDT
+// frame size because relative positions are host-owned metadata, not frames.
+func (r *RichTextRuntime) MaxAnchorBytes() int {
+	if r == nil {
+		return 0
+	}
+	return r.anchorEncodingLimits().MaxBytes
 }
 
 // MaxLocalEditBytes reports the combined inserted bytes accepted per editor transaction.
@@ -278,6 +290,85 @@ func (r *RichTextRuntime) Spans(handle uint64) ([]richtext.Span, error) {
 	return document.Spans(), nil
 }
 
+// AnchorAt returns one stable rich-text boundary for a visible rune offset.
+// The anchor may be persisted through MarshalAnchor but is never inserted into
+// a rich-text state/delta frame.
+func (r *RichTextRuntime) AnchorAt(handle uint64, offset int) (text.Anchor, error) {
+	document, err := r.document(handle)
+	if err != nil {
+		return text.Anchor{}, err
+	}
+	return document.AnchorAt(offset)
+}
+
+// ResolveAnchor resolves one retained rich-text boundary to a visible rune
+// offset. A compacted boundary fails closed with text.ErrAnchorGone.
+func (r *RichTextRuntime) ResolveAnchor(handle uint64, anchor text.Anchor) (int, error) {
+	document, err := r.document(handle)
+	if err != nil {
+		return 0, err
+	}
+	return document.ResolveAnchor(anchor)
+}
+
+// AnchorRangeAt captures two rich-text boundaries from one document revision.
+// The ordering is preserved for selections and comment ranges.
+func (r *RichTextRuntime) AnchorRangeAt(handle uint64, start, end int) (text.AnchorRange, error) {
+	document, err := r.document(handle)
+	if err != nil {
+		return text.AnchorRange{}, err
+	}
+	return document.AnchorRangeAt(start, end)
+}
+
+// ResolveAnchorRange resolves both retained boundaries from one current
+// document projection.
+func (r *RichTextRuntime) ResolveAnchorRange(handle uint64, anchors text.AnchorRange) (start, end int, err error) {
+	document, err := r.document(handle)
+	if err != nil {
+		return 0, 0, err
+	}
+	return document.ResolveAnchorRange(anchors)
+}
+
+// MarshalAnchor encodes one relative position under this runtime's browser
+// metadata limits. The caller must bind the bytes to an authenticated document
+// and group before storing or sending them.
+func (r *RichTextRuntime) MarshalAnchor(anchor text.Anchor) ([]byte, error) {
+	if r == nil {
+		return nil, ErrUnknownDocument
+	}
+	return anchor.MarshalBinaryWithLimits(r.anchorEncodingLimits())
+}
+
+// UnmarshalAnchor decodes one bounded relative-position metadata value. It
+// does not claim that the value belongs to any particular document; callers
+// must resolve it through a chosen handle.
+func (r *RichTextRuntime) UnmarshalAnchor(encoded []byte) (text.Anchor, error) {
+	if r == nil {
+		return text.Anchor{}, ErrUnknownDocument
+	}
+	return text.UnmarshalAnchorWithLimits(encoded, r.anchorEncodingLimits())
+}
+
+// MarshalAnchorRange encodes a selection or comment range under this
+// runtime's browser metadata limits.
+func (r *RichTextRuntime) MarshalAnchorRange(anchors text.AnchorRange) ([]byte, error) {
+	if r == nil {
+		return nil, ErrUnknownDocument
+	}
+	return anchors.MarshalBinaryWithLimits(r.anchorEncodingLimits())
+}
+
+// UnmarshalAnchorRange decodes a bounded selection or comment range. Resolve
+// it through the intended document before relying on the offsets.
+func (r *RichTextRuntime) UnmarshalAnchorRange(encoded []byte) (text.AnchorRange, error) {
+	if r == nil {
+		return text.AnchorRange{}, ErrUnknownDocument
+	}
+	return text.UnmarshalAnchorRangeWithLimits(encoded, r.anchorEncodingLimits())
+}
+
 // Snapshot returns a complete, bounded rich-text persistence unit.
 func (r *RichTextRuntime) Snapshot(handle uint64) (RichTextSnapshot, error) {
 	document, err := r.document(handle)
@@ -319,6 +410,22 @@ func (r *RichTextRuntime) validateSnapshotBounds(saved RichTextSnapshot) error {
 		}
 	}
 	return nil
+}
+
+func (r *RichTextRuntime) anchorEncodingLimits() text.AnchorEncodingLimits {
+	return richTextAnchorEncodingLimits(r.options.Decoder.MaxStringBytes)
+}
+
+func richTextAnchorEncodingLimits(maxStringBytes int) text.AnchorEncodingLimits {
+	const overhead = 64
+	maxInt := int(^uint(0) >> 1)
+	if maxStringBytes <= 0 || maxStringBytes > (maxInt-overhead)/2 {
+		return text.AnchorEncodingLimits{}
+	}
+	return text.AnchorEncodingLimits{
+		MaxBytes:          maxStringBytes*2 + overhead,
+		MaxReplicaIDBytes: maxStringBytes,
+	}
 }
 
 func localEditorOperationsWithin(operations []richtext.EditorOperation, options RichTextOptions) bool {

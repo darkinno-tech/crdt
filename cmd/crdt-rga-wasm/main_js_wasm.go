@@ -283,6 +283,7 @@ func registerRichTextAPI(api js.Value, runtime *clientwasm.RichTextRuntime) {
 		value.Set("maxLocalEditRunes", runtime.MaxLocalEditRunes())
 		value.Set("maxLocalEditorOps", runtime.MaxLocalEditorOps())
 		value.Set("maxAttributesPerOperation", runtime.MaxAttributesPerOperation())
+		value.Set("maxAnchorBytes", runtime.MaxAnchorBytes())
 		return value, nil
 	})
 	register(api, "richTextCreate", func(args []js.Value) (any, error) {
@@ -353,6 +354,137 @@ func registerRichTextAPI(api js.Value, runtime *clientwasm.RichTextRuntime) {
 			return nil, err
 		}
 		return spansToJS(spans), nil
+	})
+	register(api, "richTextAnchorAt", func(args []js.Value) (any, error) {
+		if len(args) != 2 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		offset, err := requiredIndex(args[1])
+		if err != nil {
+			return nil, err
+		}
+		anchor, err := runtime.AnchorAt(handle, offset)
+		if err != nil {
+			return nil, err
+		}
+		return anchorToJS(anchor), nil
+	})
+	register(api, "richTextResolveAnchor", func(args []js.Value) (any, error) {
+		if len(args) != 2 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		anchor, err := anchorFromJS(args[1], runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		return runtime.ResolveAnchor(handle, anchor)
+	})
+	register(api, "richTextAnchorRangeAt", func(args []js.Value) (any, error) {
+		if len(args) != 3 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		start, err := requiredIndex(args[1])
+		if err != nil {
+			return nil, err
+		}
+		end, err := requiredIndex(args[2])
+		if err != nil {
+			return nil, err
+		}
+		anchors, err := runtime.AnchorRangeAt(handle, start, end)
+		if err != nil {
+			return nil, err
+		}
+		return anchorRangeToJS(anchors), nil
+	})
+	register(api, "richTextResolveAnchorRange", func(args []js.Value) (any, error) {
+		if len(args) != 2 {
+			return nil, errInvalidArgument
+		}
+		handle, err := requiredHandle(args[0])
+		if err != nil {
+			return nil, err
+		}
+		anchors, err := anchorRangeFromJS(args[1], runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		start, end, err := runtime.ResolveAnchorRange(handle, anchors)
+		if err != nil {
+			return nil, err
+		}
+		value := newObject()
+		value.Set("start", start)
+		value.Set("end", end)
+		return value, nil
+	})
+	register(api, "richTextMarshalAnchor", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		anchor, err := anchorFromJS(args[0], runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := runtime.MarshalAnchor(anchor)
+		if err != nil {
+			return nil, err
+		}
+		return bytesToJS(encoded), nil
+	})
+	register(api, "richTextUnmarshalAnchor", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		encoded, err := requiredBytes(args[0], runtime.MaxAnchorBytes())
+		if err != nil {
+			return nil, err
+		}
+		anchor, err := runtime.UnmarshalAnchor(encoded)
+		if err != nil {
+			return nil, err
+		}
+		return anchorToJS(anchor), nil
+	})
+	register(api, "richTextMarshalAnchorRange", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		anchors, err := anchorRangeFromJS(args[0], runtime.MaxStringBytes())
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := runtime.MarshalAnchorRange(anchors)
+		if err != nil {
+			return nil, err
+		}
+		return bytesToJS(encoded), nil
+	})
+	register(api, "richTextUnmarshalAnchorRange", func(args []js.Value) (any, error) {
+		if len(args) != 1 {
+			return nil, errInvalidArgument
+		}
+		encoded, err := requiredBytes(args[0], runtime.MaxAnchorBytes())
+		if err != nil {
+			return nil, err
+		}
+		anchors, err := runtime.UnmarshalAnchorRange(encoded)
+		if err != nil {
+			return nil, err
+		}
+		return anchorRangeToJS(anchors), nil
 	})
 	register(api, "richTextSnapshot", func(args []js.Value) (any, error) {
 		if len(args) != 1 {
@@ -681,6 +813,28 @@ func anchorFromJS(value js.Value, maxStringBytes int) (text.Anchor, error) {
 		return text.Anchor{}, errInvalidArgument
 	}
 	return text.Anchor{Position: position, Association: association}, nil
+}
+
+func anchorRangeToJS(anchors text.AnchorRange) js.Value {
+	result := newObject()
+	result.Set("start", anchorToJS(anchors.Start))
+	result.Set("end", anchorToJS(anchors.End))
+	return result
+}
+
+func anchorRangeFromJS(value js.Value, maxStringBytes int) (text.AnchorRange, error) {
+	if value.Type() != js.TypeObject || value.IsNull() || value.IsUndefined() {
+		return text.AnchorRange{}, errInvalidArgument
+	}
+	start, err := anchorFromJS(value.Get("start"), maxStringBytes)
+	if err != nil {
+		return text.AnchorRange{}, err
+	}
+	end, err := anchorFromJS(value.Get("end"), maxStringBytes)
+	if err != nil {
+		return text.AnchorRange{}, err
+	}
+	return text.AnchorRange{Start: start, End: end}, nil
 }
 
 func snapshotToJS(saved clientwasm.RGASnapshot) js.Value {

@@ -8,6 +8,7 @@ import (
 
 	frame "github.com/DarkInno/crdt/encoding"
 	"github.com/DarkInno/crdt/richtext"
+	"github.com/DarkInno/crdt/text"
 )
 
 func TestRichTextRuntimeEditorDeltaInteroperabilityAndRecovery(t *testing.T) {
@@ -131,6 +132,59 @@ func TestRichTextRuntimeRejectsBoundedEditorInputWithoutMutation(t *testing.T) {
 	}
 	if got, err := runtime.Spans(handle); err != nil || !reflect.DeepEqual(got, before) {
 		t.Fatalf("invalid remote frame changed spans: %#v, %v", got, err)
+	}
+}
+
+func TestRichTextRuntimePersistsBoundedAnchorRangesOutsideFrames(t *testing.T) {
+	runtime, err := NewRichTextRuntime(DefaultRichTextOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := runtime.Create("rich-anchor-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := runtime.Create("rich-anchor-bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := runtime.ApplyEditorDelta(alice, []richtext.EditorOperation{{Insert: "abcd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ApplyDelta(bob, seed); err != nil {
+		t.Fatal(err)
+	}
+	anchors, err := runtime.AnchorRangeAt(alice, 3, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := runtime.MarshalAnchorRange(anchors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) == 0 || len(encoded) > runtime.MaxAnchorBytes() {
+		t.Fatalf("encoded anchor range length = %d, max = %d", len(encoded), runtime.MaxAnchorBytes())
+	}
+	persisted, err := runtime.UnmarshalAnchorRange(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change, err := runtime.ApplyEditorDelta(bob, []richtext.EditorOperation{{Retain: 1}, {Insert: "X"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ApplyDelta(alice, change); err != nil {
+		t.Fatal(err)
+	}
+	for _, handle := range []uint64{alice, bob} {
+		start, end, err := runtime.ResolveAnchorRange(handle, persisted)
+		if err != nil || start != 4 || end != 2 {
+			t.Fatalf("ResolveAnchorRange() = %d, %d, %v; want 4, 2, nil", start, end, err)
+		}
+	}
+	if _, err := runtime.UnmarshalAnchor([]byte{1, 3, 0}); !errors.Is(err, text.ErrInvalidAnchor) {
+		t.Fatalf("UnmarshalAnchor(invalid) = %v, want %v", err, text.ErrInvalidAnchor)
 	}
 }
 

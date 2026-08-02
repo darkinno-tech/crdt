@@ -119,8 +119,17 @@ flattening them into the rich-text group.
 - Persist `document.snapshot()` atomically. Its state, frontier, and clock are
   one unit; persisting the state without the HLC clock can reuse mutation IDs
   after a browser restart.
-- Presence, selection positions, collaborative undo policy, transport retry,
-  TLS, authorization, and durable outbox delivery are application-owned.
+- `document.anchorAt` / `anchorRangeAt` capture stable RGA boundaries. Persist
+  their `marshalAnchor` / `marshalAnchorRange` bytes only in a host-owned
+  cursor, selection, or comment record bound to authenticated document ID,
+  tenant/group, epoch, and actor. They never belong in `snapshot()` state, a
+  CRDT delta, outbox, or unauthenticated presence payload. A reversed range is
+  valid for selection direction; comment storage must require ordered resolved
+  offsets. `anchor_gone` requires explicit reattachment, never nearest-offset
+  guessing. The browser caps one encoded range at 128 KiB plus 64 bytes and a
+  replica ID at 64 KiB; negotiate lower document-specific bounds in production.
+- Presence transport, collaborative undo policy, annotation storage, transport
+  retry, TLS, authorization, and durable outbox delivery are application-owned.
 
 ## Verification
 

@@ -95,6 +95,32 @@ test("Position/Tag anchors survive a concurrent insert and snapshot recovery", (
   assert.equal(restored.close(), true);
 });
 
+test("rich-text relative positions encode a durable selection/comment range outside CRDT frames", () => {
+  const alice = richTextRuntime.create("rich-anchor-alice");
+  const bob = richTextRuntime.create("rich-anchor-bob");
+  const seed = alice.applyEditorDelta([{ insert: "ab🙂cd" }]);
+  bob.applyDelta(seed);
+
+  const selection = alice.anchorRangeAt(4, 1);
+  const encoded = alice.marshalAnchorRange(selection);
+  assert.ok(encoded instanceof Uint8Array);
+  assert.ok(encoded.byteLength > 0 && encoded.byteLength <= alice.protocol.maxAnchorBytes);
+  assert.deepEqual(alice.unmarshalAnchorRange(encoded), selection);
+  assert.deepEqual(alice.unmarshalAnchor(alice.marshalAnchor(selection.start)), selection.start);
+
+  const remote = bob.applyEditorDelta([{ retain: 1 }, { insert: "X" }]);
+  alice.applyDelta(remote);
+  assert.deepEqual(alice.resolveAnchorRange(selection), { start: 5, end: 2 });
+  assert.deepEqual(bob.resolveAnchorRange(alice.unmarshalAnchorRange(encoded)), { start: 5, end: 2 });
+
+  const recovered = richTextRuntime.restore(alice.snapshot());
+  assert.deepEqual(recovered.resolveAnchorRange(selection), { start: 5, end: 2 });
+  assertRuntimeError(() => alice.unmarshalAnchor(new Uint8Array([1, 3, 0])), "invalid_anchor");
+  assert.equal(alice.close(), true);
+  assert.equal(bob.close(), true);
+  assert.equal(recovered.close(), true);
+});
+
 test("plain-text binding preserves a UTF-16 selection through a real remote RGA merge", () => {
   const aliceDocument = loaderRuntime.create("selection-alice");
   const bobDocument = loaderRuntime.create("selection-bob");

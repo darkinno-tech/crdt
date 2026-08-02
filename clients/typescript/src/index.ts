@@ -31,6 +31,7 @@ export type {
   RGAProtocolExpectation,
   RGASnapshot,
   RGAAnchor,
+  RGAAnchorRange,
   RGAAnchorAssociation,
   RGAPosition,
   RGATag,

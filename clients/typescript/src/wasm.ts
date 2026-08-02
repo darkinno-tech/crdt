@@ -88,6 +88,8 @@ export interface RGAProtocol {
 export interface RichTextProtocol extends RGAProtocol {
   readonly maxLocalEditorOps: number;
   readonly maxAttributesPerOperation: number;
+  /** Maximum host-metadata bytes accepted for one encoded anchor range. */
+  readonly maxAnchorBytes: number;
 }
 
 export interface InitRichTextWasmOptions {
@@ -127,6 +129,17 @@ export type RGAAnchorAssociation = "before" | "after";
 export interface RGAAnchor {
   readonly position?: RGAPosition;
   readonly association: RGAAnchorAssociation;
+}
+
+/**
+ * Two RGA relative positions captured from one document revision. The field
+ * order is preserved so it represents either a directional editor selection
+ * (`start` = anchor, `end` = head) or a comment range. Persist its canonical
+ * binary form through RichTextWasmDocument, never inside a CRDT frame.
+ */
+export interface RGAAnchorRange {
+  readonly start: RGAAnchor;
+  readonly end: RGAAnchor;
 }
 
 /**
@@ -289,6 +302,68 @@ export class RichTextWasmDocument {
   spans(): readonly RichTextSpan[] {
     this.assertOpen();
     return richTextSpansFromRaw(unwrap(this.api.richTextSpans(this.handle)), this.limits);
+  }
+
+  /** Captures one stable relative position for a visible Unicode-scalar offset. */
+  anchorAt(offset: number): RGAAnchor {
+    this.assertOpen();
+    return anchorFromRaw(unwrap(this.api.richTextAnchorAt(this.handle, offset)), this.limits);
+  }
+
+  /** Resolves a retained relative position; compaction reports `anchor_gone`. */
+  resolveAnchor(anchor: RGAAnchor): number {
+    this.assertOpen();
+    return nonNegativeSafeInteger(unwrap(this.api.richTextResolveAnchor(this.handle, anchorToRaw(anchor, this.limits))));
+  }
+
+  /** Captures a directional selection or comment range from one document revision. */
+  anchorRangeAt(start: number, end: number): RGAAnchorRange {
+    this.assertOpen();
+    return anchorRangeFromRaw(unwrap(this.api.richTextAnchorRangeAt(this.handle, start, end)), this.limits);
+  }
+
+  /** Resolves both range boundaries from one current document projection. */
+  resolveAnchorRange(anchors: RGAAnchorRange): Readonly<{ start: number; end: number }> {
+    this.assertOpen();
+    const raw = unwrap(this.api.richTextResolveAnchorRange(this.handle, anchorRangeToRaw(anchors, this.limits)));
+    if (!isRecord(raw)) {
+      throw new CRDTRuntimeError("invalid_runtime_response");
+    }
+    return { start: nonNegativeSafeInteger(raw.start), end: nonNegativeSafeInteger(raw.end) };
+  }
+
+  /**
+   * Returns a canonical, versioned relative-position payload for host-owned
+   * cursor metadata. Bind the stored bytes to an authenticated document and
+   * group; do not put them in `snapshot()` state or a CRDT delta frame.
+   */
+  marshalAnchor(anchor: RGAAnchor): Uint8Array {
+    this.assertOpen();
+    return copiedBytes(unwrap(this.api.richTextMarshalAnchor(anchorToRaw(anchor, this.limits))));
+  }
+
+  /** Decodes one bounded canonical relative-position metadata payload. */
+  unmarshalAnchor(encoded: Uint8Array): RGAAnchor {
+    this.assertOpen();
+    if (!(encoded instanceof Uint8Array) || encoded.byteLength > this.limits.maxAnchorBytes) {
+      throw new CRDTRuntimeError("resource_limit");
+    }
+    return anchorFromRaw(unwrap(this.api.richTextUnmarshalAnchor(encoded)), this.limits);
+  }
+
+  /** Returns a canonical, versioned selection/comment range metadata payload. */
+  marshalAnchorRange(anchors: RGAAnchorRange): Uint8Array {
+    this.assertOpen();
+    return copiedBytes(unwrap(this.api.richTextMarshalAnchorRange(anchorRangeToRaw(anchors, this.limits))));
+  }
+
+  /** Decodes one bounded canonical selection/comment range metadata payload. */
+  unmarshalAnchorRange(encoded: Uint8Array): RGAAnchorRange {
+    this.assertOpen();
+    if (!(encoded instanceof Uint8Array) || encoded.byteLength > this.limits.maxAnchorBytes) {
+      throw new CRDTRuntimeError("resource_limit");
+    }
+    return anchorRangeFromRaw(unwrap(this.api.richTextUnmarshalAnchorRange(encoded)), this.limits);
   }
 
   /** Applies one full local editor transaction and returns one canonical frame. */
@@ -477,6 +552,14 @@ interface RawRGAAPI {
   richTextApplyEditorDelta(handle: number, operations: readonly RichTextEditorOperation[]): RawResult;
   richTextApplyDelta(handle: number, encoded: Uint8Array): RawResult;
   richTextSpans(handle: number): RawResult;
+  richTextAnchorAt(handle: number, offset: number): RawResult;
+  richTextResolveAnchor(handle: number, anchor: RawAnchor): RawResult;
+  richTextAnchorRangeAt(handle: number, start: number, end: number): RawResult;
+  richTextResolveAnchorRange(handle: number, anchors: RawAnchorRange): RawResult;
+  richTextMarshalAnchor(anchor: RawAnchor): RawResult;
+  richTextUnmarshalAnchor(encoded: Uint8Array): RawResult;
+  richTextMarshalAnchorRange(anchors: RawAnchorRange): RawResult;
+  richTextUnmarshalAnchorRange(encoded: Uint8Array): RawResult;
   richTextSnapshot(handle: number): RawResult;
   richTextRestore(snapshot: RawSnapshot): RawResult;
 }
@@ -496,6 +579,11 @@ interface RawTag {
 interface RawAnchor {
   readonly position: RawTag | null;
   readonly association: RGAAnchorAssociation;
+}
+
+interface RawAnchorRange {
+  readonly start: RawAnchor;
+  readonly end: RawAnchor;
 }
 
 type SnapshotLimits = Pick<RGAProtocol, "maxFrameBytes" | "maxTags" | "maxStringBytes">;
@@ -545,6 +633,14 @@ function rawAPIFromGlobal(): RawRGAAPI | undefined {
     "richTextApplyEditorDelta",
     "richTextApplyDelta",
     "richTextSpans",
+    "richTextAnchorAt",
+    "richTextResolveAnchor",
+    "richTextAnchorRangeAt",
+    "richTextResolveAnchorRange",
+    "richTextMarshalAnchor",
+    "richTextUnmarshalAnchor",
+    "richTextMarshalAnchorRange",
+    "richTextUnmarshalAnchorRange",
     "richTextSnapshot",
     "richTextRestore",
   ] as const;
@@ -614,6 +710,7 @@ function readAndValidateRichTextProtocol(api: RawRGAAPI, expected: Readonly<RGAP
     maxLocalEditRunes: nonNegativeSafeInteger(raw.maxLocalEditRunes),
     maxLocalEditorOps: nonNegativeSafeInteger(raw.maxLocalEditorOps),
     maxAttributesPerOperation: nonNegativeSafeInteger(raw.maxAttributesPerOperation),
+    maxAnchorBytes: nonNegativeSafeInteger(raw.maxAnchorBytes),
   };
   if (
     protocol.stateTypeID !== expected.stateTypeID ||
@@ -622,7 +719,8 @@ function readAndValidateRichTextProtocol(api: RawRGAAPI, expected: Readonly<RGAP
     protocol.wireFormatVersion !== expectedWireFormatVersion(expected) ||
     protocol.maxFrameBytes <= 0 || protocol.maxTags <= 0 || protocol.maxStringBytes <= 0 ||
     protocol.maxLocalEditBytes <= 0 || protocol.maxLocalEditRunes <= 0 || protocol.maxLocalEditorOps <= 0 ||
-    protocol.maxAttributesPerOperation <= 0 || protocol.maxLocalEditBytes > protocol.maxFrameBytes
+    protocol.maxAttributesPerOperation <= 0 || protocol.maxAnchorBytes <= 0 ||
+    protocol.maxLocalEditBytes > protocol.maxFrameBytes
   ) {
     throw new CRDTRuntimeError("protocol_mismatch");
   }
@@ -857,6 +955,26 @@ function anchorToRaw(anchor: RGAAnchor, limits: SnapshotLimits): RawAnchor {
   return {
     association: anchor.association,
     position,
+  };
+}
+
+function anchorRangeFromRaw(raw: unknown, limits: SnapshotLimits): RGAAnchorRange {
+  if (!isRecord(raw)) {
+    throw new CRDTRuntimeError("invalid_runtime_response");
+  }
+  return {
+    start: anchorFromRaw(raw.start, limits),
+    end: anchorFromRaw(raw.end, limits),
+  };
+}
+
+function anchorRangeToRaw(anchors: RGAAnchorRange, limits: SnapshotLimits): RawAnchorRange {
+  if (!isRecord(anchors)) {
+    throw new CRDTRuntimeError("invalid_anchor");
+  }
+  return {
+    start: anchorToRaw(anchors.start, limits),
+    end: anchorToRaw(anchors.end, limits),
   };
 }
 
