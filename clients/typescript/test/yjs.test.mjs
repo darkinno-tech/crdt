@@ -389,6 +389,39 @@ test("binding-scoped undo emits compensating updates, excludes remote edits, and
   editor.destroy();
 });
 
+test("bounded Yjs undo history safely resets before a local replacement exceeds its stack cap", () => {
+  const document = new Y.Doc();
+  const text = document.getText("content");
+  const binding = new YjsTextBinding(document, text, limits);
+  const undo = binding.createUndoManager({ captureTimeout: 0, maxStackItems: 2 });
+
+  binding.applyLocalReplacement({ from: 0, to: 0, insert: "A" });
+  binding.applyLocalReplacement({ from: 1, to: 1, insert: "B" });
+  binding.applyLocalReplacement({ from: 2, to: 2, insert: "C" });
+  assert.equal(text.toString(), "ABC");
+
+  assert.equal(undo.undo(), true, "the replacement recorded after reset remains undoable");
+  assert.equal(text.toString(), "AB");
+  assert.equal(undo.undo(), false, "older stack items are released as one safe history reset");
+  assert.equal(undo.redo(), true);
+  assert.equal(text.toString(), "ABC");
+
+  binding.applyLocalReplacement({ from: 3, to: 3, insert: "D" });
+  assert.equal(undo.undo(), true, "a later local edit clears stale redo history and remains undoable");
+  assert.equal(text.toString(), "ABC");
+  assert.equal(undo.undo(), true, "the current bounded undo stack retains the preceding captured edit");
+  assert.equal(text.toString(), "AB");
+  assert.equal(undo.undo(), false);
+
+  assert.throws(
+    () => binding.createUndoManager({ maxStackItems: 0 }),
+    (error) => error?.code === "invalid_options",
+  );
+  undo.destroy();
+  binding.destroy();
+  document.destroy();
+});
+
 test("bounded Yjs observeDeep reports nested paths once and fails closed on overflow or callback failure", () => {
   const document = new Y.Doc();
   const board = document.getMap("board");
