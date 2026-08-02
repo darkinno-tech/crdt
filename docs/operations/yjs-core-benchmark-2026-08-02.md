@@ -23,7 +23,9 @@ make typescript-yjs-core-benchmark
 - `deep_observer`: one nested `Y.Map` key update per transaction through the
   bounded path/target observer.
 - `undo_redo`: 256 explicitly separated local one-character replacements,
-  followed by 256 undo and 256 redo operations.
+  followed by 256 undo and 256 redo operations. This is exactly the default
+  local-history cap; the focused suite separately proves the reset on the next
+  replacement.
 
 ## Observed output
 

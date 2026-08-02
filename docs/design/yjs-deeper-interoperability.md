@@ -56,7 +56,7 @@ engine authoritative. It is not a second document model.
 | Shared `Y.Map` / `Y.Array` / `Y.Text` / XML types | Direct native Yjs API | No Go/native-ts translation or schema claim. |
 | Relative positions | Bounded `createRelativePosition` / `resolveRelativePosition` for the exact bound `Y.Text` | Position bytes are presence/UI metadata, not identity, authorization, or an RGA anchor. |
 | `observeDeep` | Bounded path + live-target projection with event/path caps and fail-closed callback handling | Do not retain raw lazy `Y.Event` objects or use observer output as a durable log. |
-| Selective undo/redo | Binding-scoped `Y.UndoManager`, tracking only local editor-origin transactions | Undo creates a compensating shared update; it never rewinds a server log or silently undoes remote work. |
+| Selective undo/redo | Binding-scoped, capped `Y.UndoManager`, tracking only local editor-origin transactions | Undo creates a compensating shared update; it never rewinds a server log or silently undoes remote work. At its cap the binding safely clears complete local history before recording the new edit. |
 | Incremental synchronization | Standard V1 y-protocols SyncStep1/2 helper for manual transports; direct V1/V2 state-vector diff APIs remain available | y-websocket owns its outer envelope; room identity, auth, receipt, and retry stay above the helper. |
 | Rich text / editor schema | Use the maintained matching Yjs binding such as y-prosemirror, y-quill, or y-codemirror | The plain-text binding stops on formats/embeds rather than flattening them. |
 
@@ -120,9 +120,9 @@ the concrete configuration and recovery contract.
   update admission without logging document contents.
 - **Performance:** measure state-vector diff bytes, update merge/compaction
   latency, memory per active room, durable flush time, reconnect p50/p95/p99,
-  slow-peer behavior, and fan-out at 1/4/16/64 receivers. The current relay
-  microbenchmark measures only outer-wrapper decode/admission and cannot set
-  these production limits.
+  slow-peer behavior, capped local-history reset cost, and fan-out at
+  1/4/16/64 receivers. The current relay microbenchmark measures only
+  outer-wrapper decode/admission and cannot set these production limits.
 - **Migration:** stop writes, take one source snapshot at a known cursor,
   validate/render it, export under explicit supported-schema rules, import to
   a new group and epoch, compare presentation plus allowed metadata, then

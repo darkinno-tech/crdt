@@ -18,7 +18,7 @@ try to convert live mutations between them.
 | Remote editor changes | `Y.TextEvent.delta` is translated to one or more CodeMirror UTF-16 changes. No remote `text.toString()` projection is used after initial attachment. |
 | Relative positions | `createRelativePosition` / `resolveRelativePosition` expose bounded binary `Y.RelativePosition` values for comments, selections, and anchors. The awareness cursor field uses the same representation and resolves only against the exact local `Y.Text`. |
 | Deep observation | `observeYjsDeep` exposes bounded changed paths and live target types for `Y.Map`, `Y.Array`, `Y.Text`, and XML descendants. It never retains raw lazy `Y.Event` objects or arbitrary values. |
-| Undo/redo | `createUndoManager` tracks only `applyLocalReplacement` transactions from this binding. Undo/redo emit compensating local Yjs updates; remote edits are deliberately excluded. |
+| Undo/redo | `createUndoManager` tracks only `applyLocalReplacement` transactions from this binding. Undo/redo emit compensating local Yjs updates; remote edits are deliberately excluded. History is capped at 256 stack items by default. |
 | Manual V1 sync | `createSyncProtocol` reads and writes exactly one bounded, unwrapped y-protocols SyncStep1/2 or update submessage. V2 continues to use state-vector/diff methods directly because y-protocols sync is V1. |
 | Presence | `y-protocols/awareness` encode/apply APIs are used directly. Yjs client IDs are routing identifiers, never authenticated user identities. |
 | Rich text | Not supported by this plain-text binding. A format or embed stops projection instead of silently flattening it. Use a schema-aware Yjs editor binding for rich content. |
@@ -131,7 +131,10 @@ const commentEnd = binding.createRelativePosition(18, -1); // associates with th
 // Resolve only against this exact Y.Text; a foreign or malformed position fails closed.
 renderComment({ from: binding.resolveRelativePosition(commentStart), to: binding.resolveRelativePosition(commentEnd) });
 
-const undo = binding.createUndoManager({ captureTimeout: 500 });
+const undo = binding.createUndoManager({
+  captureTimeout: 500,
+  maxStackItems: 256,
+});
 undo.stopCapturing(); // begin a new user-action group before the next editor change
 if (undo.undo()) {
   // The binding's onLocalUpdate callback receives this compensating update.
@@ -154,6 +157,11 @@ to this manager, and a successful `undo()` / `redo()` creates a normal new Yjs
 update that needs the same authenticated transport, durable receipt, and retry
 handling as any other local change. Destroy the manager before changing the
 room, schema, or editor surface; destroying the binding does this automatically.
+`maxStackItems` defaults to 256. Before a binding-owned edit would exceed that
+cap, the binding clears the complete local undo/redo history through Yjs's own
+release path, then records the new edit. This deliberately keeps the newest
+operation undoable instead of splicing Yjs internal stack items, which could
+retain deleted structs or violate its garbage-collection bookkeeping.
 
 ### Manual y-protocols V1 SyncStep1/2
 
@@ -194,6 +202,8 @@ separately negotiated authenticated envelope.
   public trust boundary.
 - `maxCursorBytes` bounds the decoded relative-position payload. Invalid,
   foreign-text, stale, or malformed awareness cursor values are ignored.
+- `maxStackItems` bounds local undo/redo retention. It is a UI-memory limit,
+  not a durable history, authorization record, or remote-operation limit.
 - `observeYjsDeep` has independent event-count and path-depth caps. On an
   overflow or application callback failure it unregisters itself after the
   current transaction instead of providing a partial or silently stale view.
@@ -219,7 +229,8 @@ make typescript-yjs-bindings-benchmark
 The focused suite uses a real CodeMirror 6 view under JSDOM for remote range
 application, tests V1/V2, state-vector recovery, cursor/awareness forwarding,
 formatted-text refusal, binding-scoped undo/redo, deep-observation bounds, V1
-SyncStep1/2 convergence, and a three-replica delayed/duplicated/reordered update
-simulation. The benchmarks record local process work and editor write shape;
+SyncStep1/2 convergence, capped undo-history reset, and a three-replica
+delayed/duplicated/reordered update simulation. The benchmarks record local
+process work and editor write shape;
 they are not browser rendering, WebSocket, TLS, WAN, persistence, or service
 capacity results. See the [recorded baselines](../operations/yjs-native-editor-bindings-2026-08-01.md).
