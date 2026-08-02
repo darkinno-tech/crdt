@@ -20,11 +20,11 @@ vectors byte-for-byte; Python, Swift, and C++ exercise their real bindings.
 | Rust | `rustc 1.97.1` |
 | Commands | `make rust-benchmark`; `make cpp-benchmark` |
 | Inner samples | 8 operations per process |
-| Rust LWW-Map set → relay → state → recovery | 1.687 ms/op |
-| C++20 facade LWW-Map set → relay → state → recovery | 1.856 ms/op |
+| Rust LWW-Map set → relay → state → recovery | 1.922 ms/op |
+| C++20 facade LWW-Map set → relay → state → recovery | 1.845 ms/op |
 
-The process also measured the existing 1,536-scalar RGA path at 6.777 ms/op
-in Rust and 7.010 ms/op through C++. These figures exclude network auth/TLS,
+The process also measured the existing 1,536-scalar RGA path at 7.212 ms/op
+in Rust and 7.109 ms/op through C++. These figures exclude network auth/TLS,
 encrypted persistence, mobile battery, large values/tombstones, allocator
 variation, and contention.
 
