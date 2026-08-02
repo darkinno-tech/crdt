@@ -73,6 +73,12 @@ export interface YjsRemoteCursor {
 export interface YjsTextUndoManagerOptions {
   /** Milliseconds in which adjacent local replacements are coalesced. */
   readonly captureTimeout?: number;
+  /**
+   * Caps local undo and redo stack items. When a new local replacement would
+   * exceed this cap, the binding safely drops its existing local history
+   * before recording that replacement.
+   */
+  readonly maxStackItems?: number;
 }
 
 /** A safe, minimal projection of one synchronous Yjs observeDeep event. */
@@ -138,6 +144,7 @@ interface YjsDeltaOperation {
 }
 
 const defaultCursorField = "crdt.yjs.cursor.v1";
+const defaultUndoStackItems = 256;
 
 /**
  * Binds one already-integrated Y.Text to incremental editor changes and the
@@ -383,6 +390,9 @@ export class YjsTextBinding {
     if (nextLength > this.options.maxTextUTF16) {
       throw new YjsBindingError("resource_limit");
     }
+    for (const manager of this.#undoManagers) {
+      manager.prepareForLocalReplacement();
+    }
     this.document.transact(() => {
       if (change.to > change.from) {
         this.text.delete(change.from, change.to - change.from);
@@ -497,6 +507,7 @@ export class YjsTextBinding {
  */
 export class YjsTextUndoManager {
   readonly #manager: Y.UndoManager;
+  readonly maxStackItems: number;
   #closed = false;
 
   constructor(
@@ -506,6 +517,7 @@ export class YjsTextUndoManager {
     private readonly assertActive: () => void,
     private readonly release: (manager: YjsTextUndoManager) => void,
   ) {
+    this.maxStackItems = options.maxStackItems ?? defaultUndoStackItems;
     const managerOptions = {
       trackedOrigins: new Set<unknown>([localOrigin]),
       ...(options.captureTimeout === undefined ? {} : { captureTimeout: options.captureTimeout }),
@@ -545,6 +557,19 @@ export class YjsTextUndoManager {
   clear(): void {
     this.#assertActive();
     this.#manager.clear();
+  }
+
+  /**
+   * Prepares bounded history for a binding-owned local replacement. This is
+   * intentionally all-or-nothing: Yjs only exposes safe release of complete
+   * undo/redo stacks, so retaining an arbitrary suffix could keep deleted
+   * structs alive or corrupt the stack's GC bookkeeping.
+   */
+  prepareForLocalReplacement(): void {
+    this.#assertActive();
+    if (this.#manager.undoStack.length >= this.maxStackItems) {
+      this.#manager.clear();
+    }
   }
 
   /** Releases Yjs listeners; it never destroys the caller-owned Y.Doc. */
@@ -1067,7 +1092,8 @@ function validateOptions(options: YjsTextBindingOptions): void {
 
 function validateUndoOptions(options: YjsTextUndoManagerOptions): void {
   if (options.captureTimeout !== undefined &&
-    (!Number.isSafeInteger(options.captureTimeout) || options.captureTimeout < 0)) {
+    (!Number.isSafeInteger(options.captureTimeout) || options.captureTimeout < 0) ||
+    options.maxStackItems !== undefined && !validPositive(options.maxStackItems)) {
     throw new YjsBindingError("invalid_options");
   }
 }
