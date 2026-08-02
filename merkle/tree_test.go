@@ -62,6 +62,24 @@ func TestTreeRootAndDiffAreDeterministic(t *testing.T) {
 	}
 }
 
+func TestTreeEntriesAndInsertDigestPreserveCanonicalRoot(t *testing.T) {
+	t.Parallel()
+	valueTree := NewTree()
+	valueTree.Insert("b", []byte("two"))
+	valueTree.Insert("a", []byte("one"))
+	digestTree := NewTree()
+	for _, entry := range valueTree.Entries() {
+		digestTree.InsertDigest(entry.Key, entry.Digest)
+	}
+	if digestTree.Root() != valueTree.Root() {
+		t.Fatal("precomputed inventory digests changed the root")
+	}
+	entries := valueTree.Entries()
+	if len(entries) != 2 || entries[0].Key != "a" || entries[1].Key != "b" {
+		t.Fatalf("entries = %#v", entries)
+	}
+}
+
 func TestDeleteRemovesKeyFromRootAndDiff(t *testing.T) {
 	t.Parallel()
 	withKey, withoutKey := NewTree(), NewTree()

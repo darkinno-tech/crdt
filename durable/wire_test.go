@@ -163,6 +163,11 @@ func FuzzWire(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(vectorHello)
+	merkleHello, err := marshalMerkleHello(manifest, NewMerkleIndex().Root())
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(merkleHello)
 	f.Add([]byte{changeMessage})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_, _, _ = unmarshalHello(data)
@@ -170,8 +175,14 @@ func FuzzWire(f *testing.F) {
 		_, _, _ = unmarshalWelcome(data)
 		_, _, _ = unmarshalStateVectorWelcome(data)
 		_, _ = unmarshalCatchUpComplete(data)
+		_, _, _ = unmarshalMerkleHello(data)
+		_, _, _ = unmarshalMerkleWelcome(data, 128)
+		_, _, _ = unmarshalMerkleInventory(data, 128)
+		_, _, _ = unmarshalMerkleRequest(data, 128)
+		_, _ = unmarshalMerkleComplete(data, 128)
 		_ = unmarshalError(data)
 		_, _, _ = unmarshalChange(data, 1<<20, 128)
 		_, _, _, _ = unmarshalEvent(data, 1<<20, 128)
+		_, _, _, _, _ = unmarshalMerkleEvent(data, 1<<20, 128)
 	})
 }
