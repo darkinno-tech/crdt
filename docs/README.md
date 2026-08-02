@@ -32,6 +32,8 @@ be committed.
 - [WebSocket Provider 参考实现](integration/websocket-provider.zh-CN.md)
 - [Yjs / y-protocols compatibility relay](integration/yjs-relay.md)
 - [Yjs / y-protocols 兼容 relay](integration/yjs-relay.zh-CN.md)
+- [Server-side AI agents as Yjs peers](integration/yjs-agent-peers.md)
+- [服务端 AI Agent 作为 Yjs peer](integration/yjs-agent-peers.zh-CN.md)
 - [Native Yjs editor bindings](integration/yjs-native-editor-bindings.md)
 - [原生 Yjs 编辑器绑定](integration/yjs-native-editor-bindings.zh-CN.md)
 - [Quill rich-text editor binding](integration/richtext-editor-bindings.md)

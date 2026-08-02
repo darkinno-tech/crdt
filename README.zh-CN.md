@@ -83,6 +83,7 @@ make test
 | 选择浏览器、WebRTC、Redis、PostgreSQL、MySQL、SQL Server 或 SQLite 边界 | [Provider architecture](docs/integration/provider-architecture.md) |
 | 使用有界 live relay | [WebSocket provider 参考](docs/integration/websocket-provider.zh-CN.md) |
 | 连接稳定版 Yjs/y-websocket client | [Yjs / y-protocols 兼容 relay](docs/integration/yjs-relay.zh-CN.md) |
+| 让受信服务端 Agent 作为 durable Yjs peer 运行 | [Yjs Agent peer 集成](docs/integration/yjs-agent-peers.zh-CN.md) |
 | 使用受控富文本格式绑定 Quill Delta | [富文本编辑器绑定](docs/integration/richtext-editor-bindings.md) |
 | 安全规划更深层的 Yjs 支持 | [Yjs 深层互操作决策](docs/design/yjs-deeper-interoperability.md) |
 | 在不复制媒体字节的前提下附加媒体 | [附件集成](docs/integration/attachment.zh-CN.md) |

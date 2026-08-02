@@ -85,6 +85,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Choose browser, WebRTC, Redis, PostgreSQL, MySQL, SQL Server, or SQLite boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
 | Use a bounded live relay | [WebSocket provider reference](docs/integration/websocket-provider.md) |
 | Connect stable Yjs/y-websocket clients | [Yjs / y-protocols compatibility relay](docs/integration/yjs-relay.md) |
+| Run a trusted server-side agent as a durable Yjs peer | [Yjs agent-peer integration](docs/integration/yjs-agent-peers.md) |
 | Bind Quill Deltas with approved rich-text formatting | [Rich-text editor binding](docs/integration/richtext-editor-bindings.md) |
 | Plan durable, deeper Yjs support safely | [Yjs deeper interoperability decision](docs/design/yjs-deeper-interoperability.md) |
 | Attach media without CRDT byte replication | [Attachment integration](docs/integration/attachment.md) |
