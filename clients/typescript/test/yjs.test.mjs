@@ -13,6 +13,7 @@ import { JSDOM } from "jsdom";
 import {
   bindYjsCodeMirrorPlainText,
   observeYjsDeep,
+  YjsBindingError,
   YjsTextBinding,
 } from "../dist/yjs.js";
 
@@ -345,6 +346,147 @@ test("native Yjs relative positions survive concurrent text changes and reject a
   target.destroy();
 });
 
+test("a throwing manual Yjs update callback returns a stable error and latches later binding-owned edits", () => {
+  const document = new Y.Doc();
+  const text = document.getText("content");
+  const errors = [];
+  let callbackCalls = 0;
+  const binding = new YjsTextBinding(document, text, {
+    ...limits,
+    onLocalUpdate() {
+      callbackCalls += 1;
+      throw new Error("application outbox unavailable");
+    },
+    onError(error) {
+      errors.push(error.code);
+      throw new Error("error observer unavailable");
+    },
+  });
+
+  assert.throws(
+    () => binding.applyLocalReplacement({ from: 0, to: 0, insert: "A" }),
+    (error) => error instanceof YjsBindingError && error.code === "local_update_failed",
+  );
+  assert.equal(text.toString(), "A", "Yjs committed before the callback boundary failed");
+  assert.deepEqual(errors, ["local_update_failed"]);
+  assert.equal(callbackCalls, 1);
+
+  assert.throws(
+    () => binding.applyLocalReplacement({ from: 1, to: 1, insert: "B" }),
+    (error) => error instanceof YjsBindingError && error.code === "local_update_failed",
+  );
+  assert.equal(text.toString(), "A", "a latched manual outbox cannot create another unsent binding edit");
+  assert.equal(callbackCalls, 1);
+
+  binding.destroy();
+  document.destroy();
+});
+
+test("an oversized local Yjs update latches the manual update path after its committed transaction", () => {
+  const document = new Y.Doc();
+  const text = document.getText("content");
+  const errors = [];
+  let callbackCalls = 0;
+  const binding = new YjsTextBinding(document, text, {
+    ...limits,
+    maxUpdateBytes: 1,
+    onLocalUpdate() {
+      callbackCalls += 1;
+    },
+    onError(error) {
+      errors.push(error.code);
+    },
+  });
+
+  assert.throws(
+    () => binding.applyLocalReplacement({ from: 0, to: 0, insert: "A" }),
+    (error) => error instanceof YjsBindingError && error.code === "resource_limit",
+  );
+  assert.equal(text.toString(), "A");
+  assert.deepEqual(errors, ["resource_limit"]);
+  assert.equal(callbackCalls, 0, "an over-cap update is never passed to the manual transport callback");
+  assert.throws(
+    () => binding.applyLocalReplacement({ from: 1, to: 1, insert: "B" }),
+    (error) => error instanceof YjsBindingError && error.code === "resource_limit",
+  );
+  assert.equal(text.toString(), "A");
+
+  binding.destroy();
+  document.destroy();
+});
+
+test("a throwing manual awareness callback returns a stable error and latches later cursor writes", () => {
+  const document = new Y.Doc();
+  const text = document.getText("content");
+  const awareness = new Awareness(document);
+  const errors = [];
+  let callbackCalls = 0;
+  const binding = new YjsTextBinding(document, text, {
+    ...limits,
+    onLocalAwarenessUpdate() {
+      callbackCalls += 1;
+      throw new Error("presence relay unavailable");
+    },
+    onError(error) {
+      errors.push(error.code);
+    },
+  }, awareness);
+
+  assert.throws(
+    () => binding.setLocalCursor({ anchor: 0, head: 0 }),
+    (error) => error instanceof YjsBindingError && error.code === "local_awareness_failed",
+  );
+  assert.equal(awareness.getLocalState()?.[binding.cursorField]?.version, 1);
+  assert.deepEqual(errors, ["local_awareness_failed"]);
+  assert.equal(callbackCalls, 1);
+
+  assert.throws(
+    () => binding.clearLocalCursor(),
+    (error) => error instanceof YjsBindingError && error.code === "local_awareness_failed",
+  );
+  assert.equal(awareness.getLocalState()?.[binding.cursorField]?.version, 1);
+  assert.equal(callbackCalls, 1);
+
+  binding.destroy();
+  awareness.destroy();
+  document.destroy();
+});
+
+test("an oversized local awareness update latches the manual awareness path after its local state change", () => {
+  const document = new Y.Doc();
+  const text = document.getText("content");
+  const awareness = new Awareness(document);
+  const errors = [];
+  let callbackCalls = 0;
+  const binding = new YjsTextBinding(document, text, {
+    ...limits,
+    maxAwarenessBytes: 1,
+    onLocalAwarenessUpdate() {
+      callbackCalls += 1;
+    },
+    onError(error) {
+      errors.push(error.code);
+    },
+  }, awareness);
+
+  assert.throws(
+    () => binding.setLocalCursor({ anchor: 0, head: 0 }),
+    (error) => error instanceof YjsBindingError && error.code === "resource_limit",
+  );
+  assert.equal(awareness.getLocalState()?.[binding.cursorField]?.version, 1);
+  assert.deepEqual(errors, ["resource_limit"]);
+  assert.equal(callbackCalls, 0, "an over-cap awareness update is never passed to manual transport");
+  assert.throws(
+    () => binding.clearLocalCursor(),
+    (error) => error instanceof YjsBindingError && error.code === "resource_limit",
+  );
+  assert.equal(awareness.getLocalState()?.[binding.cursorField]?.version, 1);
+
+  binding.destroy();
+  awareness.destroy();
+  document.destroy();
+});
+
 test("binding-scoped undo emits compensating updates, excludes remote edits, and supports redo", () => {
   const author = new Y.Doc();
   const authorText = author.getText("content");
@@ -387,6 +529,48 @@ test("binding-scoped undo emits compensating updates, excludes remote edits, and
   binding.destroy();
   author.destroy();
   editor.destroy();
+});
+
+test("a manual outbox failure during undo returns a stable error and blocks redo before another write", () => {
+  const document = new Y.Doc();
+  const text = document.getText("content");
+  const errors = [];
+  let failCallback = false;
+  let callbackCalls = 0;
+  const binding = new YjsTextBinding(document, text, {
+    ...limits,
+    onLocalUpdate() {
+      callbackCalls += 1;
+      if (failCallback) {
+        throw new Error("application outbox unavailable");
+      }
+    },
+    onError(error) {
+      errors.push(error.code);
+    },
+  });
+  const undo = binding.createUndoManager({ captureTimeout: 0 });
+
+  binding.applyLocalReplacement({ from: 0, to: 0, insert: "A" });
+  failCallback = true;
+  assert.throws(
+    () => undo.undo(),
+    (error) => error instanceof YjsBindingError && error.code === "local_update_failed",
+  );
+  assert.equal(text.toString(), "", "the compensating Yjs transaction committed before manual delivery failed");
+  assert.deepEqual(errors, ["local_update_failed"]);
+  assert.equal(callbackCalls, 2);
+
+  assert.throws(
+    () => undo.redo(),
+    (error) => error instanceof YjsBindingError && error.code === "local_update_failed",
+  );
+  assert.equal(text.toString(), "", "redo is blocked before it can create another unsent update");
+  assert.equal(callbackCalls, 2);
+
+  undo.destroy();
+  binding.destroy();
+  document.destroy();
 });
 
 test("bounded Yjs undo history safely resets before a local replacement exceeds its stack cap", () => {
