@@ -57,7 +57,7 @@ engine authoritative. It is not a second document model.
 | Relative positions | Bounded `createRelativePosition` / `resolveRelativePosition` for the exact bound `Y.Text` | Position bytes are presence/UI metadata, not identity, authorization, or an RGA anchor. |
 | `observeDeep` | Bounded path + live-target projection with event/path caps and fail-closed callback handling | Do not retain raw lazy `Y.Event` objects or use observer output as a durable log. |
 | Selective undo/redo | Binding-scoped, capped `Y.UndoManager`, tracking only local editor-origin transactions | Undo creates a compensating shared update; it never rewinds a server log or silently undoes remote work. At its cap the binding safely clears complete local history before recording the new edit. |
-| Incremental synchronization | Standard V1 y-protocols SyncStep1/2 helper for manual transports; direct V1/V2 state-vector diff APIs remain available | y-websocket owns its outer envelope; room identity, auth, receipt, and retry stay above the helper. |
+| Incremental synchronization | Standard V1 y-protocols SyncStep1/2 helper for manual transports; direct V1/V2 state-vector diff APIs remain available | y-websocket owns its outer envelope; room identity, auth, receipt, and retry stay above the helper. A throwing local manual callback latches its outbound path after the already-committed Yjs transaction, so the application must recover its outbox and resync rather than issue another edit. |
 | Rich text / editor schema | Use the maintained matching Yjs binding such as y-prosemirror, y-quill, or y-codemirror | The plain-text binding stops on formats/embeds rather than flattening them. |
 
 The V1 sync helper intentionally rejects V2. `y-protocols` SyncStep1/2 calls
