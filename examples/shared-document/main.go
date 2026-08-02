@@ -80,9 +80,9 @@ func run(writer io.Writer) error {
 		}
 	}
 
-	readerBoard, err := readerDocument.Map("board")
-	if err != nil {
-		return fmt.Errorf("open received board: %w", err)
+	readerBoard, ok := readerDocument.LookupMap("board")
+	if !ok {
+		return fmt.Errorf("received board is missing")
 	}
 	title, ok := readerBoard.String("title")
 	if !ok {

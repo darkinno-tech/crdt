@@ -208,6 +208,34 @@ func (d *Document) Array(name string) (*Array, error) {
 	return &Array{document: d, value: value}, nil
 }
 
+// LookupMap returns the current visible named Map without creating a root or
+// emitting a local update. It returns false for an absent, incomplete, or
+// Array root, and for invalid names.
+func (d *Document) LookupMap(name string) (*Map, bool) {
+	if d == nil || d.document == nil {
+		return nil, false
+	}
+	value, ok := d.document.RootMap(name)
+	if !ok {
+		return nil, false
+	}
+	return &Map{document: d, value: value}, true
+}
+
+// LookupArray returns the current visible named Array without creating a root
+// or emitting a local update. It returns false for an absent, incomplete, or
+// Map root, and for invalid names.
+func (d *Document) LookupArray(name string) (*Array, bool) {
+	if d == nil || d.document == nil {
+		return nil, false
+	}
+	value, ok := d.document.RootArray(name)
+	if !ok {
+		return nil, false
+	}
+	return &Array{document: d, value: value}, true
+}
+
 // ApplyUpdate validates and applies an untrusted canonical update frame. The
 // host must authenticate and authorize the peer and cap its transport body
 // before calling this method; a profile, checksum, or successful decode is not
