@@ -25,7 +25,8 @@ menus, drag UI, upload state, or Yjs state. Block IDs remain local editor
 identities; rich-text RGA positions are the replicated identities.
 
 Use a separate, explicitly versioned `documenttree` group for tables, files,
-media, custom block payloads, or independently loaded subdocuments. Do not put
+media, custom block payloads, or content needing an independent replication
+boundary. Do not put
 their JSON or URLs into `rt.block` strings.
 
 ## Architecture and correctness

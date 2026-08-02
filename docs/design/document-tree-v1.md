@@ -1,5 +1,9 @@
 # Document-tree v1: nested shared types and subdocument boundaries
 
+> Historical architecture only. New groups MUST use
+> [document-tree v2](document-tree-v2.md), which contains a complete nested
+> tree in one replication boundary and does not implement lazy references.
+
 `documenttree` is the Go framed CRDT for a bounded collaborative object graph.
 It is deliberately a new protocol rather than an adapter around `lww.Map`,
 `list.RGA`, TypeScript `native-ts-nested-v1`, or Yjs updates.

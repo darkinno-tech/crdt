@@ -5,7 +5,7 @@
 `shared.Document` is the smallest high-level Go entry point for a structured
 collaborative document. It exposes named `Map` and `Array` objects in the same
 spirit as Yjs shared types, while reusing this repository's stable,
-`document/tree-v1` protocol.
+`document/tree-v2` protocol.
 
 It is deliberately not Yjs API or binary-update compatible. Use the separate
 [Yjs relay](yjs-relay.md) when a browser or server already speaks Yjs.
@@ -46,6 +46,13 @@ if err := task.SetJSON("task", map[string]any{"id": "release-notes", "done": fal
 byte values. `CreateMap`, `CreateArray`, `InsertMap`, and `InsertArray` create
 single-owner nested shared objects. A map or array child cannot be moved or
 mounted twice, which keeps concurrent ownership deterministic.
+
+Every reachable Map and Array uses one replication contract and is present in a
+complete state/checkpoint frame. This facade deliberately has no descendant
+`load`, `unload`, or external-document identifier: one authenticated
+manifest/authorization boundary applies to the whole tree. Split content into
+separately negotiated document groups before it needs independent access,
+retention, or loading behavior.
 
 You do not need to implement a CRDT algorithm, but you do need to select the
 right product meaning:
@@ -160,7 +167,7 @@ authentication or durable storage built in.
 
 ## Let people and tools inspect the contract
 
-The facade always selects the stable `document/tree-v1` profile, so a setup
+The facade always selects the stable `document/tree-v2` profile, so a setup
 tool can expose the merge rule without copying TypeIDs:
 
 ```go
@@ -185,5 +192,5 @@ Run the complete duplicate/reordered example:
 ```
 
 For the underlying ownership rule, pending-work limits, recovery model, and
-wire contract, read [document-tree v1 architecture](../design/document-tree-v1.md)
-and [document-tree v1 protocol](../protocol/document-tree-v1.md).
+wire contract, read [document-tree v2 architecture](../design/document-tree-v2.md)
+and [document-tree v2 protocol](../protocol/document-tree-v2.md).

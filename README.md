@@ -134,7 +134,7 @@ go get github.com/DarkInno/crdt/providers/mysql@latest
 | Package | Purpose |
 | --- | --- |
 | `counter`, `set`, `register` | Counter, set, and register CRDTs. |
-| `shared` | High-level named Map/Array facade over stable document-tree-v1 frames. |
+| `shared` | High-level named Map/Array facade over stable fully nested document-tree-v2 frames. |
 | `lww`, `tree`, `text`, `list`, `xml`, `richtext`, `documenttree` | HLC-backed and ordered collaborative structures. |
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |

@@ -3,7 +3,7 @@
 [English](shared-document.md)
 
 `shared.Document` 是面向结构化协作内容的 Go 高层入口。它将稳定的
-`document/tree-v1` 协议包装为命名 `Map`、`Array` 和直接读写方法：业务代码
+`document/tree-v2` 协议包装为命名 `Map`、`Array` 和直接读写方法：业务代码
 从“看板”“任务”“字段”开始，不需要手写 delta、TypeID 或 HLC。
 
 它借鉴 Yjs 的“文档 + 命名共享类型”交互方式，但**不兼容** Yjs API 或二进制
@@ -42,6 +42,11 @@ if err := task.SetJSON("task", map[string]any{"id": "release-notes", "done": fal
 写入和读取时都会复制；`CreateMap`、`CreateArray`、`InsertMap` 和
 `InsertArray` 创建单一所有者的嵌套对象，因此一个子对象不会被移动或挂到两个
 位置，离线并发时仍有确定结果。
+
+每个可达的 Map/Array 都使用同一复制合同，并会出现在完整 state/checkpoint frame 内。
+这个 facade 不提供子对象 `load`/`unload` 或外部文档标识：一个经过认证的
+Manifest/授权边界覆盖整棵树。若内容需要独立访问、留存或加载行为，必须在创建时拆成
+独立协商的文档组。
 
 你不需要实现 CRDT 算法，但需要选对业务含义：
 
@@ -139,7 +144,7 @@ if err != nil {
 
 ## 人和 AI 都可检查的协议选择
 
-高层文档固定使用稳定的 `document/tree-v1` profile：
+高层文档固定使用稳定的 `document/tree-v2` profile：
 
 ```go
 profile := shared.Profile()
@@ -161,5 +166,5 @@ fmt.Println(profile.ConflictRule)
 ```
 
 深入理解单一所有权、pending 上限、恢复和 wire contract，请继续阅读
-[document-tree v1 架构](../design/document-tree-v1.md)与
-[document-tree v1 协议](../protocol/document-tree-v1.md)。
+[document-tree v2 架构](../design/document-tree-v2.md)与
+[document-tree v2 协议](../protocol/document-tree-v2.md)。

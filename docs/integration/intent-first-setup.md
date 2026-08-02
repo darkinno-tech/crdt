@@ -23,7 +23,7 @@ business meaning:
 | Can an offline member be independently added or removed? | `set/add-wins` | A concurrent add remains present. |
 | Must concurrent field writes stay visible for product review? | `register/multi-value` | All causally concurrent values remain. |
 | Is this a new plain collaborative text document? | `text/run-v2` | Inserts order deterministically and deletes retain anchors. |
-| Does the document need a fixed declared hierarchy of child CRDTs? | `document/tree-v1` | Declared child operations merge under its own protocol. |
+| Does the document need a fixed declared hierarchy whose complete content shares one boundary? | `document/tree-v2` | Fully nested child operations merge under one protocol frame contract. |
 
 The complete list also includes LWW, legacy text, ordered-list, move-list,
 observed-remove tree, and rich-text profiles. A profile makes the conflict rule

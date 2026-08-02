@@ -131,7 +131,7 @@ go get github.com/DarkInno/crdt/providers/mysql@latest
 | 包 | 职责 |
 | --- | --- |
 | `counter`、`set`、`register` | Counter、Set、Register CRDT。 |
-| `shared` | 稳定 document-tree-v1 帧之上的高层命名 Map/Array facade。 |
+| `shared` | 稳定、全量嵌套 document-tree-v2 帧之上的高层命名 Map/Array facade。 |
 | `lww`、`tree`、`text`、`list`、`xml`、`richtext` | 基于 HLC 的有序协作结构。 |
 | `encoding`、`delta`、`snapshot`、`clock` | 帧、受限批次、snapshot 与 HLC 状态。 |
 | `replica`、`membership`、`tombstonegc`、`merkle` | 投递连续性、成员关系、安全 GC 协调与反熵。 |

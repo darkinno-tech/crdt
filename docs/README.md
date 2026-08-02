@@ -63,8 +63,8 @@ be committed.
 - [Yjs deeper interoperability decision](design/yjs-deeper-interoperability.md)
 - [Local multi-type undo/redo and version DAG](design/local-history-and-versioning.md)
 - [Nested CRDT composition decision](design/nested-crdt-composition.zh-CN.md)
-- [Document-tree v1 architecture](design/document-tree-v1.md)
-- [Document-tree v1 protocol](protocol/document-tree-v1.md)
+- [Document-tree v2 architecture](design/document-tree-v2.md)
+- [Document-tree v2 protocol](protocol/document-tree-v2.md)
 - [Native multilingual RGA delivery decision](design/native-multilanguage-rga.md)
 - [原生多语言 RGA 交付决策](design/native-multilanguage-rga.zh-CN.md)
 
