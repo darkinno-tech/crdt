@@ -100,6 +100,35 @@ func TestStoreRejectsBoundsAndClosedUse(t *testing.T) {
 	}
 }
 
+func TestStoreAppliesProviderIdentifierValidators(t *testing.T) {
+	dialect := testDialect()
+	dialect.MaxGroupIDBytes = 64
+	dialect.MaxActorIDBytes = 64
+	var groups, actors int
+	dialect.ValidateGroupID = func(value string) bool {
+		groups++
+		return value == "valid-group"
+	}
+	dialect.ValidateActorID = func(value string) bool {
+		actors++
+		return value == "valid-actor"
+	}
+	store := testStore(t, &scriptPool{}, dialect, 8, 1<<20)
+	manifest := testManifest(t)
+	if _, err := store.Append("invalid-group", testChange(t, manifest, "valid-actor", 1, 1)); !errors.Is(err, durable.ErrInvalidConfig) {
+		t.Fatalf("invalid provider group = %v", err)
+	}
+	if _, err := store.Append("valid-group", testChange(t, manifest, "invalid-actor", 1, 1)); !errors.Is(err, durable.ErrInvalidConfig) {
+		t.Fatalf("invalid provider actor = %v", err)
+	}
+	if _, _, err := store.Replay("invalid-group", 0, 1, 1, manifest, crdt.ProtocolPolicy{}, 1, 1); !errors.Is(err, durable.ErrInvalidConfig) {
+		t.Fatalf("invalid provider replay group = %v", err)
+	}
+	if groups != 3 || actors != 1 {
+		t.Fatalf("validator calls: groups=%d actors=%d", groups, actors)
+	}
+}
+
 func TestStoreFailsClosedForCorruptionAndUnavailableReplay(t *testing.T) {
 	dialect := testDialect()
 	manifest := testManifest(t)
@@ -398,6 +427,32 @@ func TestSQLAdaptersUseDatabaseSQL(t *testing.T) {
 	}
 	if err := store.EnsureSchema(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func BenchmarkStoreAppendSimulated(b *testing.B) {
+	dialect := testDialect()
+	manifest := testManifest(b)
+	change := testChange(b, manifest, "alice", 1, 1)
+	encoded := mustEncode(b, change)
+	pool := &scriptPool{
+		transactions: make([]*scriptTransaction, b.N),
+		options:      make([]sql.TxOptions, 0, b.N),
+	}
+	for index := range pool.transactions {
+		pool.transactions[index] = appendScript(dialect, manifest.GroupID, change, encoded, 0, 0, 0)
+	}
+	store := testStore(b, pool, dialect, uint64(b.N)+1, 1<<20)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if _, err := store.Append(manifest.GroupID, change); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	if pool.failure != nil || len(pool.transactions) != 0 {
+		b.Fatalf("simulated append state: failure=%v transactions=%d", pool.failure, len(pool.transactions))
 	}
 }
 

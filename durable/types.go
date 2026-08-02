@@ -107,7 +107,8 @@ type AppendResult struct {
 // manifest and policy supplied by the relay before returning them.
 //
 // The relay never closes a Log. Its owner controls connection lifetime so a
-// shared PostgreSQL, MySQL, or Redis client pool can serve more than one handler.
+// shared PostgreSQL, MySQL, SQL Server, SQLite, or Redis client pool can serve
+// more than one handler.
 type Log interface {
 	Append(groupID string, change replica.Change) (AppendResult, error)
 	Replay(groupID string, after, maxEvents, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) ([]Event, uint64, error)
@@ -120,7 +121,8 @@ type Log interface {
 // return a convenient partial result.
 //
 // The base Log contract intentionally remains cursor-based so existing Redis,
-// PostgreSQL, MySQL, and host implementations continue to work with v1 clients.
+// PostgreSQL, MySQL, SQL Server, SQLite, and host implementations continue to
+// work with v1 clients.
 type StateVectorLog interface {
 	Log
 	CatchUp(groupID string, vector replica.Frontier, maxEvents, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) ([]Event, uint64, error)

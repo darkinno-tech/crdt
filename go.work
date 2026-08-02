@@ -7,6 +7,7 @@ use (
 	./extensions
 	./persistence
 	./providers/internal/sqlrelay
+	./providers/mssql
 	./providers/mysql
 	./providers/postgres
 	./providers/redis
@@ -28,6 +29,8 @@ replace github.com/DarkInno/crdt/persistence v1.0.33 => ./persistence
 replace github.com/DarkInno/crdt/telemetry v1.0.33 => ./telemetry
 
 replace github.com/DarkInno/crdt/providers/internal/sqlrelay v1.0.33 => ./providers/internal/sqlrelay
+
+replace github.com/DarkInno/crdt/providers/mssql v1.0.33 => ./providers/mssql
 
 replace github.com/DarkInno/crdt/providers/mysql v1.0.33 => ./providers/mysql
 

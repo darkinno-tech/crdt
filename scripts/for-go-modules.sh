@@ -18,6 +18,7 @@ for module in \
 	persistence \
 	telemetry \
 	providers/internal/sqlrelay \
+	providers/mssql \
 	providers/mysql \
 	providers/postgres \
 	providers/redis \
