@@ -54,6 +54,12 @@ manifest/authorization boundary applies to the whole tree. Split content into
 separately negotiated document groups before it needs independent access,
 retention, or loading behavior.
 
+`Map` and `Array` create an absent named root, so they may emit a local update.
+Code that only inspects an already-synchronized document should use
+`LookupMap` or `LookupArray` instead. These lookups never create a root, change
+HLC state, or call `OnUpdate`; they return `false` when the root is absent,
+still incomplete, or has the other kind.
+
 You do not need to implement a CRDT algorithm, but you do need to select the
 right product meaning:
 
@@ -71,6 +77,7 @@ The short comparison is:
 | Create a document | `new Y.Doc()` | `shared.New("editor-a")` |
 | Get/create a named map | `doc.getMap("board")` | `doc.Map("board")` |
 | Get/create a named array | `doc.getArray("tasks")` | `doc.Array("tasks")` |
+| Read an existing named root without creating it | `doc.share.get("board")` | `doc.LookupMap("board")` |
 | Listen for local frames | `doc.on("update", ...)` | `doc.OnUpdate(...)` |
 | Apply a frame | `Y.applyUpdate(doc, update)` | `doc.ApplyUpdate(update)` |
 
