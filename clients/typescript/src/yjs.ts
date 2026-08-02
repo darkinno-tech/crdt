@@ -33,7 +33,8 @@ export type YjsBindingErrorCode =
   | "observer_failed"
   | "resource_limit"
   | "sync_mismatch"
-  | "unsupported_text";
+  | "unsupported_text"
+  | "unsupported_rich_text";
 
 /** A stable error code for callers that need to close or recover a binding. */
 export class YjsBindingError extends Error {

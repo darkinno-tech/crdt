@@ -194,6 +194,20 @@ export {
   YjsTextBinding,
   YjsTextUndoManager,
 } from "./yjs.js";
+export {
+  bindYjsQuillRichText,
+  YjsQuillRichTextBinding,
+  YjsRichTextBinding,
+} from "./yjs-richtext.js";
+export type {
+  BindYjsQuillRichTextOptions,
+  YjsQuillRichTextPort,
+  YjsRichTextBindingOptions,
+  YjsRichTextDelta,
+  YjsRichTextDeltaOperation,
+  YjsRichTextEmbed,
+  YjsRichTextValue,
+} from "./yjs-richtext.js";
 export type {
   BindYjsCodeMirrorOptions,
   YjsBindingErrorCode,
