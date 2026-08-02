@@ -451,17 +451,8 @@ func (room *YJSRoom) appendUpdateContext(ctx context.Context, update []byte) boo
 		return false
 	}
 	if room.store != nil {
-		room.storeMu.Lock()
-		result, err := room.store.Apply(ctx, room.document, update)
-		if err != nil {
-			room.storeMu.Unlock()
-			return false
-		}
-		if result.Applied {
-			room.broadcast(marshalYJSSync(yjsWireUpdate, update))
-		}
-		room.storeMu.Unlock()
-		return true
+		_, err := room.applyStoreUpdate(ctx, update)
+		return err == nil
 	}
 	digest := sha256.Sum256(update)
 	room.mu.Lock()
@@ -481,6 +472,29 @@ func (room *YJSRoom) appendUpdateContext(ctx context.Context, update []byte) boo
 	room.mu.Unlock()
 	room.broadcast(marshalYJSSync(yjsWireUpdate, copied))
 	return true
+}
+
+// applyStoreUpdate applies one already-authorized Yjs update to a Level 1
+// room. The store lock keeps durable Apply and subsequent live fan-out ordered
+// with the state-vector handshake. In particular, a sidecar failure never
+// publishes an update that has no durable recovery record.
+func (room *YJSRoom) applyStoreUpdate(ctx context.Context, update []byte) (YJSApplyResult, error) {
+	if room == nil || room.store == nil {
+		return YJSApplyResult{}, ErrYJSAgentPeerUnsupported
+	}
+	if len(update) == 0 || len(update) > room.maxUpdateBytes {
+		return YJSApplyResult{}, ErrYJSStoreLimit
+	}
+	room.storeMu.Lock()
+	defer room.storeMu.Unlock()
+	result, err := room.store.Apply(ctx, room.document, update)
+	if err != nil {
+		return YJSApplyResult{}, err
+	}
+	if result.Applied {
+		room.broadcast(marshalYJSSync(yjsWireUpdate, update))
+	}
+	return result, nil
 }
 
 func (room *YJSRoom) replyDiff(ctx context.Context, subscriber *yjsSubscriber, remoteVector []byte) bool {
