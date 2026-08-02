@@ -25,7 +25,7 @@
 
 ```sh
 go test ./...
-go run ./examples/collaborative-board
+(cd examples && go run ./collaborative-board)
 ```
 
 期望输出：

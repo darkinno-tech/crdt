@@ -1,16 +1,22 @@
-import { FrameSemanticsVersion, FrameType } from "./frame.js";
+import { FORMAT_VERSION, FrameSemanticsVersion, FrameType } from "./frame.js";
 import type { RichTextEditorOperation, RichTextSpan } from "./bindings.js";
 
 /** The global installed by the Go js/wasm entrypoint after it has started. */
 export const RGA_WASM_GLOBAL = "__darkinnoCRDTRGA";
 const MAX_UINT64 = (1n << 64n) - 1n;
 const TEXT_ENCODER = new TextEncoder();
+// The Go runtime publishes one process-global API. Serialize the first startup
+// so concurrent lazy imports cannot download, instantiate, and race to replace
+// that API with different Wasm instances.
+let pendingRGAWasmStartup: Promise<RawRGAAPI> | undefined;
 
 /** One exact RGA frame contract selected by an authenticated manifest. */
 export interface RGAProtocolExpectation {
   readonly stateTypeID: bigint;
   readonly deltaTypeID: bigint;
   readonly semanticsVersion: bigint;
+  /** Outer frame version authenticated with the frame pair; defaults to v1 for source compatibility. */
+  readonly wireFormatVersion?: bigint;
 }
 
 /** Explicit compatibility contract for legacy scalar RGA v1 groups. */
@@ -18,6 +24,7 @@ export const RGA_PROTOCOL_V1: Readonly<RGAProtocolExpectation> = Object.freeze({
   stateTypeID: FrameType.RGAState,
   deltaTypeID: FrameType.RGADelta,
   semanticsVersion: FrameSemanticsVersion.RGA,
+  wireFormatVersion: FORMAT_VERSION,
 });
 
 /** Default compatibility contract for new Go RGA replication groups. */
@@ -25,6 +32,7 @@ export const RGA_PROTOCOL_RUN_V2: Readonly<RGAProtocolExpectation> = Object.free
   stateTypeID: FrameType.RGARunState,
   deltaTypeID: FrameType.RGARunDelta,
   semanticsVersion: FrameSemanticsVersion.RGARun,
+  wireFormatVersion: FORMAT_VERSION,
 });
 
 /** Explicit compact RGA v3 contract for a separately authenticated Manifest. */
@@ -32,6 +40,15 @@ export const RGA_PROTOCOL_PACKED_V3: Readonly<RGAProtocolExpectation> = Object.f
   stateTypeID: FrameType.RGAPackedState,
   deltaTypeID: FrameType.RGAPackedDelta,
   semanticsVersion: FrameSemanticsVersion.RGAPacked,
+  wireFormatVersion: FORMAT_VERSION,
+});
+
+/** Packed RGA v3 with the separately authenticated compression-aware outer v2 frame. */
+export const RGA_PROTOCOL_PACKED_V3_V2: Readonly<RGAProtocolExpectation> = Object.freeze({
+  stateTypeID: FrameType.RGAPackedState,
+  deltaTypeID: FrameType.RGAPackedDelta,
+  semanticsVersion: FrameSemanticsVersion.RGAPacked,
+  wireFormatVersion: 2n,
 });
 
 /** Exact rich-text v1 contract selected by a separate authenticated Manifest. */
@@ -39,6 +56,7 @@ export const RICH_TEXT_PROTOCOL: Readonly<RGAProtocolExpectation> = Object.freez
   stateTypeID: FrameType.RichTextState,
   deltaTypeID: FrameType.RichTextDelta,
   semanticsVersion: FrameSemanticsVersion.RichText,
+  wireFormatVersion: FORMAT_VERSION,
 });
 
 export interface InitRGAWasmOptions {
@@ -46,8 +64,8 @@ export interface InitRGAWasmOptions {
   readonly wasmURL: string | URL;
   /**
    * Exact protocol contract authenticated for the replication group. Defaults
-   * to run-v2; pass the exact v1 or packed-v3 contract only with its
-   * separately built artifact and authenticated Manifest.
+   * to run-v2; pass the exact v1, packed-v3, or packed-v3 outer-v2 contract
+   * only with its separately built artifact and authenticated Manifest.
    */
   readonly expectedProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
@@ -58,6 +76,7 @@ export interface RGAProtocol {
   readonly stateTypeID: bigint;
   readonly deltaTypeID: bigint;
   readonly semanticsVersion: bigint;
+  readonly wireFormatVersion: bigint;
   readonly maxFrameBytes: number;
   readonly maxTags: number;
   readonly maxStringBytes: number;
@@ -69,6 +88,8 @@ export interface RGAProtocol {
 export interface RichTextProtocol extends RGAProtocol {
   readonly maxLocalEditorOps: number;
   readonly maxAttributesPerOperation: number;
+  /** Maximum host-metadata bytes accepted for one encoded anchor range. */
+  readonly maxAnchorBytes: number;
 }
 
 export interface InitRichTextWasmOptions {
@@ -79,7 +100,8 @@ export interface InitRichTextWasmOptions {
   /**
    * RGA protocol compiled into the shared artifact. This is independent of
    * the rich-text Manifest: omit it for the default run-v2 artifact, or pass
-   * the exact authenticated v1 or packed-v3 contract for that combined build.
+   * the exact authenticated v1, packed-v3, or packed-v3 outer-v2 contract for
+   * that combined build.
    */
   readonly expectedRGAProtocol?: Readonly<RGAProtocolExpectation>;
   /** Maximum time to wait for the Go runtime to publish its API. */
@@ -107,6 +129,17 @@ export type RGAAnchorAssociation = "before" | "after";
 export interface RGAAnchor {
   readonly position?: RGAPosition;
   readonly association: RGAAnchorAssociation;
+}
+
+/**
+ * Two RGA relative positions captured from one document revision. The field
+ * order is preserved so it represents either a directional editor selection
+ * (`start` = anchor, `end` = head) or a comment range. Persist its canonical
+ * binary form through RichTextWasmDocument, never inside a CRDT frame.
+ */
+export interface RGAAnchorRange {
+  readonly start: RGAAnchor;
+  readonly end: RGAAnchor;
 }
 
 /**
@@ -271,6 +304,68 @@ export class RichTextWasmDocument {
     return richTextSpansFromRaw(unwrap(this.api.richTextSpans(this.handle)), this.limits);
   }
 
+  /** Captures one stable relative position for a visible Unicode-scalar offset. */
+  anchorAt(offset: number): RGAAnchor {
+    this.assertOpen();
+    return anchorFromRaw(unwrap(this.api.richTextAnchorAt(this.handle, offset)), this.limits);
+  }
+
+  /** Resolves a retained relative position; compaction reports `anchor_gone`. */
+  resolveAnchor(anchor: RGAAnchor): number {
+    this.assertOpen();
+    return nonNegativeSafeInteger(unwrap(this.api.richTextResolveAnchor(this.handle, anchorToRaw(anchor, this.limits))));
+  }
+
+  /** Captures a directional selection or comment range from one document revision. */
+  anchorRangeAt(start: number, end: number): RGAAnchorRange {
+    this.assertOpen();
+    return anchorRangeFromRaw(unwrap(this.api.richTextAnchorRangeAt(this.handle, start, end)), this.limits);
+  }
+
+  /** Resolves both range boundaries from one current document projection. */
+  resolveAnchorRange(anchors: RGAAnchorRange): Readonly<{ start: number; end: number }> {
+    this.assertOpen();
+    const raw = unwrap(this.api.richTextResolveAnchorRange(this.handle, anchorRangeToRaw(anchors, this.limits)));
+    if (!isRecord(raw)) {
+      throw new CRDTRuntimeError("invalid_runtime_response");
+    }
+    return { start: nonNegativeSafeInteger(raw.start), end: nonNegativeSafeInteger(raw.end) };
+  }
+
+  /**
+   * Returns a canonical, versioned relative-position payload for host-owned
+   * cursor metadata. Bind the stored bytes to an authenticated document and
+   * group; do not put them in `snapshot()` state or a CRDT delta frame.
+   */
+  marshalAnchor(anchor: RGAAnchor): Uint8Array {
+    this.assertOpen();
+    return copiedBytes(unwrap(this.api.richTextMarshalAnchor(anchorToRaw(anchor, this.limits))));
+  }
+
+  /** Decodes one bounded canonical relative-position metadata payload. */
+  unmarshalAnchor(encoded: Uint8Array): RGAAnchor {
+    this.assertOpen();
+    if (!(encoded instanceof Uint8Array) || encoded.byteLength > this.limits.maxAnchorBytes) {
+      throw new CRDTRuntimeError("resource_limit");
+    }
+    return anchorFromRaw(unwrap(this.api.richTextUnmarshalAnchor(encoded)), this.limits);
+  }
+
+  /** Returns a canonical, versioned selection/comment range metadata payload. */
+  marshalAnchorRange(anchors: RGAAnchorRange): Uint8Array {
+    this.assertOpen();
+    return copiedBytes(unwrap(this.api.richTextMarshalAnchorRange(anchorRangeToRaw(anchors, this.limits))));
+  }
+
+  /** Decodes one bounded canonical selection/comment range metadata payload. */
+  unmarshalAnchorRange(encoded: Uint8Array): RGAAnchorRange {
+    this.assertOpen();
+    if (!(encoded instanceof Uint8Array) || encoded.byteLength > this.limits.maxAnchorBytes) {
+      throw new CRDTRuntimeError("resource_limit");
+    }
+    return anchorRangeFromRaw(unwrap(this.api.richTextUnmarshalAnchorRange(encoded)), this.limits);
+  }
+
   /** Applies one full local editor transaction and returns one canonical frame. */
   applyEditorDelta(operations: readonly RichTextEditorOperation[]): Uint8Array {
     this.assertOpen();
@@ -348,6 +443,22 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
     return new RGAWasmRuntime(existing, readAndValidateProtocol(existing, expectedProtocol));
   }
 
+  const startup = pendingRGAWasmStartup ?? startRGAWasm(options);
+  pendingRGAWasmStartup = startup;
+  try {
+    const api = await startup;
+    return new RGAWasmRuntime(api, readAndValidateProtocol(api, expectedProtocol));
+  } finally {
+    // A failed startup must be retryable. A successful startup is subsequently
+    // found through the installed global, so retaining its Promise would only
+    // keep response and instance references alive.
+    if (pendingRGAWasmStartup === startup) {
+      pendingRGAWasmStartup = undefined;
+    }
+  }
+}
+
+async function startRGAWasm(options: InitRGAWasmOptions): Promise<RawRGAAPI> {
   const GoConstructor = globalThis.Go;
   if (typeof GoConstructor !== "function") {
     throw new CRDTRuntimeError("missing_wasm_exec");
@@ -379,8 +490,7 @@ export async function initRGAWasm(options: InitRGAWasmOptions): Promise<RGAWasmR
       runFailure = error;
     });
 
-  const api = await waitForAPI(options.startupTimeoutMs ?? 5_000, () => runFailure);
-  return new RGAWasmRuntime(api, readAndValidateProtocol(api, expectedProtocol));
+  return waitForAPI(options.startupTimeoutMs ?? 5_000, () => runFailure);
 }
 
 /**
@@ -442,6 +552,14 @@ interface RawRGAAPI {
   richTextApplyEditorDelta(handle: number, operations: readonly RichTextEditorOperation[]): RawResult;
   richTextApplyDelta(handle: number, encoded: Uint8Array): RawResult;
   richTextSpans(handle: number): RawResult;
+  richTextAnchorAt(handle: number, offset: number): RawResult;
+  richTextResolveAnchor(handle: number, anchor: RawAnchor): RawResult;
+  richTextAnchorRangeAt(handle: number, start: number, end: number): RawResult;
+  richTextResolveAnchorRange(handle: number, anchors: RawAnchorRange): RawResult;
+  richTextMarshalAnchor(anchor: RawAnchor): RawResult;
+  richTextUnmarshalAnchor(encoded: Uint8Array): RawResult;
+  richTextMarshalAnchorRange(anchors: RawAnchorRange): RawResult;
+  richTextUnmarshalAnchorRange(encoded: Uint8Array): RawResult;
   richTextSnapshot(handle: number): RawResult;
   richTextRestore(snapshot: RawSnapshot): RawResult;
 }
@@ -461,6 +579,11 @@ interface RawTag {
 interface RawAnchor {
   readonly position: RawTag | null;
   readonly association: RGAAnchorAssociation;
+}
+
+interface RawAnchorRange {
+  readonly start: RawAnchor;
+  readonly end: RawAnchor;
 }
 
 type SnapshotLimits = Pick<RGAProtocol, "maxFrameBytes" | "maxTags" | "maxStringBytes">;
@@ -510,6 +633,14 @@ function rawAPIFromGlobal(): RawRGAAPI | undefined {
     "richTextApplyEditorDelta",
     "richTextApplyDelta",
     "richTextSpans",
+    "richTextAnchorAt",
+    "richTextResolveAnchor",
+    "richTextAnchorRangeAt",
+    "richTextResolveAnchorRange",
+    "richTextMarshalAnchor",
+    "richTextUnmarshalAnchor",
+    "richTextMarshalAnchorRange",
+    "richTextUnmarshalAnchorRange",
     "richTextSnapshot",
     "richTextRestore",
   ] as const;
@@ -538,6 +669,7 @@ function readAndValidateProtocol(api: RawRGAAPI, expected: Readonly<RGAProtocolE
     stateTypeID: parseUnsignedInteger(raw.stateTypeID),
     deltaTypeID: parseUnsignedInteger(raw.deltaTypeID),
     semanticsVersion: parseUnsignedInteger(raw.semanticsVersion),
+    wireFormatVersion: parseUnsignedInteger(raw.wireFormatVersion),
     maxFrameBytes: nonNegativeSafeInteger(raw.maxFrameBytes),
     maxTags: nonNegativeSafeInteger(raw.maxTags),
     maxStringBytes: nonNegativeSafeInteger(raw.maxStringBytes),
@@ -548,6 +680,7 @@ function readAndValidateProtocol(api: RawRGAAPI, expected: Readonly<RGAProtocolE
     protocol.stateTypeID !== expected.stateTypeID ||
     protocol.deltaTypeID !== expected.deltaTypeID ||
     protocol.semanticsVersion !== expected.semanticsVersion ||
+    protocol.wireFormatVersion !== expectedWireFormatVersion(expected) ||
     protocol.maxFrameBytes <= 0 ||
     protocol.maxTags <= 0 ||
     protocol.maxStringBytes <= 0 ||
@@ -569,6 +702,7 @@ function readAndValidateRichTextProtocol(api: RawRGAAPI, expected: Readonly<RGAP
     stateTypeID: parseUnsignedInteger(raw.stateTypeID),
     deltaTypeID: parseUnsignedInteger(raw.deltaTypeID),
     semanticsVersion: parseUnsignedInteger(raw.semanticsVersion),
+    wireFormatVersion: parseUnsignedInteger(raw.wireFormatVersion),
     maxFrameBytes: nonNegativeSafeInteger(raw.maxFrameBytes),
     maxTags: nonNegativeSafeInteger(raw.maxTags),
     maxStringBytes: nonNegativeSafeInteger(raw.maxStringBytes),
@@ -576,14 +710,17 @@ function readAndValidateRichTextProtocol(api: RawRGAAPI, expected: Readonly<RGAP
     maxLocalEditRunes: nonNegativeSafeInteger(raw.maxLocalEditRunes),
     maxLocalEditorOps: nonNegativeSafeInteger(raw.maxLocalEditorOps),
     maxAttributesPerOperation: nonNegativeSafeInteger(raw.maxAttributesPerOperation),
+    maxAnchorBytes: nonNegativeSafeInteger(raw.maxAnchorBytes),
   };
   if (
     protocol.stateTypeID !== expected.stateTypeID ||
     protocol.deltaTypeID !== expected.deltaTypeID ||
     protocol.semanticsVersion !== expected.semanticsVersion ||
+    protocol.wireFormatVersion !== expectedWireFormatVersion(expected) ||
     protocol.maxFrameBytes <= 0 || protocol.maxTags <= 0 || protocol.maxStringBytes <= 0 ||
     protocol.maxLocalEditBytes <= 0 || protocol.maxLocalEditRunes <= 0 || protocol.maxLocalEditorOps <= 0 ||
-    protocol.maxAttributesPerOperation <= 0 || protocol.maxLocalEditBytes > protocol.maxFrameBytes
+    protocol.maxAttributesPerOperation <= 0 || protocol.maxAnchorBytes <= 0 ||
+    protocol.maxLocalEditBytes > protocol.maxFrameBytes
   ) {
     throw new CRDTRuntimeError("protocol_mismatch");
   }
@@ -607,17 +744,26 @@ function isKnownRGAProtocol(value: unknown): value is Readonly<RGAProtocolExpect
   ) {
     return false;
   }
+
+  const wireFormatVersion = expectedWireFormatVersion(value as Readonly<RGAProtocolExpectation>);
   return (
     (value.stateTypeID === RGA_PROTOCOL_V1.stateTypeID &&
       value.deltaTypeID === RGA_PROTOCOL_V1.deltaTypeID &&
-      value.semanticsVersion === RGA_PROTOCOL_V1.semanticsVersion) ||
+      value.semanticsVersion === RGA_PROTOCOL_V1.semanticsVersion &&
+      wireFormatVersion === FORMAT_VERSION) ||
     (value.stateTypeID === RGA_PROTOCOL_RUN_V2.stateTypeID &&
       value.deltaTypeID === RGA_PROTOCOL_RUN_V2.deltaTypeID &&
-      value.semanticsVersion === RGA_PROTOCOL_RUN_V2.semanticsVersion) ||
+      value.semanticsVersion === RGA_PROTOCOL_RUN_V2.semanticsVersion &&
+      wireFormatVersion === FORMAT_VERSION) ||
     (value.stateTypeID === RGA_PROTOCOL_PACKED_V3.stateTypeID &&
       value.deltaTypeID === RGA_PROTOCOL_PACKED_V3.deltaTypeID &&
-      value.semanticsVersion === RGA_PROTOCOL_PACKED_V3.semanticsVersion)
+      value.semanticsVersion === RGA_PROTOCOL_PACKED_V3.semanticsVersion &&
+      (wireFormatVersion === FORMAT_VERSION || wireFormatVersion === 2n))
   );
+}
+
+function expectedWireFormatVersion(expected: Readonly<RGAProtocolExpectation>): bigint {
+  return expected.wireFormatVersion ?? FORMAT_VERSION;
 }
 
 function snapshotFromRaw(raw: unknown, limits: SnapshotLimits): RGASnapshot {
@@ -809,6 +955,26 @@ function anchorToRaw(anchor: RGAAnchor, limits: SnapshotLimits): RawAnchor {
   return {
     association: anchor.association,
     position,
+  };
+}
+
+function anchorRangeFromRaw(raw: unknown, limits: SnapshotLimits): RGAAnchorRange {
+  if (!isRecord(raw)) {
+    throw new CRDTRuntimeError("invalid_runtime_response");
+  }
+  return {
+    start: anchorFromRaw(raw.start, limits),
+    end: anchorFromRaw(raw.end, limits),
+  };
+}
+
+function anchorRangeToRaw(anchors: RGAAnchorRange, limits: SnapshotLimits): RawAnchorRange {
+  if (!isRecord(anchors)) {
+    throw new CRDTRuntimeError("invalid_anchor");
+  }
+  return {
+    start: anchorToRaw(anchors.start, limits),
+    end: anchorToRaw(anchors.end, limits),
   };
 }
 

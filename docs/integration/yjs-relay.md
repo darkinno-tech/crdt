@@ -93,10 +93,11 @@ server state.
 
 ```go
 room, err := extensions.NewYJSRoom(extensions.YJSRoomConfig{
-    Name:            "notes",
-    MaxUpdateBytes:  1 << 20,
-    MaxHistoryBytes: 8 << 20,
-    MaxUpdates:      256,
+    Name:                   "notes",
+    MaxUpdateBytes:         1 << 20,
+    MaxHistoryBytes:        8 << 20,
+    MaxUpdates:             256,
+    MaxAwarenessTombstones: 256, // clock-only metadata; zero selects this default
 })
 if err != nil { return err }
 
@@ -122,10 +123,14 @@ mux.Handle("/yjs/", http.StripPrefix("/yjs", handler))
 
 The handler disables per-message compression, imposes read, message, queue,
 history, update, and awareness-client limits, and drops a slow peer instead of
-retaining an unbounded application queue. The latest awareness client ID is
-bound to the authenticated connection; equal or older relayed states from
-other connections remain accepted because `y-websocket` intentionally
-re-broadcasts them. A newer competing state closes the publisher.
+retaining an unbounded application queue. An active awareness client ID is
+bound to its exact WebSocket, not merely the authenticated principal, so one
+user's second browser tab survives the first tab disconnecting. The relay
+accepts the standard equal-clock `null` removal and retains only bounded
+clock/owner tombstones (no awareness JSON) to prevent a delayed pre-removal
+state from resurrecting a ghost cursor. Equal or older non-null retransmits are
+harmlessly ignored; a current competing state from another connection closes
+that publisher.
 
 ## Persistence and recovery boundary
 
@@ -173,9 +178,9 @@ Yjs update bytes, because its recovery and authorization contract differs.
 Run the focused contract checks:
 
 ```sh
-go test ./extensions -run 'TestYJS|FuzzUnmarshalYJSMessages'
-go test -race ./extensions -run 'TestYJS'
-go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s ./extensions
+(cd extensions && go test . -run 'TestYJS|FuzzUnmarshalYJSMessages')
+(cd extensions && go test -race . -run 'TestYJS')
+(cd extensions && go test -run '^$' -bench='BenchmarkYJSWireDecodeAndAdmission$' -benchmem -benchtime=1s .)
 ```
 
 The benchmark measures local wire decoding and duplicate-aware in-memory

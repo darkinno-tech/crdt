@@ -85,7 +85,7 @@ The rich-text core deliberately accepts generic attributes that the Tiptap Profi
 
 ## Out of scope
 
-Tables, lists, media, arbitrary links, block embeds, custom marks/attrs, NodeViews, editor IDs, selection/presence, shared undo, persistence, replay, TLS, authentication, authorization, rate limiting, resource fetches, and rendering sanitisation are application responsibilities. Model structured objects in a separately negotiated `documenttree` group; do not place their raw JSON, HTML, CSS, or URLs in `rt.block`.
+Tables, lists, media, arbitrary links, block embeds, custom marks/attrs, NodeViews, editor IDs, selection/presence transport, shared undo, annotation storage, replay, TLS, authentication, authorization, rate limiting, resource fetches, and rendering sanitisation are application responsibilities. `RichTextWasmDocument` can encode a bounded `text.Anchor` or `AnchorRange` for host-owned cursors, selections, and comments, but those bytes still require authenticated document/group/epoch binding and must not enter a rich-text frame or snapshot. Model structured objects in a separately negotiated `documenttree` group; do not place their raw JSON, HTML, CSS, or URLs in `rt.block`.
 
 ## Verification and controlled benchmark
 

@@ -82,6 +82,154 @@ func TestRGAPackedFramesPreservePositionsAndCloseInitialSyncByteGap(t *testing.T
 	}
 }
 
+func TestRGAPackedOuterFrameV2PreservesPayloadAndShrinksInitialState(t *testing.T) {
+	source := mustRGA(t, "packed-v2-source")
+	delta, err := source.Insert(0, strings.Repeat("协", 4_096))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, err := delta.MarshalPackedBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := delta.MarshalPackedFrameV2()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v2) >= len(v1) {
+		t.Fatalf("outer v2 packed delta size = %d, v1 size = %d", len(v2), len(v1))
+	}
+	v1Frame, err := frame.UnmarshalFrame(v1, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2Frame, err := frame.UnmarshalFrame(v2, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2Frame.Version() != frame.FormatVersionV2 || !bytes.Equal(v2Frame.Payload, v1Frame.Payload) {
+		t.Fatal("outer v2 changed the canonical packed-v3 delta payload")
+	}
+
+	tight := frame.DefaultLimits()
+	tight.MaxFrameBytes = len(v2)
+	if _, err := delta.MarshalPackedFrameV2WithLimits(tight); err != nil {
+		t.Fatalf("direct packed outer v2 at final size: %v", err)
+	}
+	if _, err := delta.MarshalPackedBinaryWithLimits(tight); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("packed v1 at compressed budget = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	decoded, err := UnmarshalRGAPackedDeltaWithLimits(v2, tight)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustRGA(t, "packed-v2-target")
+	if err := target.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := target.String(), source.String(); got != want {
+		t.Fatalf("outer v2 target text = %q, want %q", got, want)
+	}
+
+	stateV1, err := source.MarshalPackedBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateV2, err := source.MarshalPackedFrameV2()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stateV2) >= len(stateV1) {
+		t.Fatalf("outer v2 packed state size = %d, v1 state = %d", len(stateV2), len(stateV1))
+	}
+	stateV1Frame, err := frame.UnmarshalFrame(stateV1, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateV2Frame, err := frame.UnmarshalFrame(stateV2, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateV2Frame.Version() != frame.FormatVersionV2 || !bytes.Equal(stateV2Frame.Payload, stateV1Frame.Payload) {
+		t.Fatal("outer v2 changed the canonical packed-v3 state payload")
+	}
+	receiver := mustRGA(t, "packed-v2-receiver")
+	if err := receiver.UnmarshalPackedBinary(stateV2); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := receiver.String(), source.String(); got != want {
+		t.Fatalf("outer v2 recovered text = %q, want %q", got, want)
+	}
+	saved, err := source.SnapshotPackedFrameV2CurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := NewFromSnapshot(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := recovered.String(), source.String(); got != want {
+		t.Fatalf("outer v2 snapshot text = %q, want %q", got, want)
+	}
+}
+
+func TestRGAPackedOuterFrameV2MutatorsPreflightAndReplicate(t *testing.T) {
+	value := mustRGA(t, "packed-v2-local")
+	tooSmall := frame.DefaultLimits()
+	tooSmall.MaxFrameBytes = 1
+	if _, err := value.InsertPackedFrameV2WithLimits(0, "cannot commit", tooSmall); !errors.Is(err, frame.ErrFrameLimit) {
+		t.Fatalf("preflight packed outer-v2 insert error = %v, want %v", err, frame.ErrFrameLimit)
+	}
+	if got := value.String(); got != "" {
+		t.Fatalf("failed packed outer-v2 preflight changed text to %q", got)
+	}
+
+	limits := frame.DefaultLimits()
+	insert, err := value.InsertPackedFrameV2WithLimits(0, "draft", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteFrame, err := value.DeletePackedFrameV2WithLimits(1, 2, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceFrame, err := value.ReplacePackedFrameV2WithLimits(1, 1, " finalized", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := mustRGA(t, "packed-v2-observer")
+	for _, encoded := range [][]byte{insert, deleteFrame, replaceFrame} {
+		decoded, err := UnmarshalRGAPackedDeltaWithLimits(encoded, limits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := target.ApplyDelta(decoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := target.String(), value.String(); got != want {
+		t.Fatalf("outer v2 mutations produced %q, want %q", got, want)
+	}
+
+	prepared, preparedFrame, err := value.PrepareDeletePackedFrameV2WithLimits(0, 1, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalRGAPackedDeltaWithLimits(preparedFrame, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := value.ApplyDelta(prepared); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := target.String(), value.String(); got != want {
+		t.Fatalf("prepared outer v2 target = %q, want %q", got, want)
+	}
+}
+
 func TestRGAPackedFramesFallbackForNonDenseChainAndRejectNonCanonicalBitmap(t *testing.T) {
 	first := Position{ReplicaID: "writer", WallTime: 10, Logical: 4}
 	second := Position{ReplicaID: "writer", WallTime: 12, Logical: 2}
@@ -379,7 +527,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decodedNodes, decodedTombstones, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, limits, true)
+	decodedNodes, decodedTombstones, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, limits, true, nil)
 	if err != nil || len(decodedNodes) != len(nodes) || len(decodedTombstones) != 1 {
 		t.Fatalf("packed state decode = nodes=%d tombstones=%d err=%v", len(decodedNodes), len(decodedTombstones), err)
 	}
@@ -388,7 +536,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 	}
 	decodeLimited := limits
 	decodeLimited.MaxElements = 1
-	if _, _, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, decodeLimited, true); !errors.Is(err, frame.ErrInvalidFrame) {
+	if _, _, err := unmarshalRGAPacked(encoded, crdt.TypeIDRGAPackedState, decodeLimited, true, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("packed decode limit = %v", err)
 	}
 	pending := mustRGA(t, "packed-pending")
@@ -411,7 +559,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+			if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 				t.Fatalf("unmarshal invalid packed = %v", err)
 			}
 		})
@@ -426,7 +574,7 @@ func TestRGAPackedWireFailureAndLimitPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false); !errors.Is(err, frame.ErrInvalidFrame) {
+	if _, _, err := unmarshalRGAPacked(data, crdt.TypeIDRGAPackedDelta, limits, false, nil); !errors.Is(err, frame.ErrInvalidFrame) {
 		t.Fatalf("invalid packed chain parent flag = %v", err)
 	}
 }

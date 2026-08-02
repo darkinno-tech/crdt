@@ -16,7 +16,11 @@ try to convert live mutations between them.
 | --- | --- |
 | Document and updates | Direct `Y.Doc` / `Y.Text`, V1 or V2 explicitly pinned per room. `Y.applyUpdate`, `encodeStateVector`, and state-vector differences retain native Yjs semantics. |
 | Remote editor changes | `Y.TextEvent.delta` is translated to one or more CodeMirror UTF-16 changes. No remote `text.toString()` projection is used after initial attachment. |
-| Cursor | The awareness JSON field contains encoded `Y.RelativePosition` values; every display resolves them against the exact local `Y.Text`. |
+| Relative positions | `createRelativePosition` / `resolveRelativePosition` expose bounded binary `Y.RelativePosition` values for comments, selections, and anchors. The awareness cursor field uses the same representation and resolves only against the exact local `Y.Text`. |
+| Deep observation | `observeYjsDeep` exposes bounded changed paths and live target types for `Y.Map`, `Y.Array`, `Y.Text`, and XML descendants. It never retains raw lazy `Y.Event` objects or arbitrary values. |
+| Undo/redo | `createUndoManager` tracks only `applyLocalReplacement` transactions from this binding. Undo/redo emit compensating local Yjs updates; remote edits are deliberately excluded. History is capped at 256 stack items by default. |
+| Manual transport | `onLocalUpdate` / `onLocalAwarenessUpdate` are synchronous hand-offs to the application-owned outbox; a thrown callback or outbound byte-cap failure latches that respective path and reports a stable error. |
+| Manual V1 sync | `createSyncProtocol` reads and writes exactly one bounded, unwrapped y-protocols SyncStep1/2 or update submessage. V2 continues to use state-vector/diff methods directly because y-protocols sync is V1. |
 | Presence | `y-protocols/awareness` encode/apply APIs are used directly. Yjs client IDs are routing identifiers, never authenticated user identities. |
 | Rich text | Not supported by this plain-text binding. A format or embed stops projection instead of silently flattening it. Use a schema-aware Yjs editor binding for rich content. |
 
@@ -63,7 +67,7 @@ editor lifecycle. The binding owns neither the WebSocket nor the document.
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness.js";
 import type { ViewUpdate } from "@codemirror/view";
-import { bindYjsCodeMirrorPlainText } from "@darkinno/crdt-client/yjs";
+import { bindYjsCodeMirrorPlainText, observeYjsDeep } from "@darkinno/crdt-client/yjs";
 
 const document = new Y.Doc();
 const text = document.getText("content");
@@ -119,6 +123,102 @@ State-vector recovery remains native: call `encodeStateVector()` for sync Step
 1 and `encodeStateAsUpdate(peerVector)` for the V1/V2-pinned missing update.
 Never feed V1 bytes to a V2 room or vice versa.
 
+### Manual callback failure and recovery
+
+The `onLocal*` callbacks are a **synchronous hand-off**, not a durable receipt
+or proof that a peer applied an update. If durable delivery is required, copy
+the callback's bytes into an application-owned retry/outbox record before a
+fallible network send. An asynchronous send failure after the callback returns
+remains the transport owner's retry/recovery responsibility.
+
+If a callback throws, or a generated local update is above its configured byte
+cap, the binding latches only that outbound path and calls `onError` once:
+
+- `applyLocalReplacement`, `undo()`, and `redo()` return
+  `YjsBindingError("local_update_failed")` or `YjsBindingError("resource_limit")`.
+  The originating Yjs transaction has already committed, so it cannot be
+  rolled back; later binding-owned text writes are blocked before creating
+  another unhanded update.
+- `setLocalCursor` and `clearLocalCursor` analogously return
+  `YjsBindingError("local_awareness_failed")` or `YjsBindingError("resource_limit")`.
+  Awareness is still ephemeral; later binding-owned cursor writes are blocked.
+
+Do not retry by issuing a second editor mutation. Stop input for the affected
+surface, repair or replace the application outbox/transport, establish the
+room's normal state-vector recovery point, and create a replacement binding.
+The callback owns the bytes it receives; the binding deliberately does not
+pretend it has persisted them. Exceptions thrown by `onError` are ignored so
+error reporting cannot re-enter Yjs's synchronous observer loop.
+
+### Relative positions, deep views, and local undo
+
+```ts
+const commentStart = binding.createRelativePosition(12); // associates with the next character
+const commentEnd = binding.createRelativePosition(18, -1); // associates with the prior character
+
+// Resolve only against this exact Y.Text; a foreign or malformed position fails closed.
+renderComment({ from: binding.resolveRelativePosition(commentStart), to: binding.resolveRelativePosition(commentEnd) });
+
+const undo = binding.createUndoManager({
+  captureTimeout: 500,
+  maxStackItems: 256,
+});
+undo.stopCapturing(); // begin a new user-action group before the next editor change
+if (undo.undo()) {
+  // The binding's onLocalUpdate callback receives this compensating update.
+}
+
+const stopBoardView = observeYjsDeep(board, {
+  maxEventsPerTransaction: 128,
+  maxPathDepth: 16,
+  onChanges(changes) {
+    // Read `target` now. Do not retain raw Y.Event data beyond this callback.
+    for (const { path, target } of changes) refreshPath(path, target);
+  },
+  onError(error) { detachBoardView(error); },
+});
+```
+
+Undo history is local UI state: do not serialize it, infer authorization from
+it, or expect it to roll back a shared document. A remote edit is never added
+to this manager, and a successful `undo()` / `redo()` creates a normal new Yjs
+update that needs the same authenticated transport, durable receipt, and retry
+handling as any other local change. Destroy the manager before changing the
+room, schema, or editor surface; destroying the binding does this automatically.
+`maxStackItems` defaults to 256. Before a binding-owned edit would exceed that
+cap, the binding clears the complete local undo/redo history through Yjs's own
+release path, then records the new edit. This deliberately keeps the newest
+operation undoable instead of splicing Yjs internal stack items, which could
+retain deleted structs or violate its garbage-collection bookkeeping.
+
+### Manual y-protocols V1 SyncStep1/2
+
+Use this only when the application owns the authenticated transport. The helper
+returns an **inner** y-protocols sync submessage: an existing y-websocket
+provider already owns the outer `messageSync = 0` wrapper and must not be used
+at the same time.
+
+```ts
+const sync = binding.createSyncProtocol({
+  // Reserve the y-protocols varint/type envelope above the configured update cap.
+  maxMessageBytes: (1 << 20) + 16,
+});
+
+transport.sendYjsSync(sync.encodeSyncStep1());
+transport.onYjsSync = (message) => {
+  const response = sync.receive(message); // SyncStep1 -> SyncStep2, otherwise no response
+  if (response !== undefined) transport.sendYjsSync(response);
+};
+```
+
+The room name, outer provider envelope, authentication, authorization,
+backpressure, receipt, and retry policy remain transport responsibilities.
+`receive` rejects an unknown type, trailing bytes, an oversized inner payload,
+or a V2 binding before it mutates the Y.Doc. For V2 rooms, exchange the bounded
+state vector with `encodeStateVector()` and use
+`encodeStateAsUpdate(remoteStateVector)` / `applyRemoteUpdate(update)` in a
+separately negotiated authenticated envelope.
+
 ## Safety and resource boundaries
 
 - `maxUpdateBytes` and `maxAwarenessBytes` reject inbound bytes before their
@@ -130,6 +230,19 @@ Never feed V1 bytes to a V2 room or vice versa.
   public trust boundary.
 - `maxCursorBytes` bounds the decoded relative-position payload. Invalid,
   foreign-text, stale, or malformed awareness cursor values are ignored.
+- `maxStackItems` bounds local undo/redo retention. It is a UI-memory limit,
+  not a durable history, authorization record, or remote-operation limit.
+- A throwing manual `onLocalUpdate` / `onLocalAwarenessUpdate`, or a locally
+  generated update above the respective cap, latches that local outbound path.
+  The triggering Yjs transaction may already be committed, so recover the
+  application-owned outbox and resync before attaching a new binding; do not
+  treat the callback as a durable receipt.
+- `observeYjsDeep` has independent event-count and path-depth caps. On an
+  overflow or application callback failure it unregisters itself after the
+  current transaction instead of providing a partial or silently stale view.
+- The SyncStep helper checks the full envelope before parsing; set
+  `maxMessageBytes` to the exact authenticated transport cap and reserve enough
+  bytes for the y-protocols varint/type envelope above `maxUpdateBytes`.
 - Awareness remains ephemeral. Do not place it in YJSStore snapshots, Go CRDT
   frames, audit logs, or authorization decisions. Bind the relay's client ID
   to an authenticated connection at the server, as `YJSHandler` does.
@@ -142,12 +255,16 @@ Never feed V1 bytes to a V2 room or vice versa.
 ```sh
 make typescript-test
 node --test clients/typescript/test/yjs.test.mjs
+make typescript-yjs-core-benchmark
 make typescript-yjs-bindings-benchmark
 ```
 
 The focused suite uses a real CodeMirror 6 view under JSDOM for remote range
 application, tests V1/V2, state-vector recovery, cursor/awareness forwarding,
-formatted-text refusal, and a three-replica delayed/duplicated/reordered update
-simulation. The benchmark records local process work and editor write shape;
-it is not a browser rendering, WebSocket, TLS, WAN, persistence, or service
-capacity result. See the [recorded baseline](../operations/yjs-native-editor-bindings-2026-08-01.md).
+formatted-text refusal, binding-scoped undo/redo, deep-observation bounds, V1
+SyncStep1/2 convergence, capped undo-history reset, and a three-replica
+delayed/duplicated/reordered update simulation, and failure-latched manual
+update/awareness callbacks. The benchmarks record local
+process work and editor write shape;
+they are not browser rendering, WebSocket, TLS, WAN, persistence, or service
+capacity results. See the [recorded baselines](../operations/yjs-native-editor-bindings-2026-08-01.md).

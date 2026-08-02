@@ -12,6 +12,13 @@ const maximumStateVectorBytes = 1 << 20;
 const maximumSnapshotBytes = 128 << 20;
 const maximumMergeUpdates = 1 << 16;
 const maximumRequestBytes = 160 << 20;
+const defaultMaxConcurrentRequests = 4;
+const maximumConcurrentRequests = 64;
+const defaultRequestTimeoutMillis = 10_000;
+const minimumRequestTimeoutMillis = 1_000;
+const maximumRequestTimeoutMillis = 120_000;
+const maximumHeadersTimeoutMillis = 5_000;
+const connectionTimeoutCheckMillis = 1_000;
 const maximumCursor = Number.MAX_SAFE_INTEGER;
 const emptyV1 = Y.encodeStateAsUpdate(new Y.Doc());
 const emptyV2 = Y.encodeStateAsUpdateV2(new Y.Doc());
@@ -42,6 +49,8 @@ export async function loadConfig(environment = process.env) {
     maxStateVectorBytes: boundedEnvironmentInteger(environment.YJS_STORE_MAX_STATE_VECTOR_BYTES ?? `${64 << 10}`, 1, maximumStateVectorBytes, "YJS_STORE_MAX_STATE_VECTOR_BYTES"),
     maxSnapshotBytes: boundedEnvironmentInteger(environment.YJS_STORE_MAX_SNAPSHOT_BYTES ?? `${16 << 20}`, 1, maximumSnapshotBytes, "YJS_STORE_MAX_SNAPSHOT_BYTES"),
     maxMergeUpdates: boundedEnvironmentInteger(environment.YJS_STORE_MAX_MERGE_UPDATES ?? "256", 1, maximumMergeUpdates, "YJS_STORE_MAX_MERGE_UPDATES"),
+    maxConcurrentRequests: boundedEnvironmentInteger(environment.YJS_STORE_MAX_CONCURRENT_REQUESTS ?? `${defaultMaxConcurrentRequests}`, 1, maximumConcurrentRequests, "YJS_STORE_MAX_CONCURRENT_REQUESTS"),
+    requestTimeoutMillis: boundedEnvironmentInteger(environment.YJS_STORE_REQUEST_TIMEOUT_MS ?? `${defaultRequestTimeoutMillis}`, minimumRequestTimeoutMillis, maximumRequestTimeoutMillis, "YJS_STORE_REQUEST_TIMEOUT_MS"),
   };
   if (!isLoopbackHost(config.host)) {
     throw new Error("YJS_STORE_HOST must be the literal loopback address 127.0.0.1 or ::1");
@@ -61,15 +70,35 @@ export async function loadConfig(environment = process.env) {
 // createYJSStoreServer constructs the local semantic service. It never adds
 // CORS headers and should normally listen only on loopback; a gateway owns
 // client authentication, authorization, origin checks, rate limits, and TLS.
-export function createYJSStoreServer(config) {
+export function createYJSStoreServer(configuration) {
+  const config = normalizeServerConfig(configuration);
   validateConfig(config);
   const locks = new KeyedLock();
-  const server = createServer((request, response) => {
-    void handleRequest(config, locks, request, response).catch((error) => sendError(response, error));
+  const admission = new RequestAdmission(config.maxConcurrentRequests);
+  const server = createServer({
+    requestTimeout: config.requestTimeoutMillis,
+    headersTimeout: Math.min(config.requestTimeoutMillis, maximumHeadersTimeoutMillis),
+    connectionsCheckingInterval: connectionTimeoutCheckMillis,
+  }, (request, response) => {
+    if (!admission.tryAcquire()) {
+      // Do not buffer a rejected body while the bounded semantic workers are
+      // occupied. The loopback gateway can retry a 503 after backoff.
+      request.resume();
+      sendError(response, new YJSStoreError("unavailable", 503));
+      return;
+    }
+    void handleRequest(config, locks, request, response)
+      .catch((error) => sendError(response, error))
+      .finally(() => admission.release());
   });
   return {
     server,
     async listen() {
+      // loadConfig performs this check too, but createYJSStoreServer is
+      // exported for embedding wrappers. Recheck at the point the listener
+      // becomes live so a direct configuration or a permission change between
+      // loading and binding cannot weaken the durable-store boundary.
+      await ensureSecureDataDirectory(config.dataDir);
       await new Promise((resolveListen, rejectListen) => {
         server.once("error", rejectListen);
         server.listen(config.port, config.host, () => {
@@ -86,6 +115,18 @@ export function createYJSStoreServer(config) {
     async close() {
       await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
     },
+  };
+}
+
+function normalizeServerConfig(configuration) {
+  if (configuration === null || typeof configuration !== "object") {
+    return configuration;
+  }
+  return {
+    ...configuration,
+    dataDir: typeof configuration.dataDir === "string" ? resolve(configuration.dataDir) : configuration.dataDir,
+    maxConcurrentRequests: configuration.maxConcurrentRequests ?? defaultMaxConcurrentRequests,
+    requestTimeoutMillis: configuration.requestTimeoutMillis ?? defaultRequestTimeoutMillis,
   };
 }
 
@@ -137,28 +178,37 @@ async function apply(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    const engine = engineFor(document.format);
-    const updateError = validateUpdateFormat(document.format, update);
-    if (updateError !== null) {
-      throw new YJSStoreError(updateError, 400);
-    }
-    const before = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
     try {
-      engine.apply(state.document, update);
-    } catch {
-      throw new YJSStoreError("invalid_update", 400);
+      const engine = engineFor(document.format);
+      const updateError = validateUpdateFormat(document.format, update);
+      if (updateError !== null) {
+        throw new YJSStoreError(updateError, 400);
+      }
+      try {
+        if (!applyAndDetectChange(engine, state.document, update)) {
+          return { applied: false, cursor: state.cursor, stateVector: encodeBytes(state.stateVector) };
+        }
+      } catch (error) {
+        if (error instanceof YJSStoreError) {
+          throw error;
+        }
+        throw new YJSStoreError("invalid_update", 400);
+      }
+      const merged = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
+      const vector = boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes);
+      if (state.cursor >= maximumCursor) {
+        throw new YJSStoreError("limit_exceeded", 413);
+      }
+      const cursor = state.cursor + 1;
+      await persistDocument(config, document, key, cursor, merged, vector);
+      return { applied: true, cursor, stateVector: encodeBytes(vector) };
+    } finally {
+      // Every HTTP request materializes a fresh Y.Doc from its durable
+      // snapshot. Destroy it after the operation so Yjs observers, subdocs,
+      // and implementation-owned references cannot accumulate under a
+      // sustained state-vector or snapshot workload.
+      state.document.destroy();
     }
-    const merged = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
-    const vector = boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes);
-    if (equalBytes(before, merged)) {
-      return { applied: false, cursor: state.cursor, stateVector: encodeBytes(vector) };
-    }
-    if (state.cursor >= maximumCursor) {
-      throw new YJSStoreError("limit_exceeded", 413);
-    }
-    const cursor = state.cursor + 1;
-    await persistDocument(config, document, key, cursor, merged, vector);
-    return { applied: true, cursor, stateVector: encodeBytes(vector) };
   });
 }
 
@@ -168,7 +218,11 @@ async function stateVector(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    return { stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)) };
+    try {
+      return { stateVector: encodeBytes(state.stateVector) };
+    } finally {
+      state.document.destroy();
+    }
   });
 }
 
@@ -179,11 +233,15 @@ async function diff(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    const engine = engineFor(document.format);
     try {
-      return { update: encodeBytes(boundedUpdate(engine.encode(state.document, remoteVector), config.maxSnapshotBytes)) };
-    } catch {
-      throw new YJSStoreError("invalid_update", 400);
+      const engine = engineFor(document.format);
+      try {
+        return { update: encodeBytes(boundedUpdate(engine.encode(state.document, remoteVector), config.maxSnapshotBytes)) };
+      } catch {
+        throw new YJSStoreError("invalid_update", 400);
+      }
+    } finally {
+      state.document.destroy();
     }
   });
 }
@@ -194,12 +252,16 @@ async function snapshot(config, locks, payload) {
   const key = documentKey(document);
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
-    const engine = engineFor(document.format);
-    return {
-      cursor: state.cursor,
-      update: encodeBytes(boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes)),
-      stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)),
-    };
+    try {
+      const engine = engineFor(document.format);
+      return {
+        cursor: state.cursor,
+        update: encodeBytes(boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes)),
+        stateVector: encodeBytes(state.stateVector),
+      };
+    } finally {
+      state.document.destroy();
+    }
   });
 }
 
@@ -255,18 +317,53 @@ function validateUpdateFormat(format, update) {
   return engineFor(format === "v1" ? "v2" : "v1").valid(update) ? "wrong_format" : "invalid_update";
 }
 
+function applyAndDetectChange(engine, document, update) {
+  let transaction;
+  Y.transact(document, (currentTransaction) => {
+    transaction = currentTransaction;
+    engine.apply(document, update);
+  }, null, false);
+  if (transaction === undefined) {
+    // The pinned Yjs runtime always exposes the surrounding transaction.
+    // Fail closed if that contract changes instead of treating an unknown
+    // result as a duplicate and dropping a durable update.
+    throw new YJSStoreError("unavailable", 503);
+  }
+  return transactionChangesState(transaction);
+}
+
+function transactionChangesState(transaction) {
+  // This is Yjs's own writeUpdateMessageFromTransaction predicate. A state
+  // vector alone is insufficient because a delete set can change a document
+  // without advancing any client clock.
+  if (transaction.deleteSet.clients.size !== 0) {
+    return true;
+  }
+  for (const [client, clock] of transaction.afterState) {
+    if (transaction.beforeState.get(client) !== clock) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function loadDocument(config, document, key) {
   const record = await readRecord(config, document, key);
   const value = new Y.Doc({ gc: true });
   if (record === null) {
-    return { document: value, cursor: 0 };
+    return {
+      document: value,
+      cursor: 0,
+      stateVector: boundedUpdate(Y.encodeStateVector(value), config.maxStateVectorBytes),
+    };
   }
+  let actualVector;
   try {
     if (!engineFor(document.format).valid(record.update)) {
       throw new Error("wrong snapshot format");
     }
     engineFor(document.format).apply(value, record.update);
-    const actualVector = boundedUpdate(Y.encodeStateVector(value), config.maxStateVectorBytes);
+    actualVector = boundedUpdate(Y.encodeStateVector(value), config.maxStateVectorBytes);
     if (!equalBytes(actualVector, record.stateVector)) {
       throw new Error("state vector mismatch");
     }
@@ -274,7 +371,7 @@ async function loadDocument(config, document, key) {
     value.destroy();
     throw new YJSStoreError("corrupt_store", 500);
   }
-  return { document: value, cursor: record.cursor };
+  return { document: value, cursor: record.cursor, stateVector: actualVector };
 }
 
 async function readRecord(config, document, key) {
@@ -511,9 +608,33 @@ function validateConfig(config) {
     !Number.isInteger(config.maxStateVectorBytes) || config.maxStateVectorBytes < 1 || config.maxStateVectorBytes > maximumStateVectorBytes ||
     !Number.isInteger(config.maxSnapshotBytes) || config.maxSnapshotBytes < config.maxUpdateBytes || config.maxSnapshotBytes > maximumSnapshotBytes ||
     !Number.isInteger(config.maxMergeUpdates) || config.maxMergeUpdates < 1 || config.maxMergeUpdates > maximumMergeUpdates ||
+    !Number.isInteger(config.maxConcurrentRequests) || config.maxConcurrentRequests < 1 || config.maxConcurrentRequests > maximumConcurrentRequests ||
+    !Number.isInteger(config.requestTimeoutMillis) || config.requestTimeoutMillis < minimumRequestTimeoutMillis || config.requestTimeoutMillis > maximumRequestTimeoutMillis ||
     !Number.isInteger(config.maxRequestBytes) || config.maxRequestBytes < config.maxUpdateBytes || config.maxRequestBytes > maximumRequestBytes ||
     !isLoopbackHost(config.host) || !Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error("invalid Yjs store configuration");
+  }
+}
+
+class RequestAdmission {
+  #active = 0;
+
+  constructor(maximum) {
+    this.maximum = maximum;
+  }
+
+  tryAcquire() {
+    if (this.#active >= this.maximum) {
+      return false;
+    }
+    this.#active += 1;
+    return true;
+  }
+
+  release() {
+    if (this.#active > 0) {
+      this.#active -= 1;
+    }
   }
 }
 

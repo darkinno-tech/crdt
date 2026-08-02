@@ -3,10 +3,7 @@ FROM ${GO_IMAGE}
 
 WORKDIR /workspace
 
-COPY go.mod ./
-RUN go mod download
-
 COPY . .
-RUN chmod +x scripts/check-coverage.sh
+RUN chmod +x scripts/check-coverage.sh scripts/for-go-modules.sh
 
-CMD ["./scripts/check-coverage.sh"]
+CMD ["make", "coverage"]

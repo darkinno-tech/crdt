@@ -42,6 +42,10 @@ $(go list -f '{{.ImportPath}}|{{.Dir}}|{{join .TestGoFiles ","}}|{{join .XTestGo
 EOF
 
 if [ "$found" -eq 0 ]; then
+	if [ "${FUZZ_ALLOW_EMPTY:-}" = "1" ]; then
+		printf '%s\n' 'fuzz: no Fuzz* targets in this module; skipped'
+		exit 0
+	fi
 	echo 'fuzz: no Fuzz* targets found in module graph' >&2
 	exit 1
 fi

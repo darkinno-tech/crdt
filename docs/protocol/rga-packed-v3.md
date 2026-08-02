@@ -95,12 +95,44 @@ The contract does not change RGA's tombstone rule. Deleted markers still anchor
 descendants; compact them only after authenticated, exact current-member
 acknowledgements, durable checkpointing, and old-frame retirement.
 
+## Optional outer frame v2 for initial sync
+
+Packed-v3 can additionally use the separately negotiated
+[compression-aware outer frame v2](frame-v2.md). This is not a packed-v4
+semantic protocol: it retains TypeIDs `29/30`, semantics version `3`, and the
+same canonical decoded packed-v3 payload. A group MUST bind
+`WireFormatVersion: frame.FormatVersionV2` in its authenticated
+`replica.Protocol`; an outer-v1 packed-v3 group and an outer-v2 packed-v3 group
+are intentionally incompatible.
+
+The direct Go APIs are `MarshalPackedFrameV2`, `Delta.MarshalPackedFrameV2`,
+the packed `Insert`/`Delete`/`Replace` `FrameV2WithLimits` variants,
+`SnapshotPackedFrameV2CurrentState`, and packed snapshot-delta v2 methods.
+They preflight the final v2 envelope before a local mutation. The compressor
+uses raw v2 when DEFLATE would not reduce the complete frame, but even those
+small frames require an outer-v2 Manifest.
+
+Build the bounded browser artifact with `WASM_RGA_PROTOCOL=packed-v3-v2` and
+pass `RGA_PROTOCOL_PACKED_V3_V2` to `initRGAWasm`. It exposes outer format
+version `2` alongside the existing frame pair, rejects v1 inputs before any
+RGA mutation, and is rejected by the ordinary `packed-v3` artifact. The
+dependency-free TypeScript `decodeFrame` helper still validates v1 envelopes
+only; the loader deliberately delegates v2 frame decoding to the bounded Go
+Wasm runtime. A pure TypeScript decoder must implement the same bounded raw
+DEFLATE checks before it advertises v2.
+
+DEFLATE is neither authentication nor encryption. The outer decoder checks
+`MaxFrameBytes` before parsing and `MaxPayload` before expansion; applications
+still need transport body caps, TLS, authorization, and an authenticated exact
+Manifest.
+
 ## Compatibility and verification
 
 Packed v3 is implemented by the Go library and an explicitly built Go/Wasm
-runtime (`WASM_RGA_PROTOCOL=packed-v3`). The TypeScript loader exposes only the
-exact manifest contract and delegates every RGA frame to that runtime; it does
-not decode or translate packed frames. Native implementations MUST NOT
+runtime (`WASM_RGA_PROTOCOL=packed-v3` or the outer-v2
+`WASM_RGA_PROTOCOL=packed-v3-v2`). The TypeScript loader exposes only the exact
+manifest contract and delegates every RGA frame to that runtime; it does not
+decode or translate packed frames. Native implementations MUST NOT
 advertise TypeIDs `29/30` until they implement this exact decoder, limits,
 canonical re-encoder, and vectors. It is not Yjs wire compatibility; Yjs
 updates stay in the separately bounded opaque relay/store boundary.
@@ -119,7 +151,9 @@ go test -race ./text
 go test -run='^$' -fuzz=FuzzRGAPackedUnmarshal -fuzztime=150000x -parallel=1 ./text
 go test -run='^$' -bench='BenchmarkRGADeltaWireProtocols/(run-v2|packed-v3)$|BenchmarkRGAMarshalLinearDocument/(run_v2|packed_v3)$' -benchmem ./text
 make wasm-packed-test
+make wasm-packed-v2-test
 go run ./cmd/crdt-compare -protocol=packed-v3 -scenario=initial -sizes=4096,16384
+go run ./cmd/crdt-compare -protocol=packed-v3-v2 -scenario=initial -sizes=4096,16384
 ```
 
 Any incompatible field, ordering, reconstruction rule, or compaction behavior

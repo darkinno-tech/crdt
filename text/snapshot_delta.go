@@ -148,6 +148,42 @@ func (r *RGA) MarshalRunDeltaSinceFrameV2BaseWithLimits(base SnapshotBase, limit
 	return marshalRGARunFrameV2(crdt.TypeIDRGARunDelta, delta.nodes, delta.tombstones, limits)
 }
 
+// MarshalPackedDeltaSinceFrameV2 encodes the packed-v3 delta from base to r
+// in a separately negotiated compression-aware outer frame v2. The base must
+// be a complete packed-v3 RGA snapshot.
+func (r *RGA) MarshalPackedDeltaSinceFrameV2(base snapshot.Snapshot) ([]byte, error) {
+	return r.MarshalPackedDeltaSinceFrameV2WithLimits(base, frame.DefaultLimits())
+}
+
+// MarshalPackedDeltaSinceFrameV2WithLimits is MarshalPackedDeltaSinceFrameV2
+// with explicit bounds for both base validation and final v2 output.
+func (r *RGA) MarshalPackedDeltaSinceFrameV2WithLimits(base snapshot.Snapshot, limits frame.DecoderLimits) ([]byte, error) {
+	decoded, err := NewSnapshotBaseWithLimits(base, limits)
+	if err != nil {
+		return nil, err
+	}
+	return r.MarshalPackedDeltaSinceFrameV2BaseWithLimits(decoded, limits)
+}
+
+// MarshalPackedDeltaSinceFrameV2Base is MarshalPackedDeltaSinceFrameV2 for a
+// validated snapshot base that can be reused across anti-entropy rounds.
+func (r *RGA) MarshalPackedDeltaSinceFrameV2Base(base SnapshotBase) ([]byte, error) {
+	return r.MarshalPackedDeltaSinceFrameV2BaseWithLimits(base, frame.DefaultLimits())
+}
+
+// MarshalPackedDeltaSinceFrameV2BaseWithLimits encodes a delta against a
+// cached packed-v3 snapshot base without building an intermediate v1 envelope.
+func (r *RGA) MarshalPackedDeltaSinceFrameV2BaseWithLimits(base SnapshotBase, limits frame.DecoderLimits) ([]byte, error) {
+	if !base.valid || base.stateType != crdt.TypeIDRGAPackedState {
+		return nil, ErrInvalidSnapshot
+	}
+	delta, err := r.deltaSinceBase(base)
+	if err != nil {
+		return nil, err
+	}
+	return marshalRGAPackedFrameV2(crdt.TypeIDRGAPackedDelta, delta.nodes, delta.tombstones, limits)
+}
+
 func (r *RGA) deltaSinceBase(base SnapshotBase) (Delta, error) {
 	if r == nil || r.clock == nil {
 		return Delta{}, ErrNilText
@@ -175,9 +211,9 @@ func rgaSnapshotState(base snapshot.Snapshot, limits frame.DecoderLimits) (uint6
 	case crdt.TypeIDRGAState:
 		nodes, tombstones, err = unmarshalRGA(data, crdt.TypeIDRGAState, limits, true)
 	case crdt.TypeIDRGARunState:
-		nodes, tombstones, err = unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true)
+		nodes, tombstones, err = unmarshalRGARun(data, crdt.TypeIDRGARunState, limits, true, nil)
 	case crdt.TypeIDRGAPackedState:
-		nodes, tombstones, err = unmarshalRGAPacked(data, crdt.TypeIDRGAPackedState, limits, true)
+		nodes, tombstones, err = unmarshalRGAPacked(data, crdt.TypeIDRGAPackedState, limits, true, nil)
 	default:
 		return 0, nil, nil, ErrInvalidSnapshot
 	}

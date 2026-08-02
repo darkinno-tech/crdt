@@ -68,7 +68,7 @@ func TestRGARunV2CrossLanguageVectors(t *testing.T) {
 				t.Fatalf("canonical vector differs\n got: %x\nwant: %x", got, want)
 			}
 
-			decodedNodes, decodedTombstones, err := unmarshalRGARun(want, vector.FrameType, frame.DefaultLimits(), vector.CompleteState)
+			decodedNodes, decodedTombstones, err := unmarshalRGARun(want, vector.FrameType, frame.DefaultLimits(), vector.CompleteState, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,7 +115,7 @@ func TestRGAPackedV3CrossLanguageVectors(t *testing.T) {
 			if !bytes.Equal(got, want) {
 				t.Fatalf("canonical packed vector differs\n got: %x\nwant: %x", got, want)
 			}
-			decodedNodes, decodedTombstones, err := unmarshalRGAPacked(want, vector.FrameType, frame.DefaultLimits(), vector.CompleteState)
+			decodedNodes, decodedTombstones, err := unmarshalRGAPacked(want, vector.FrameType, frame.DefaultLimits(), vector.CompleteState, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

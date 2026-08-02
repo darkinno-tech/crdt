@@ -25,6 +25,11 @@ type Tree struct {
 	hasCachedRoot bool
 }
 
+type treeEntry struct {
+	key    string
+	digest [sha256.Size]byte
+}
+
 func NewTree() *Tree { return &Tree{entries: make(map[string][sha256.Size]byte)} }
 
 func (t *Tree) Insert(key string, value []byte) {
@@ -81,7 +86,7 @@ func (t *Tree) Root() [sha256.Size]byte {
 		t.mu.RUnlock()
 		return root
 	}
-	entries := cloneEntries(t.entries)
+	entries := snapshotEntries(t.entries)
 	generation := t.generation
 	t.mu.RUnlock()
 	root := rootForEntries(entries)
@@ -104,27 +109,29 @@ func (t *Tree) invalidateRootLocked() {
 	t.hasCachedRoot = false
 }
 
-func rootForEntries(entries map[string][sha256.Size]byte) [sha256.Size]byte {
-	keys := make([]string, 0, len(entries))
-	for key := range entries {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	leaves := make([][sha256.Size]byte, 0, len(keys))
-	for _, key := range keys {
-		var length [binary.MaxVarintLen64]byte
-		size := binary.PutUvarint(length[:], uint64(len(key)))
-		encoded := make([]byte, 0, 1+size+len(key)+sha256.Size)
-		encoded = append(encoded, 0)
-		encoded = append(encoded, length[:size]...)
-		encoded = append(encoded, key...)
-		value := entries[key]
-		encoded = append(encoded, value[:]...)
-		leaves = append(leaves, sha256.Sum256(encoded))
-	}
-	if len(leaves) == 0 {
+func rootForEntries(entries []treeEntry) [sha256.Size]byte {
+	if len(entries) == 0 {
 		return emptyRoot()
 	}
+	sort.Slice(entries, func(left, right int) bool { return entries[left].key < entries[right].key })
+	maxKeyBytes := 0
+	for _, entry := range entries {
+		maxKeyBytes = max(maxKeyBytes, len(entry.key))
+	}
+	leaves := make([][sha256.Size]byte, len(entries))
+	encodedLeaf := make([]byte, 0, 1+binary.MaxVarintLen64+maxKeyBytes+sha256.Size)
+	for index, entry := range entries {
+		var length [binary.MaxVarintLen64]byte
+		size := binary.PutUvarint(length[:], uint64(len(entry.key)))
+		encodedLeaf = encodedLeaf[:0]
+		encodedLeaf = append(encodedLeaf, 0)
+		encodedLeaf = append(encodedLeaf, length[:size]...)
+		encodedLeaf = append(encodedLeaf, entry.key...)
+		encodedLeaf = append(encodedLeaf, entry.digest[:]...)
+		leaves[index] = sha256.Sum256(encodedLeaf)
+	}
+	var encodedInner [1 + 2*sha256.Size]byte
+	encodedInner[0] = 1
 	for len(leaves) > 1 {
 		next := make([][sha256.Size]byte, 0, (len(leaves)+1)/2)
 		for i := 0; i < len(leaves); i += 2 {
@@ -132,11 +139,9 @@ func rootForEntries(entries map[string][sha256.Size]byte) [sha256.Size]byte {
 			if i+1 < len(leaves) {
 				right = leaves[i+1]
 			}
-			encoded := make([]byte, 0, 1+2*sha256.Size)
-			encoded = append(encoded, 1)
-			encoded = append(encoded, leaves[i][:]...)
-			encoded = append(encoded, right[:]...)
-			next = append(next, sha256.Sum256(encoded))
+			copy(encodedInner[1:1+sha256.Size], leaves[i][:])
+			copy(encodedInner[1+sha256.Size:], right[:])
+			next = append(next, sha256.Sum256(encodedInner[:]))
 		}
 		leaves = next
 	}
@@ -184,6 +189,18 @@ func cloneEntries(source map[string][sha256.Size]byte) map[string][sha256.Size]b
 		clone[key] = value
 	}
 	return clone
+}
+
+// snapshotEntries copies the immutable key/digest pairs while callers hold a
+// read lock only for the map traversal. Root sorts and hashes this detached
+// slice so writers retain the same short critical section they had with the
+// former map clone.
+func snapshotEntries(source map[string][sha256.Size]byte) []treeEntry {
+	entries := make([]treeEntry, 0, len(source))
+	for key, digest := range source {
+		entries = append(entries, treeEntry{key: key, digest: digest})
+	}
+	return entries
 }
 
 func emptyRoot() [sha256.Size]byte { return sha256.Sum256([]byte{2}) }

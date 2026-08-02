@@ -85,6 +85,64 @@ func TestORTreeAppliesLongLinearDelta(t *testing.T) {
 	}
 }
 
+func TestRootedMonotonicDeltaAcyclic(t *testing.T) {
+	root := NodeID{ReplicaID: "writer", WallTime: 1}
+	child := NodeID{ReplicaID: "writer", WallTime: 2}
+	grandchild := NodeID{ReplicaID: "writer", WallTime: 3}
+	missing := NodeID{ReplicaID: "missing", WallTime: 1}
+
+	for name, test := range map[string]struct {
+		delta Delta
+		want  bool
+	}{
+		"empty": {delta: Delta{nodes: map[NodeID]storedNode{}}, want: true},
+		"complete ordered chain": {
+			delta: Delta{nodes: map[NodeID]storedNode{
+				root:       {value: []byte("root")},
+				child:      {parent: root, value: []byte("child")},
+				grandchild: {parent: child, value: []byte("grandchild")},
+			}},
+			want: true,
+		},
+		"incomplete parent": {
+			delta: Delta{nodes: map[NodeID]storedNode{child: {parent: missing}}},
+			want:  false,
+		},
+		"nonmonotonic parent": {
+			delta: Delta{nodes: map[NodeID]storedNode{
+				root:  {parent: child},
+				child: {value: []byte("child")},
+			}},
+			want: false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := rootedMonotonicDeltaAcyclic(test.delta.nodes); got != test.want {
+				t.Fatalf("rootedMonotonicDeltaAcyclic() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestORTreeApplyDeltaFallsBackForIncompleteMonotonicParent(t *testing.T) {
+	target, err := New("target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := NodeID{ReplicaID: "remote", WallTime: 1}
+	child := NodeID{ReplicaID: "remote", WallTime: 2}
+	delta := Delta{nodes: map[NodeID]storedNode{child: {parent: parent, value: []byte("child")}}, tombstones: map[NodeID]struct{}{}}
+	if rootedMonotonicDeltaAcyclic(delta.nodes) {
+		t.Fatal("incomplete delta unexpectedly satisfied rooted fast path")
+	}
+	if err := target.ApplyDelta(delta); err != nil {
+		t.Fatalf("ApplyDelta(incomplete monotonic delta) = %v", err)
+	}
+	if got := target.Nodes(); len(got) != 0 {
+		t.Fatalf("incomplete node became visible: %#v", got)
+	}
+}
+
 func linearTreeDelta(count int) Delta {
 	nodes := make(map[NodeID]storedNode, count)
 	parent := NodeID{}

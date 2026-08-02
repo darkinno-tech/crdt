@@ -6,7 +6,7 @@ import test, { after } from "node:test";
 import { pathToFileURL } from "node:url";
 
 import { MemoryRGAWasmBrowserPersistence, openRGAWasmBrowserDocument } from "../dist/browser.js";
-import { RGA_PROTOCOL_PACKED_V3, RGA_PROTOCOL_RUN_V2, RGA_PROTOCOL_V1, initRGAWasm } from "../dist/wasm.js";
+import { RGA_PROTOCOL_PACKED_V3, RGA_PROTOCOL_PACKED_V3_V2, RGA_PROTOCOL_RUN_V2, RGA_PROTOCOL_V1, initRGAWasm } from "../dist/wasm.js";
 
 const wasmDirectory = process.env.CRDT_WASM_DIR;
 if (typeof wasmDirectory !== "string" || wasmDirectory === "") {
@@ -125,7 +125,7 @@ test("three offline Wasm RGA browser actors converge after reverse duplicate del
 });
 
 test("packed-v3 Wasm restores one bounded 64Ki-rune initial snapshot", (t) => {
-  if (expectedProtocol !== RGA_PROTOCOL_PACKED_V3) {
+  if (expectedProtocol !== RGA_PROTOCOL_PACKED_V3 && expectedProtocol !== RGA_PROTOCOL_PACKED_V3_V2) {
     t.skip("requires the separately built packed-v3 artifact");
     return;
   }
@@ -137,7 +137,8 @@ test("packed-v3 Wasm restores one bounded 64Ki-rune initial snapshot", (t) => {
     source.insert(offset, value.slice(offset, Math.min(offset + chunkRunes, initialRunes)));
   }
   const snapshot = source.snapshot();
-  assert.ok(snapshot.state.byteLength < 256 << 10, `packed state is ${snapshot.state.byteLength} bytes`);
+  const maxBytes = expectedProtocol === RGA_PROTOCOL_PACKED_V3_V2 ? 32 << 10 : 256 << 10;
+  assert.ok(snapshot.state.byteLength < maxBytes, `packed state is ${snapshot.state.byteLength} bytes`);
   const receiver = runtime.restore(snapshot);
   assert.equal(receiver.text(), value);
   assert.equal(source.close(), true);
@@ -214,7 +215,8 @@ function protocolForArtifact(value) {
   if (value === undefined || value === "run-v2") return RGA_PROTOCOL_RUN_V2;
   if (value === "v1") return RGA_PROTOCOL_V1;
   if (value === "packed-v3") return RGA_PROTOCOL_PACKED_V3;
-  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, or v1");
+  if (value === "packed-v3-v2") return RGA_PROTOCOL_PACKED_V3_V2;
+  throw new Error("CRDT_RGA_PROTOCOL must be run-v2, packed-v3, packed-v3-v2, or v1");
 }
 
 async function startAssetServer(directory) {

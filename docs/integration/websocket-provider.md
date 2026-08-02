@@ -37,8 +37,8 @@ payload.
 ## Run the complete reference
 
 ```sh
-go run ./examples/websocket-provider
-go test -race ./examples/websocket-provider/...
+(cd examples && go run ./websocket-provider)
+(cd examples && go test -race ./websocket-provider/...)
 ```
 
 The command starts an in-process HTTP/WebSocket endpoint, connects two Go
@@ -103,7 +103,7 @@ The example imports this package as:
 import provider "github.com/DarkInno/crdt/examples/websocket-provider/provider"
 ```
 
-The reference pins `github.com/coder/websocket` in the repository module. Its
+The reference pins `github.com/coder/websocket` in the `examples` module. Its
 v1.8.13 pin keeps the repository's Go 1.21 language minimum; revisit that pin
 and its security posture when updating the provider or raising the supported Go
 version.

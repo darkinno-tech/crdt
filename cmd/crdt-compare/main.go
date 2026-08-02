@@ -42,6 +42,7 @@ const (
 	scenarioOfflineConcurrent comparisonScenario = "offline-concurrent"
 	protocolRunV2             comparisonProtocol = "run-v2"
 	protocolPackedV3          comparisonProtocol = "packed-v3"
+	protocolPackedV3OuterV2   comparisonProtocol = "packed-v3-v2"
 )
 
 func parseScenario(value string) (comparisonScenario, error) {
@@ -57,7 +58,7 @@ func parseScenario(value string) (comparisonScenario, error) {
 func parseProtocol(value string) (comparisonProtocol, error) {
 	protocol := comparisonProtocol(value)
 	switch protocol {
-	case protocolRunV2, protocolPackedV3:
+	case protocolRunV2, protocolPackedV3, protocolPackedV3OuterV2:
 		return protocol, nil
 	default:
 		return "", fmt.Errorf("%q is not a supported protocol", value)
@@ -70,6 +71,8 @@ func (protocol comparisonProtocol) implementation() string {
 		return "DarkInno RGA run-v2"
 	case protocolPackedV3:
 		return "DarkInno RGA packed-v3"
+	case protocolPackedV3OuterV2:
+		return "DarkInno RGA packed-v3 outer-v2"
 	default:
 		return "unknown"
 	}
@@ -97,7 +100,7 @@ func run(args []string, writer io.Writer) (err error) {
 	flags.SetOutput(io.Discard)
 	var (
 		scenarioText = flags.String("scenario", string(scenarioInitial), "comparison scenario: initial or offline-concurrent")
-		protocolText = flags.String("protocol", string(protocolRunV2), "RGA protocol: run-v2 or packed-v3")
+		protocolText = flags.String("protocol", string(protocolRunV2), "RGA protocol: run-v2, packed-v3, or packed-v3-v2")
 		sizesText    = flags.String("sizes", "4096,16384", "comma-separated UTF-8 rune counts")
 		samples      = flags.Int("samples", 5, "measured samples per size")
 		warmups      = flags.Int("warmups", 2, "unreported warmups per size")
@@ -314,6 +317,8 @@ func insertComparisonFrame(target *text.RGA, protocol comparisonProtocol, offset
 		return target.InsertRunBinaryWithLimits(offset, value, frame.DefaultLimits())
 	case protocolPackedV3:
 		return target.InsertPackedBinaryWithLimits(offset, value, frame.DefaultLimits())
+	case protocolPackedV3OuterV2:
+		return target.InsertPackedFrameV2WithLimits(offset, value, frame.DefaultLimits())
 	default:
 		return nil, fmt.Errorf("unsupported protocol %q", protocol)
 	}
@@ -325,6 +330,8 @@ func replaceComparisonFrame(target *text.RGA, protocol comparisonProtocol, offse
 		return target.ReplaceRunBinaryWithLimits(offset, count, value, frame.DefaultLimits())
 	case protocolPackedV3:
 		return target.ReplacePackedBinaryWithLimits(offset, count, value, frame.DefaultLimits())
+	case protocolPackedV3OuterV2:
+		return target.ReplacePackedFrameV2WithLimits(offset, count, value, frame.DefaultLimits())
 	default:
 		return nil, fmt.Errorf("unsupported protocol %q", protocol)
 	}
@@ -336,6 +343,8 @@ func marshalComparisonState(target *text.RGA, protocol comparisonProtocol) ([]by
 		return target.MarshalRunBinary()
 	case protocolPackedV3:
 		return target.MarshalPackedBinary()
+	case protocolPackedV3OuterV2:
+		return target.MarshalPackedFrameV2()
 	default:
 		return nil, fmt.Errorf("unsupported protocol %q", protocol)
 	}
@@ -350,6 +359,8 @@ func applyComparisonFrame(target *text.RGA, protocol comparisonProtocol, encoded
 	case protocolRunV2:
 		delta, err = text.UnmarshalRGARunDelta(encoded)
 	case protocolPackedV3:
+		delta, err = text.UnmarshalRGAPackedDelta(encoded)
+	case protocolPackedV3OuterV2:
 		delta, err = text.UnmarshalRGAPackedDelta(encoded)
 	default:
 		return fmt.Errorf("unsupported protocol %q", protocol)

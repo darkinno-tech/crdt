@@ -131,10 +131,20 @@ and any schema such as `bold=true` or `link=https://…` are application-owned.
 ### Relative positions and semantic formatting adapter
 
 `Document.AnchorAt` and `Document.ResolveAnchor` expose the already-defined
-`text.Anchor`; rich text does not add a second relative-position wire format.
+`text.Anchor`; rich text does not add a second relative-position identity
+format. `text.Anchor.MarshalBinary` / `UnmarshalAnchor` provide a bounded,
+versioned host-metadata record for a persistent cursor. `AnchorRangeAt` /
+`ResolveAnchorRange` and the equivalent `AnchorRange` codec capture an
+anchor/head selection or comment range from one locked RGA projection while
+preserving direction. These are not TypeID 23/24 frames and must be stored
+beside an authenticated document checkpoint, bound to its document/group/epoch
+by the host.
+
 `FormatAnchored` resolves its start and exclusive end under the same document
 lock that creates the exact-position format delta. A compacted anchor returns
-`text.ErrAnchorGone` rather than silently moving a user's selection.
+`text.ErrAnchorGone` rather than silently moving a user's selection or
+comment. Tombstone retention is therefore part of the product's annotation
+retention policy; a compaction coordinator cannot silently rewrite anchors.
 
 The optional `SemanticSchemaID` adapter provides typed helpers for bold,
 italic, embeds, and block presentation while preserving the v1 wire model.

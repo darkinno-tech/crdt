@@ -11,6 +11,12 @@ before enabling it. In particular, a replay cursor is valid only after the
 application has atomically persisted its concrete CRDT state and delivery
 frontier.
 
+Install the opt-in module with:
+
+```sh
+go get github.com/DarkInno/crdt/durable@latest
+```
+
 ## Guaranteed transport flow
 
 ```text
@@ -82,7 +88,7 @@ The server exposes `GET /ws` with the `crdt-durable-v1` subprotocol. Its
 `bbolt` file is opened with an exclusive lock, but deployment must still ensure
 that one active pod/process owns the persistent volume. Do not mount the same
 file into multiple replicas. `durable.Config.Store` is a `durable.Log`, so a
-highly available deployment can use the Redis or PostgreSQL implementations in
+highly available deployment can use the Redis, PostgreSQL, or MySQL implementations in
 [the provider architecture guide](provider-architecture.md), provided it keeps
 the same transaction contract. `MaxEvents` and
 `MaxBytes` apply per configured replication group; put a fixed per-tenant
@@ -168,10 +174,10 @@ TLS, ingress controls, and product authorization remain host responsibilities.
 ## Validation
 
 ```sh
-go test ./durable
-go test -race ./durable
-go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x ./durable
-go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect|DurableSameHostFanout)' -benchmem ./durable
+(cd durable && go test .)
+(cd durable && go test -race .)
+(cd durable && go test -run='^$' -fuzz=FuzzWire -fuzztime=250000x .)
+(cd durable && go test -run='^$' -bench='Benchmark(DurableAppend|DurableReplay|Reconnect|DurableSameHostFanout)' -benchmem .)
 ```
 
 These checks include real loopback WebSockets, restart/replay, connection-drop

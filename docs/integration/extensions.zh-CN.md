@@ -2,7 +2,7 @@
 
 [English](extensions.md) | [简体中文](extensions.zh-CN.md)
 
-`extensions` 是本 Go 模块提供的、与 Manifest 绑定的 live relay 官方参考实现。它
+`extensions` 是按需模块 `github.com/DarkInno/crdt/extensions` 中、与 Manifest 绑定的 live relay 官方参考实现。它
 必须显式开启：零值 feature 不暴露任何端点、不调用认证，也不启动 listener 或后台任务。
 
 接入只需将 handler 挂载到应用自己拥有的 mux，并开启需要的 feature：
@@ -27,7 +27,7 @@ if err := handler.Mount(mux, "/crdt/"); err != nil {
 [examples/extensions-provider](../../examples/extensions-provider)：
 
 ```sh
-go run ./examples/extensions-provider
+(cd examples && go run ./extensions-provider)
 ```
 
 预期输出：
@@ -211,18 +211,21 @@ gRPC transport 接收了消息，不能证明对端已持久化。持久 outbox�
 
 ```sh
 # 单元、真实 loopback WS/HTTP/SSE、重复/乱序、并发和示例。
-go test ./extensions ./examples/extensions-provider
+(cd extensions && go test .)
+(cd examples && go test ./extensions-provider)
 
 # 共享状态与连接生命周期竞态。
-go test -race ./extensions
+(cd extensions && go test -race .)
 
 # 有界解析器健壮性。
-go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=250000x ./extensions
+(cd extensions && go test -run='^$' -fuzz=FuzzWireDecoders -fuzztime=250000x .)
 
 # 当前机器上的 loopback 传输成本；不能将其当作 SLA。
-go test -run='^$' \
+(
+  cd extensions && go test -run='^$' \
   -bench='Benchmark(GroupReceive|WebSocket(Batch)?Publish|HTTPPublish)Loopback$' \
-  -benchmem ./extensions
+  -benchmem .
+)
 ```
 
 WebSocket 与 HTTP 基准会在下一次发送前等待发布客户端观察到自己已被接受的 live 变更。

@@ -119,6 +119,7 @@ func BenchmarkRuntimeInitialSnapshotAndRestore65536Runes(b *testing.B) {
 	}{
 		{name: "run_v2", options: DefaultRunRGAOptions()},
 		{name: "packed_v3", options: DefaultPackedRGAOptions()},
+		{name: "packed_v3_outer_v2", options: DefaultPackedRGAFrameV2Options()},
 	} {
 		b.Run(workload.name, func(b *testing.B) {
 			runtime, err := NewRuntime(workload.options)
@@ -129,7 +130,7 @@ func BenchmarkRuntimeInitialSnapshotAndRestore65536Runes(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			want := populateInitialDocument(b, runtime, source, 64<<10)
+			want := populateInitialDocument(b, runtime, source)
 			first, err := runtime.Snapshot(source)
 			if err != nil {
 				b.Fatal(err)

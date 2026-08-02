@@ -111,6 +111,56 @@ func TestRGAMarshalDeltaSinceSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRGAPackedDeltaSinceOuterFrameV2RoundTrip(t *testing.T) {
+	source := mustRGA(t, "packed-source")
+	mustInsertRGA(t, source, 0, "base")
+	base, err := source.SnapshotPackedCurrentState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustInsertRGA(t, source, 4, " update")
+	if _, err := source.Delete(1, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	encoded, err := source.MarshalPackedDeltaSinceFrameV2(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedFrame, err := frame.UnmarshalFrame(encoded, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodedFrame.Version() != frame.FormatVersionV2 || decodedFrame.TypeID != crdt.TypeIDRGAPackedDelta {
+		t.Fatalf("outer v2 packed delta frame = version %d type %d", decodedFrame.Version(), decodedFrame.TypeID)
+	}
+	delta, err := UnmarshalRGAPackedDelta(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := NewSnapshotBase(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachedEncoded, err := source.MarshalPackedDeltaSinceFrameV2Base(cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(cachedEncoded, encoded) {
+		t.Fatal("cached packed snapshot base changed the outer v2 delta")
+	}
+	target, err := NewFromSnapshot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ApplyDelta(delta); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := target.String(), source.String(); got != want {
+		t.Fatalf("packed outer v2 delta recovery text = %q, want %q", got, want)
+	}
+}
+
 func TestRGAMarshalDeltaSincePreservesScalarSnapshotProtocol(t *testing.T) {
 	source := mustRGA(t, "source")
 	mustInsertRGA(t, source, 0, "base")
@@ -311,6 +361,9 @@ func TestRGASnapshotDeltaRejectsCrossProtocolAndIncompleteState(t *testing.T) {
 	if _, err := source.MarshalRunDeltaSinceFrameV2Base(decodedScalarBase); !errors.Is(err, ErrInvalidSnapshot) {
 		t.Fatalf("scalar base accepted by run-v2 encoder: %v", err)
 	}
+	if _, err := source.MarshalPackedDeltaSinceFrameV2Base(decodedScalarBase); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("scalar base accepted by packed-v3 encoder: %v", err)
+	}
 	if _, err := source.MarshalDeltaSinceBase(SnapshotBase{stateType: crdt.TypeIDGCounterState, valid: true}); !errors.Is(err, ErrInvalidSnapshot) {
 		t.Fatalf("unknown snapshot type accepted: %v", err)
 	}
@@ -345,6 +398,9 @@ func TestRGASnapshotDeltaDefensiveBoundaries(t *testing.T) {
 	if _, err := source.MarshalRunDeltaSinceFrameV2WithLimits(snapshot.Snapshot{}, frame.DefaultLimits()); !errors.Is(err, ErrInvalidSnapshot) {
 		t.Fatalf("invalid outer-v2 base error = %v", err)
 	}
+	if _, err := source.MarshalPackedDeltaSinceFrameV2WithLimits(snapshot.Snapshot{}, frame.DefaultLimits()); !errors.Is(err, ErrInvalidSnapshot) {
+		t.Fatalf("invalid packed outer-v2 base error = %v", err)
+	}
 	var nilSource *RGA
 	if _, err := nilSource.DeltaSinceBase(SnapshotBase{valid: true}); !errors.Is(err, ErrNilText) {
 		t.Fatalf("nil source error = %v", err)
@@ -358,6 +414,10 @@ func TestRGASnapshotDeltaDefensiveBoundaries(t *testing.T) {
 	}
 	if _, err := source.MarshalRunDeltaSinceFrameV2Base(base); !errors.Is(err, ErrIncompatibleSnapshot) {
 		t.Fatalf("missing base node error = %v", err)
+	}
+	base.stateType = crdt.TypeIDRGAPackedState
+	if _, err := source.MarshalPackedDeltaSinceFrameV2Base(base); !errors.Is(err, ErrIncompatibleSnapshot) {
+		t.Fatalf("missing packed base node error = %v", err)
 	}
 
 	child := Position{ReplicaID: "remote", WallTime: 2}

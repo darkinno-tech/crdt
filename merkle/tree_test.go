@@ -48,6 +48,9 @@ func TestTreeRootAndDiffAreDeterministic(t *testing.T) {
 	left.Insert("b", []byte("2"))
 	right.Insert("b", []byte("2"))
 	right.Insert("a", []byte("1"))
+	if got, want := fmt.Sprintf("%x", left.Root()), "834dfb5453f4cefaa6a513e994379ff0e1d56e5fbc28be7112b0fa7c76b6e816"; got != want {
+		t.Fatalf("canonical root = %s, want %s", got, want)
+	}
 	if left.Root() != right.Root() {
 		t.Fatal("equal entries have different roots")
 	}
