@@ -14,7 +14,7 @@ if "CRDT_RGA_LIBRARY" not in os.environ:
     os.environ["CRDT_RGA_LIBRARY"] = str(ROOT / "clients" / "rust" / "target" / "debug" / "libdarkinno_crdt_rga.dylib")
 
 sys.path.insert(0, str(ROOT / "clients" / "python"))
-from crdt_rga import CRDTError, RGA  # noqa: E402
+from crdt_rga import CRDTError, LWWMap, LWWMapLimits, RGA  # noqa: E402
 
 
 class RgaBindingTests(unittest.TestCase):
@@ -51,6 +51,62 @@ class RgaBindingTests(unittest.TestCase):
             with self.assertRaises(CRDTError):
                 document.apply_frame(b"CRDT\x01\x14\x00\x00\x00\x00\x00\x00")
             self.assertEqual(document.text, before)
+
+
+class LwwMapBindingTests(unittest.TestCase):
+    def test_applies_go_canonical_state_vector(self) -> None:
+        frame = bytes.fromhex("435244540109000e01016105616c69636501000101783c3edf37")
+        with LWWMap("python-map-reader") as document:
+            document.apply_frame(frame)
+            self.assertEqual(document.get("a"), b"x")
+            self.assertEqual(document.keys(), ["a"])
+            self.assertEqual(document.state(), frame)
+
+    def test_three_replicas_converge_with_reordered_tombstone_and_recovery(self) -> None:
+        with LWWMap("python-map-alice") as alice, LWWMap("python-map-bob") as bob, LWWMap("python-map-carol") as carol:
+            initial = alice.set("title", b"draft")
+            bob.apply_frame(initial)
+            carol.apply_frame(initial)
+            bob_edit = bob.set("owner", b"bob")
+            carol_edit = carol.set("title", b"reviewed")
+            removed = alice.delete("obsolete")
+            for frame in (carol_edit, bob_edit, removed, bob_edit, initial):
+                alice.apply_frame(frame)
+            for frame in (removed, carol_edit, initial, removed):
+                bob.apply_frame(frame)
+            for frame in (bob_edit, removed, bob_edit, initial):
+                carol.apply_frame(frame)
+            self.assertEqual(alice.get("title"), b"reviewed")
+            self.assertEqual(alice.get("owner"), b"bob")
+            self.assertIsNone(alice.get("obsolete"))
+            self.assertEqual(alice.keys(), ["owner", "title"])
+            self.assertEqual(alice.state(), bob.state())
+            self.assertEqual(alice.state(), carol.state())
+            with LWWMap(clock_state=alice.clock_state) as recovered:
+                recovered.apply_frame(alice.state())
+                next_delta = recovered.set("after-recovery", b"safe")
+                alice.apply_frame(next_delta)
+                self.assertEqual(alice.state(), recovered.state())
+
+    def test_empty_value_and_corrupt_frame_have_unambiguous_atomic_results(self) -> None:
+        with LWWMap("python-map-atomic") as document:
+            document.set("empty", b"")
+            self.assertEqual(document.get("empty"), b"")
+            before = document.state()
+            corrupt = bytearray(bytes.fromhex("43524454010a000e01016105616c6963650100010178dc13bbd6"))
+            corrupt[-1] ^= 1
+            with self.assertRaises(CRDTError):
+                document.apply_frame(bytes(corrupt))
+            self.assertEqual(document.state(), before)
+
+    def test_manifest_bound_entries_are_enforced_before_a_second_local_write(self) -> None:
+        limits = LWWMapLimits(max_entries=1)
+        with LWWMap("python-map-limited", limits=limits) as document:
+            document.set("first", b"ok")
+            before = document.state()
+            with self.assertRaises(CRDTError):
+                document.set("second", b"rejected")
+            self.assertEqual(document.state(), before)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <darkinno/crdt_rga.hpp>
@@ -12,6 +13,7 @@
 namespace {
 
 using darkinno::crdt::Error;
+using darkinno::crdt::LwwMap;
 using darkinno::crdt::Rga;
 
 void Require(bool condition, std::string_view message) {
@@ -88,7 +90,83 @@ int main() {
     alice.Apply(Bytes(recovered_edit));
     Require(recovered.Text() == alice.Text(),
             "same-ID clock recovery produced a conflicting mutation");
-    std::cout << "PASS: Go vector, atomic rejection, three-replica convergence, and snapshot recovery\n";
+
+    const auto map_vector = Hex("435244540109000e01016105616c69636501000101783c3edf37");
+    LwwMap map_reader("cpp-map-vector-reader");
+    map_reader.Apply(Bytes(map_vector));
+    const auto map_value = map_reader.Get("a");
+    Require(map_value.has_value() && *map_value == std::vector<std::uint8_t>{'x'},
+            "Go LWW-Map vector projected the wrong value");
+    Require(map_reader.State() == map_vector, "Go LWW-Map state did not re-encode canonically");
+
+    LwwMap map_alice("cpp-map-alice");
+    LwwMap map_bob("cpp-map-bob");
+    LwwMap map_carol("cpp-map-carol");
+    const auto map_initial = map_alice.Set("title", Bytes(std::vector<std::uint8_t>{'d', 'r', 'a', 'f', 't'}));
+    map_bob.Apply(Bytes(map_initial));
+    map_carol.Apply(Bytes(map_initial));
+    const auto map_bob_edit = map_bob.Set("owner", Bytes(std::vector<std::uint8_t>{'b', 'o', 'b'}));
+    const auto map_carol_edit = map_carol.Set("title", Bytes(std::vector<std::uint8_t>{'r', 'e', 'v', 'i', 'e', 'w', 'e', 'd'}));
+    const auto map_delete = map_alice.Delete("obsolete");
+    for (const auto* frame : {&map_carol_edit, &map_bob_edit, &map_delete, &map_bob_edit, &map_initial}) {
+      map_alice.Apply(Bytes(*frame));
+    }
+    for (const auto* frame : {&map_delete, &map_carol_edit, &map_initial, &map_delete}) {
+      map_bob.Apply(Bytes(*frame));
+    }
+    for (const auto* frame : {&map_bob_edit, &map_delete, &map_bob_edit, &map_initial}) {
+      map_carol.Apply(Bytes(*frame));
+    }
+    Require(map_alice.Get("title") == std::optional<std::vector<std::uint8_t>>(
+                                         std::vector<std::uint8_t>{'r', 'e', 'v', 'i', 'e', 'w', 'e', 'd'}),
+            "LWW-Map did not retain the largest tag");
+    Require(map_alice.Keys() == std::vector<std::string>{"owner", "title"},
+            "LWW-Map keys were not canonical");
+    Require(map_alice.State() == map_bob.State() && map_alice.State() == map_carol.State(),
+            "LWW-Map duplicate/reordered replicas did not converge");
+    LwwMap recovered_map(map_alice.Clock());
+    recovered_map.Apply(Bytes(map_alice.State()));
+    const auto recovered_map_edit = recovered_map.Set(
+        "after-recovery", Bytes(std::vector<std::uint8_t>{'s', 'a', 'f', 'e'}));
+    map_alice.Apply(Bytes(recovered_map_edit));
+    Require(map_alice.State() == recovered_map.State(),
+            "LWW-Map same-ID recovery produced a conflicting mutation");
+
+    LwwMap concurrent_map("cpp-map-concurrent");
+    std::vector<std::thread> writers;
+    for (std::uint32_t index = 0; index < 4; ++index) {
+      writers.emplace_back([&concurrent_map, index] {
+        const auto key = "worker:" + std::to_string(index);
+        const auto value = std::vector<std::uint8_t>{static_cast<std::uint8_t>('a' + index)};
+        [[maybe_unused]] const auto delta = concurrent_map.Set(key, Bytes(value));
+      });
+    }
+    for (auto& writer : writers) {
+      writer.join();
+    }
+    Require(concurrent_map.Keys().size() == 4,
+            "mutex-protected LWW-Map handle lost a concurrent local write");
+
+    const crdt_lww_map_limits limited_map_limits{
+        .max_frame_bytes = 1U << 20U,
+        .max_payload_bytes = 1U << 20U,
+        .max_string_bytes = 64U << 10U,
+        .max_entries = 1,
+        .max_tombstones = 1,
+    };
+    LwwMap limited_map("cpp-map-limited", limited_map_limits);
+    [[maybe_unused]] const auto first_limited_delta =
+        limited_map.Set("first", Bytes(std::vector<std::uint8_t>{'s', 'a', 'f', 'e'}));
+    const auto limited_before = limited_map.State();
+    try {
+      [[maybe_unused]] const auto second_limited_delta =
+          limited_map.Set("second", Bytes(std::vector<std::uint8_t>{'x'}));
+      throw std::runtime_error("over-limit LWW-Map write was accepted");
+    } catch (const Error& error) {
+      Require(error.Code() == CRDT_RESOURCE_LIMIT, "LWW-Map limit returned the wrong status");
+    }
+    Require(limited_map.State() == limited_before, "over-limit LWW-Map write changed state");
+    std::cout << "PASS: Go vectors, atomic rejection, three-replica convergence, and snapshot recovery for RGA and LWW-Map\n";
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';
     return 1;

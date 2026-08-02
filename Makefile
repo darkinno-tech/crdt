@@ -20,7 +20,7 @@ RUST_LIBRARY_EXTENSION ?= $(shell uname -s | sed -e 's/^Darwin$$/dylib/' -e 's/^
 RUST_LIBRARY_NAME ?= libdarkinno_crdt_rga.$(RUST_LIBRARY_EXTENSION)
 RUST_RELEASE_LIBRARY_DIR ?= $(CURDIR)/clients/rust/target/release
 CPP_COMPILER ?= c++
-CPP_FLAGS ?= -std=c++20 -Wall -Wextra -Werror -pedantic
+CPP_FLAGS ?= -std=c++20 -Wall -Wextra -Werror -pedantic -pthread
 CPP_BUILD_DIR ?= clients/cpp/.build
 CPP_TEST_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-conformance
 CPP_BENCHMARK_BINARY ?= $(CPP_BUILD_DIR)/crdt-rga-cpp-benchmark
