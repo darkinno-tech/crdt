@@ -184,17 +184,18 @@ async function apply(config, locks, payload) {
       if (updateError !== null) {
         throw new YJSStoreError(updateError, 400);
       }
-      const before = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
       try {
-        engine.apply(state.document, update);
-      } catch {
+        if (!applyAndDetectChange(engine, state.document, update)) {
+          return { applied: false, cursor: state.cursor, stateVector: encodeBytes(state.stateVector) };
+        }
+      } catch (error) {
+        if (error instanceof YJSStoreError) {
+          throw error;
+        }
         throw new YJSStoreError("invalid_update", 400);
       }
       const merged = boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes);
       const vector = boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes);
-      if (equalBytes(before, merged)) {
-        return { applied: false, cursor: state.cursor, stateVector: encodeBytes(vector) };
-      }
       if (state.cursor >= maximumCursor) {
         throw new YJSStoreError("limit_exceeded", 413);
       }
@@ -218,7 +219,7 @@ async function stateVector(config, locks, payload) {
   return locks.run(key, async () => {
     const state = await loadDocument(config, document, key);
     try {
-      return { stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)) };
+      return { stateVector: encodeBytes(state.stateVector) };
     } finally {
       state.document.destroy();
     }
@@ -256,7 +257,7 @@ async function snapshot(config, locks, payload) {
       return {
         cursor: state.cursor,
         update: encodeBytes(boundedUpdate(engine.encode(state.document), config.maxSnapshotBytes)),
-        stateVector: encodeBytes(boundedUpdate(Y.encodeStateVector(state.document), config.maxStateVectorBytes)),
+        stateVector: encodeBytes(state.stateVector),
       };
     } finally {
       state.document.destroy();
@@ -316,18 +317,53 @@ function validateUpdateFormat(format, update) {
   return engineFor(format === "v1" ? "v2" : "v1").valid(update) ? "wrong_format" : "invalid_update";
 }
 
+function applyAndDetectChange(engine, document, update) {
+  let transaction;
+  Y.transact(document, (currentTransaction) => {
+    transaction = currentTransaction;
+    engine.apply(document, update);
+  }, null, false);
+  if (transaction === undefined) {
+    // The pinned Yjs runtime always exposes the surrounding transaction.
+    // Fail closed if that contract changes instead of treating an unknown
+    // result as a duplicate and dropping a durable update.
+    throw new YJSStoreError("unavailable", 503);
+  }
+  return transactionChangesState(transaction);
+}
+
+function transactionChangesState(transaction) {
+  // This is Yjs's own writeUpdateMessageFromTransaction predicate. A state
+  // vector alone is insufficient because a delete set can change a document
+  // without advancing any client clock.
+  if (transaction.deleteSet.clients.size !== 0) {
+    return true;
+  }
+  for (const [client, clock] of transaction.afterState) {
+    if (transaction.beforeState.get(client) !== clock) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function loadDocument(config, document, key) {
   const record = await readRecord(config, document, key);
   const value = new Y.Doc({ gc: true });
   if (record === null) {
-    return { document: value, cursor: 0 };
+    return {
+      document: value,
+      cursor: 0,
+      stateVector: boundedUpdate(Y.encodeStateVector(value), config.maxStateVectorBytes),
+    };
   }
+  let actualVector;
   try {
     if (!engineFor(document.format).valid(record.update)) {
       throw new Error("wrong snapshot format");
     }
     engineFor(document.format).apply(value, record.update);
-    const actualVector = boundedUpdate(Y.encodeStateVector(value), config.maxStateVectorBytes);
+    actualVector = boundedUpdate(Y.encodeStateVector(value), config.maxStateVectorBytes);
     if (!equalBytes(actualVector, record.stateVector)) {
       throw new Error("state vector mismatch");
     }
@@ -335,7 +371,7 @@ async function loadDocument(config, document, key) {
     value.destroy();
     throw new YJSStoreError("corrupt_store", 500);
   }
-  return { document: value, cursor: record.cursor };
+  return { document: value, cursor: record.cursor, stateVector: actualVector };
 }
 
 async function readRecord(config, document, key) {
