@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Made the Yjs relay preserve y-protocols equal-clock awareness removal,
+  scope awareness ownership to one WebSocket connection, and retain bounded
+  clock-only tombstones so delayed pre-removal presence cannot reappear.
+- Released the request-scoped `Y.Doc` used by every YJSStore apply,
+  state-vector, diff, and snapshot operation on both success and failure.
 - Rejected shared-document local mutations atomically before state or HLC
   changes when their canonical update exceeds the configured output-frame
   budget, preventing local-only writes without an outbox frame.
