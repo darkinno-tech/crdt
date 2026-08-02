@@ -125,6 +125,66 @@ grpcRelay, err := extensions.NewGRPCRelay(extensions.GRPCConfig{
 })
 ```
 
+### Export telemetry metrics through OpenTelemetry
+
+OpenTelemetry support is an opt-in Metrics adapter; it does not produce spans,
+does not inherit request context, and does not select a process-global Meter
+provider. The host creates and owns its `MeterProvider`, exporter endpoint,
+credentials, batching, resource attributes, and shutdown. That keeps an
+observability backend outside the CRDT security and availability boundary.
+
+```go
+// Configure this MeterProvider in the host with its chosen OTLP, Prometheus,
+// or other Metrics exporter. The CRDT module does not configure network I/O.
+sink, err := telemetry.NewOpenTelemetrySink(telemetry.OpenTelemetryOptions{
+	MeterProvider: meterProvider,
+})
+if err != nil { return err }
+
+reporter, err := telemetry.New(telemetry.Options{
+	QueueSize: 512,
+	Sink:      sink,
+})
+if err != nil { return err }
+defer reporter.Close()
+
+// This callback reads one atomic counter per Metrics collection. Remove it
+// before tearing down the reporter or provider.
+dropped, err := telemetry.RegisterOpenTelemetryDroppedMetric(reporter, telemetry.OpenTelemetryOptions{
+	MeterProvider: meterProvider,
+})
+if err != nil { return err }
+defer func() { _ = dropped.Unregister() }()
+```
+
+The adapter exports these Metrics names and no Event timestamp, error message,
+ID, endpoint, header, payload, or application value:
+
+| Metric | Type and unit | Attributes |
+| --- | --- | --- |
+| `crdt.telemetry.events` | Counter, `{event}` | `crdt.component`, `crdt.operation`, `crdt.outcome`, optional `crdt.error_code` |
+| `crdt.telemetry.duration` | Histogram, `s` | Same as event counter |
+| `crdt.telemetry.dropped` | Observable cumulative counter, `{event}` | None |
+
+Only the stable `Outcome` and library `ErrorCode` vocabulary is exported. By
+default, only library components (`durable`, `extensions`) and operations
+(`handshake`, `replay`, `append`, `append_batch`) pass through. Every other
+component or operation becomes `other`, including a value that happens to use
+safe characters. A host can explicitly allow up to 16 additional fixed ASCII
+labels per dimension through `OpenTelemetryOptions.AllowedComponents` and
+`AllowedOperations`; invalid, empty, or over-64-byte labels reject
+construction with `ErrInvalidConfig`. Never allow IDs, endpoints, headers,
+payload fragments, or business data. Register one dropped-counter callback for
+a MeterProvider: deliberately omitting a reporter identifier prevents a
+potentially unbounded metric label.
+
+The adapter is invoked by the existing Reporter worker, after the bounded
+queue. It can therefore make the local queue fill and increment
+`Dropped()`, but it cannot wait in a CRDT mutation, handshake, append, or
+network callback. The host must still size the queue and configure exporter
+timeouts/batching for its own traffic. A configured exporter is an external
+deployment dependency, not a durable audit or delivery contract.
+
 ## Evidence and limits
 
 ```sh
@@ -134,11 +194,12 @@ go test -race ./config ./telemetry ./durable ./extensions
 
 # Parser robustness and hot-path allocation evidence.
 go test -run='^$' -fuzz=FuzzLoaderTypedAccessors -fuzztime=250000x ./config
-go test -run='^$' -bench='Benchmark(ReporterRecord|HandlerRecord)' -benchmem ./telemetry ./durable
+go test -run='^$' -bench='Benchmark(ReporterRecord|OpenTelemetrySinkRecord|HandlerRecord)' -benchmem ./telemetry ./durable
 ```
 
 The durable test includes a real loopback WebSocket handshake, replay, and
 append with a reporter sink. It proves event plumbing and that the relay's
 existing authorization/manifest/append contracts remain intact. It does not
-prove a production log backend, TLS termination, identity provider, external
-metrics pipeline, target-machine p99 latency, or business authorization rules.
+prove a production log or Metrics backend, TLS termination, identity provider,
+external exporter pipeline, target-machine p99 latency, or business
+authorization rules.
