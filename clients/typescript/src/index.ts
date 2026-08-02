@@ -38,13 +38,16 @@ export type {
   RGAProtocol,
 } from "./wasm.js";
 export {
+  decodeNativeStateVector,
   decodeNativeUpdate,
   DEFAULT_NATIVE_LIMITS,
+  encodeNativeStateVector,
   encodeNativeUpdate,
   NativeArray,
   NativeCRDTError,
   NativeDocument,
   NativeMap,
+  NATIVE_STATE_VECTOR_VERSION,
   NATIVE_UPDATE_VERSION,
 } from "./native.js";
 export type {
@@ -61,6 +64,9 @@ export type {
   NativePersistenceMetadata,
   NativeRoot,
   NativeSnapshot,
+  NativeStateVector,
+  NativeStateVectorEntry,
+  NativeCounterRange,
   NativeTypeEvent,
   NativeTypeListener,
   NativeUpdate,

@@ -15,6 +15,7 @@ const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
 const ROOT_PARENT = "root";
 
 export const NATIVE_UPDATE_VERSION = 1;
+export const NATIVE_STATE_VECTOR_VERSION = 1;
 
 /** JSON values are copied on entry and exit, so callers cannot mutate CRDT state by reference. */
 export type NativeValue =
@@ -78,6 +79,31 @@ export interface NativeUpdate {
   readonly operations: readonly NativeOperation[];
 }
 
+/** One inclusive actor-counter interval retained by a sparse state vector. */
+export interface NativeCounterRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/**
+ * A bounded dotted state vector for native-ts-v1 anti-entropy.
+ *
+ * A counter range means this document has admitted each matching immutable
+ * operation ID. Ranges are deliberately sparse: native-ts-v1 accepts
+ * reordering, and rejected local admissions may leave a counter unused. A
+ * conventional actor -> maximum-clock vector would incorrectly claim missing
+ * lower IDs were present and could make a state diff omit them.
+ */
+export interface NativeStateVectorEntry {
+  readonly actor: string;
+  readonly ranges: readonly NativeCounterRange[];
+}
+
+export interface NativeStateVector {
+  readonly version: typeof NATIVE_STATE_VECTOR_VERSION;
+  readonly entries: readonly NativeStateVectorEntry[];
+}
+
 export interface NativeDocumentLimits {
   readonly maxUpdateBytes: number;
   readonly maxOperationsPerUpdate: number;
@@ -92,6 +118,9 @@ export interface NativeDocumentLimits {
   readonly maxValueBytes: number;
   readonly maxValueDepth: number;
   readonly maxValueItems: number;
+  readonly maxStateVectorActors: number;
+  readonly maxStateVectorIntervals: number;
+  readonly maxStateVectorBytes: number;
 }
 
 export type NativeDocumentOptions = Partial<NativeDocumentLimits>;
@@ -111,6 +140,9 @@ export const DEFAULT_NATIVE_LIMITS: Readonly<NativeDocumentLimits> = Object.free
   maxValueBytes: 64 << 10,
   maxValueDepth: 32,
   maxValueItems: 10_000,
+  maxStateVectorActors: 10_000,
+  maxStateVectorIntervals: 100_000,
+  maxStateVectorBytes: 1 << 20,
 });
 
 export type NativeCRDTErrorCode =
@@ -157,6 +189,8 @@ export interface NativeSnapshot {
   readonly roots: readonly NativeRoot[];
   readonly updates: readonly NativeUpdate[];
   readonly counter: number;
+  /** Present on new snapshots; absent legacy snapshots conservatively underclaim history. */
+  readonly stateVector?: NativeStateVector;
 }
 
 /**
@@ -166,6 +200,8 @@ export interface NativeSnapshot {
 export interface NativePersistenceMetadata {
   readonly roots: readonly NativeRoot[];
   readonly counter: number;
+  /** Persist together with roots/counter so state-diff knowledge survives compaction. */
+  readonly stateVector?: NativeStateVector;
 }
 
 interface MapEntry {
@@ -183,7 +219,10 @@ interface PreparedUpdate {
   readonly update: NativeUpdate;
   readonly roots: ReadonlyMap<string, Root>;
   readonly newRoots: ReadonlyMap<string, Root>;
+  readonly stateVectorPlan: StateVectorPlan;
 }
+
+type StateVectorLookup = ReadonlyMap<string, readonly NativeCounterRange[]>;
 
 /**
  * A LWW map whose keys are strings and whose values are copied JSON values.
@@ -340,9 +379,10 @@ export class NativeMap<T extends NativeValue = NativeValue> {
   }
 
   /** @internal */
-  _stateOperations(): NativeOperation[] {
+  _stateOperations(vector?: StateVectorLookup): NativeOperation[] {
     return [...this.#entries.entries()]
       .sort(([left], [right]) => compareText(left, right))
+      .filter(([, entry]) => vector === undefined || !stateVectorHas(vector, entry.id))
       .map(([key, entry]): NativeOperation =>
         entry.present
           ? { kind: "map-set", target: this.name, key, id: copyID(entry.id), value: cloneValue(entry.value!) }
@@ -573,20 +613,23 @@ export class NativeArray<T extends NativeValue = NativeValue> {
   }
 
   /** @internal */
-  _stateOperations(): NativeOperation[] {
+  _stateOperations(vector?: StateVectorLookup): NativeOperation[] {
     if (this.#pending.size !== 0) {
       throw incompleteState();
     }
     const operations: NativeOperation[] = [];
-    const entries = topologicalNodes(this.#nodes);
+    const entries = topologicalNodes(this.#nodes).filter((entry) => vector === undefined || !stateVectorHas(vector, entry.id));
     for (const chunk of chunkArrayEntries(entries, this.document.limits, this.document.replicaID, this.name)) {
       operations.push({ kind: "array-insert", target: this.name, entries: chunk });
     }
     const ids = [...this.#deleted]
       .map(parseIDKey)
       .sort(compareID);
-    if (ids.length !== 0) {
-      operations.push({ kind: "array-delete", target: this.name, ids });
+    // Array deletes do not carry their own immutable operation ID. Always
+    // include them in a state diff: a receiver may know an insertion while
+    // still missing its delete-before-insert tombstone.
+    for (const chunk of chunkArrayDeleteIDs(ids, this.document.limits, this.document.replicaID, this.name)) {
+      operations.push({ kind: "array-delete", target: this.name, ids: chunk });
     }
     return operations;
   }
@@ -669,6 +712,7 @@ export class NativeDocument {
   readonly limits: Readonly<NativeDocumentLimits>;
   readonly #roots = new Map<string, Root>();
   readonly #updateListeners = new Set<NativeUpdateListener>();
+  readonly #stateVector: StateVectorTracker;
   #counter = 0;
   #transactionDepth = 0;
   #transactionOrigin: unknown;
@@ -684,6 +728,7 @@ export class NativeDocument {
   ) {
     this.limits = resolveLimits(options);
     assertReplicaID(replicaID, this.limits);
+    this.#stateVector = new StateVectorTracker(this.limits);
   }
 
   getMap<T extends NativeValue = NativeValue>(name: string): NativeMap<T> {
@@ -770,15 +815,27 @@ export class NativeDocument {
     return changed;
   }
 
-  /**
-   * Returns bounded state updates. Pending arrays are deliberately not
-   * serializable: receive their missing parents first, then snapshot.
-   */
-  encodeStateAsUpdates(): NativeUpdate[] {
+  /** Returns a defensive, canonical sparse state vector for anti-entropy. */
+  getStateVector(): NativeStateVector {
     this._assertOpen();
+    return this.#stateVector.toVector();
+  }
+
+  /**
+   * Returns bounded state updates that the supplied peer vector does not
+   * already prove it has. Pending arrays are deliberately not serializable:
+   * receive their missing parents first, then request state.
+   *
+   * The optional vector must be authenticated and bound to this exact
+   * native-ts-v1 document/schema. It is only a transfer optimization; it
+   * never authenticates, authorizes, or acknowledges a remote receipt.
+   */
+  encodeStateAsUpdates(peerVector?: NativeStateVector): NativeUpdate[] {
+    this._assertOpen();
+    const vector = peerVector === undefined ? undefined : stateVectorLookup(normalizeStateVector(peerVector, this.limits));
     const operations = [...this.#roots.values()]
       .sort((left, right) => compareText(left.name, right.name))
-      .flatMap((root) => root._stateOperations());
+      .flatMap((root) => root._stateOperations(vector));
     return packOperations(operations, this.replicaID, this.limits);
   }
 
@@ -797,7 +854,7 @@ export class NativeDocument {
     const roots: NativeRoot[] = [...this.#roots.values()]
       .sort((left, right) => compareText(left.name, right.name))
       .map((root) => ({ name: root.name, type: root instanceof NativeMap ? "map" : "array" }));
-    return { roots, counter: this.#counter };
+    return { roots, counter: this.#counter, stateVector: this.#stateVector.toVector() };
   }
 
   static restore(replicaID: string, snapshot: NativeSnapshot, options: NativeDocumentOptions = {}): NativeDocument {
@@ -823,8 +880,20 @@ export class NativeDocument {
         document.getArray(normalized.name);
       }
     }
+    const suppliedVector = snapshot.stateVector === undefined ? undefined : normalizeStateVector(snapshot.stateVector, document.limits);
     for (const update of snapshot.updates) {
       document.applyUpdate(update, "restore");
+    }
+    if (suppliedVector !== undefined) {
+      const lookup = stateVectorLookup(suppliedVector);
+      for (const update of snapshot.updates) {
+        for (const id of stateVectorIDs(update)) {
+          if (!stateVectorHas(lookup, id)) {
+            throw invalidUpdate();
+          }
+        }
+      }
+      document.#stateVector.replace(suppliedVector);
     }
     document.#counter = Math.max(document.#counter, snapshot.counter);
     return document;
@@ -975,7 +1044,7 @@ export class NativeDocument {
     for (const root of new Set([...arrayInserts.keys(), ...arrayDeletes.keys()])) {
       root._preflight(arrayInserts.get(root) ?? [], arrayDeletes.get(root) ?? []);
     }
-    return { update: normalized, roots, newRoots };
+    return { update: normalized, roots, newRoots, stateVectorPlan: this.#stateVector.plan(stateVectorIDs(normalized)) };
   }
 
   #applyPrepared(prepared: PreparedUpdate): boolean {
@@ -998,6 +1067,7 @@ export class NativeDocument {
       }
     }
     this.#counter = ownCounter;
+    this.#stateVector.apply(prepared.stateVectorPlan);
     return changed;
   }
 
@@ -1069,6 +1139,119 @@ export function decodeNativeUpdate(
     throw invalidUpdate();
   }
   return normalized;
+}
+
+/** Encodes one canonical native-ts-v1 sparse state vector. */
+export function encodeNativeStateVector(
+  vector: NativeStateVector,
+  limits: NativeDocumentOptions = {},
+): Uint8Array {
+  const resolved = resolveLimits(limits);
+  return TEXT_ENCODER.encode(canonicalJSON(normalizeStateVector(vector, resolved)));
+}
+
+/** Decodes only a bounded canonical sparse state vector. */
+export function decodeNativeStateVector(
+  encoded: Uint8Array,
+  limits: NativeDocumentOptions = {},
+): NativeStateVector {
+  const resolved = resolveLimits(limits);
+  if (!(encoded instanceof Uint8Array) || encoded.length === 0 || encoded.length > resolved.maxStateVectorBytes) {
+    throw resourceLimit();
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(TEXT_DECODER.decode(encoded));
+  } catch {
+    throw invalidUpdate();
+  }
+  const normalized = normalizeStateVector(parsed, resolved);
+  if (!matchesUTF8(canonicalJSON(normalized), encoded)) {
+    throw invalidUpdate();
+  }
+  return normalized;
+}
+
+function normalizeStateVector(value: unknown, limits: Readonly<NativeDocumentLimits>): NativeStateVector {
+  const record = requireRecord(value);
+  assertExactKeys(record, ["entries", "version"]);
+  if (record.version !== NATIVE_STATE_VECTOR_VERSION || !Array.isArray(record.entries)) {
+    throw invalidUpdate();
+  }
+  if (record.entries.length > limits.maxStateVectorActors) {
+    throw resourceLimit();
+  }
+  const entries = record.entries.map((entry) => normalizeStateVectorEntry(entry, limits));
+  let intervals = 0;
+  for (let index = 0; index < entries.length; index += 1) {
+    const previous = entries[index - 1];
+    const entry = entries[index]!;
+    if (previous !== undefined && compareText(previous.actor, entry.actor) >= 0) {
+      throw invalidUpdate();
+    }
+    intervals += entry.ranges.length;
+  }
+  if (intervals > limits.maxStateVectorIntervals) {
+    throw resourceLimit();
+  }
+  const vector: NativeStateVector = { version: NATIVE_STATE_VECTOR_VERSION, entries };
+  if (utf8ByteLength(canonicalJSON(vector)) > limits.maxStateVectorBytes) {
+    throw resourceLimit();
+  }
+  return vector;
+}
+
+function normalizeStateVectorEntry(value: unknown, limits: Readonly<NativeDocumentLimits>): NativeStateVectorEntry {
+  const record = requireRecord(value);
+  assertExactKeys(record, ["actor", "ranges"]);
+  assertReplicaID(record.actor, limits);
+  if (!Array.isArray(record.ranges) || record.ranges.length === 0) {
+    throw invalidUpdate();
+  }
+  const ranges = record.ranges.map(normalizeCounterRange);
+  for (let index = 1; index < ranges.length; index += 1) {
+    const previous = ranges[index - 1]!;
+    const range = ranges[index]!;
+    // Adjacent ranges have one canonical representation: coalesce them.
+    if (range.from <= previous.to || range.from === previous.to + 1) {
+      throw invalidUpdate();
+    }
+  }
+  return { actor: record.actor, ranges };
+}
+
+function normalizeCounterRange(value: unknown): NativeCounterRange {
+  const record = requireRecord(value);
+  assertExactKeys(record, ["from", "to"]);
+  if (!isPositiveSafeInteger(record.from) || !isPositiveSafeInteger(record.to) || record.from > record.to) {
+    throw invalidUpdate();
+  }
+  return { from: record.from, to: record.to };
+}
+
+function stateVectorLookup(vector: NativeStateVector): StateVectorLookup {
+  return new Map(vector.entries.map((entry) => [entry.actor, entry.ranges]));
+}
+
+function stateVectorHas(vector: StateVectorLookup, id: NativeID): boolean {
+  const ranges = vector.get(id.actor);
+  if (ranges === undefined) {
+    return false;
+  }
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const range = ranges[middle]!;
+    if (id.counter < range.from) {
+      high = middle - 1;
+    } else if (id.counter > range.to) {
+      low = middle + 1;
+    } else {
+      return true;
+    }
+  }
+  return false;
 }
 
 function normalizeUpdate(value: unknown, limits: Readonly<NativeDocumentLimits>): NativeUpdate {
@@ -1181,10 +1364,152 @@ function resolveLimits(options: NativeDocumentOptions): Readonly<NativeDocumentL
       throw resourceLimit();
     }
   }
-  if (limits.maxValueBytes > limits.maxUpdateBytes) {
+  if (
+    limits.maxValueBytes > limits.maxUpdateBytes ||
+    limits.maxStateVectorIntervals < limits.maxStateVectorActors ||
+    limits.maxStateVectorBytes < emptyStateVectorByteLength()
+  ) {
     throw resourceLimit();
   }
   return Object.freeze(limits);
+}
+
+interface StateVectorPlan {
+  readonly replacements: ReadonlyMap<string, readonly NativeCounterRange[]>;
+  readonly encodedBytes: number;
+}
+
+/** Tracks exact observed operation IDs without allocating holes between counters. */
+class StateVectorTracker {
+  readonly #rangesByActor = new Map<string, readonly NativeCounterRange[]>();
+  #intervalCount = 0;
+  #encodedBytes = emptyStateVectorByteLength();
+
+  constructor(private readonly limits: Readonly<NativeDocumentLimits>) {}
+
+  plan(ids: readonly NativeID[]): StateVectorPlan {
+    const replacements = new Map<string, readonly NativeCounterRange[]>();
+    let actorCount = this.#rangesByActor.size;
+    let intervalCount = this.#intervalCount;
+    let encodedBytes = this.#encodedBytes;
+    const countersByActor = new Map<string, number[]>();
+    for (const id of ids) {
+      const counters = countersByActor.get(id.actor) ?? [];
+      counters.push(id.counter);
+      countersByActor.set(id.actor, counters);
+    }
+    for (const [actor, counters] of countersByActor) {
+      const existing = this.#rangesByActor.get(actor);
+      const isNewActor = existing === undefined;
+      if (isNewActor) {
+        actorCount += 1;
+        if (actorCount > this.limits.maxStateVectorActors) {
+          throw resourceLimit();
+        }
+      }
+      const next = mergeCountersIntoRanges(existing ?? [], counters);
+      if (next === existing) {
+        continue;
+      }
+      intervalCount += next.length - (existing?.length ?? 0);
+      if (intervalCount > this.limits.maxStateVectorIntervals) {
+        throw resourceLimit();
+      }
+      const nextBytes = stateVectorEntryByteLength(actor, next);
+      encodedBytes += isNewActor
+        ? nextBytes + (actorCount === 1 ? 0 : 1)
+        : nextBytes - stateVectorEntryByteLength(actor, existing!);
+      if (encodedBytes > this.limits.maxStateVectorBytes) {
+        throw resourceLimit();
+      }
+      replacements.set(actor, next);
+    }
+    return { replacements, encodedBytes };
+  }
+
+  apply(plan: StateVectorPlan): void {
+    for (const [actor, ranges] of plan.replacements) {
+      const existing = this.#rangesByActor.get(actor);
+      this.#intervalCount += ranges.length - (existing?.length ?? 0);
+      this.#rangesByActor.set(actor, ranges);
+    }
+    this.#encodedBytes = plan.encodedBytes;
+  }
+
+  replace(vector: NativeStateVector): void {
+    const normalized = normalizeStateVector(vector, this.limits);
+    this.#rangesByActor.clear();
+    this.#intervalCount = 0;
+    for (const entry of normalized.entries) {
+      const ranges = entry.ranges.map((range) => ({ ...range }));
+      this.#rangesByActor.set(entry.actor, ranges);
+      this.#intervalCount += ranges.length;
+    }
+    this.#encodedBytes = encodedLength(canonicalJSON(normalized));
+  }
+
+  toVector(): NativeStateVector {
+    const entries = [...this.#rangesByActor.entries()]
+      .sort(([left], [right]) => compareText(left, right))
+      .map(([actor, ranges]) => ({
+        actor,
+        ranges: ranges.map((range) => ({ ...range })),
+      }));
+    return { version: NATIVE_STATE_VECTOR_VERSION, entries };
+  }
+}
+
+function stateVectorEntryByteLength(actor: string, ranges: readonly NativeCounterRange[]): number {
+  return encodedLength(canonicalJSON({ actor, ranges }));
+}
+
+function emptyStateVectorByteLength(): number {
+  return encodedLength(canonicalJSON({ version: NATIVE_STATE_VECTOR_VERSION, entries: [] }));
+}
+
+function mergeCountersIntoRanges(
+  ranges: readonly NativeCounterRange[],
+  counters: readonly number[],
+): readonly NativeCounterRange[] {
+  const uniqueCounters = [...new Set(counters)].sort((left, right) => left - right);
+  if (uniqueCounters.every((counter) => rangeContains(ranges, counter))) {
+    return ranges;
+  }
+  const candidates = [
+    ...ranges.map((range) => ({ from: range.from, to: range.to })),
+    ...uniqueCounters.map((counter) => ({ from: counter, to: counter })),
+  ].sort((left, right) => left.from - right.from || left.to - right.to);
+  const merged: Array<{ from: number; to: number }> = [];
+  for (const candidate of candidates) {
+    const previous = merged.at(-1);
+    if (
+      previous !== undefined &&
+      (candidate.from <= previous.to ||
+        (previous.to < Number.MAX_SAFE_INTEGER && candidate.from === previous.to + 1))
+    ) {
+      previous.to = Math.max(previous.to, candidate.to);
+    } else {
+      merged.push(candidate);
+    }
+  }
+  return merged;
+}
+
+function rangeContains(ranges: readonly NativeCounterRange[], counter: number): boolean {
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const range = ranges[middle]!;
+    if (counter < range.from) {
+      high = middle - 1;
+    } else if (counter > range.to) {
+      low = middle + 1;
+    } else {
+      return true;
+    }
+  }
+  return false;
 }
 
 function assertReplicaID(value: unknown, limits: Readonly<NativeDocumentLimits>): asserts value is string {
@@ -1426,6 +1751,39 @@ function chunkArrayEntries(
   return chunks;
 }
 
+function chunkArrayDeleteIDs(
+  ids: readonly NativeID[],
+  limits: Readonly<NativeDocumentLimits>,
+  actor: string,
+  target: string,
+): NativeID[][] {
+  const chunks: NativeID[][] = [];
+  let current: NativeID[] = [];
+  const prefix = `{"actor":${canonicalJSON(actor)},"operations":[{"ids":[`;
+  const suffix = `],"kind":"array-delete","target":${canonicalJSON(target)}}],"version":1}`;
+  const fixedBytes = encodedLength(prefix) + encodedLength(suffix);
+  let currentBytes = fixedBytes;
+  for (const id of ids) {
+    const idBytes = encodedLength(canonicalJSON(id));
+    const candidateBytes = currentBytes + (current.length === 0 ? 0 : 1) + idBytes;
+    if (candidateBytes > limits.maxUpdateBytes) {
+      if (current.length === 0) {
+        throw resourceLimit();
+      }
+      chunks.push(current);
+      current = [copyID(id)];
+      currentBytes = fixedBytes + idBytes;
+    } else {
+      current.push(copyID(id));
+      currentBytes = candidateBytes;
+    }
+  }
+  if (current.length !== 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
 function packOperations(
   operations: readonly NativeOperation[],
   actor: string,
@@ -1475,6 +1833,27 @@ function operationIDs(operation: NativeOperation): readonly NativeID[] {
     case "array-delete":
       return operation.ids;
   }
+}
+
+/** IDs that prove this document has the corresponding immutable operation. */
+function stateVectorIDs(update: NativeUpdate): NativeID[] {
+  const ids: NativeID[] = [];
+  for (const operation of update.operations) {
+    switch (operation.kind) {
+      case "map-set":
+      case "map-delete":
+        ids.push(operation.id);
+        break;
+      case "array-insert":
+        ids.push(...operation.entries.map((entry) => entry.id));
+        break;
+      case "array-delete":
+        // A delete references an insertion ID but does not prove that the
+        // insertion body is available; keeping it out prevents unsafe diffs.
+        break;
+    }
+  }
+  return ids;
 }
 
 function equalMapOperation(entry: MapEntry, operation: NativeMapSetOperation | NativeMapDeleteOperation): boolean {
