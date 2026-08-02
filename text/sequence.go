@@ -88,17 +88,6 @@ func mixMarkerPriority(value uint64) uint64 {
 	return value ^ (value >> 31)
 }
 
-// markerPriority keeps the single-marker helper available to sequence tests
-// and callers within this package while pair construction uses the shared
-// hashing path above.
-func markerPriority(position Position, exit bool) uint64 {
-	entryPriority, exitPriority := markerPriorities(position)
-	if exit {
-		return exitPriority
-	}
-	return entryPriority
-}
-
 func markerCount(marker *sequenceMarker) int {
 	if marker == nil {
 		return 0
