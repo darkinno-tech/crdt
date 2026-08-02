@@ -293,6 +293,12 @@ membership view and exact `TombstoneTags()` acknowledgements for the current
 membership epoch. A retired member must bootstrap from a post-compaction
 snapshot before returning.
 
+For a disposable local cache or rebuildable server-owned default that can
+never merge a delayed operation, an explicit `tombstonegc.SimpleCollector`
+provides bounded local-only collection. It does not relax this replicated
+workflow; see [tombstone GC mode selection](tombstone-gc.md) before choosing
+it.
+
 The repository integration test is another executable reference: it checks
 three-replica delta delivery, batching, recovery, and a Merkle anti-entropy
 difference before convergence.

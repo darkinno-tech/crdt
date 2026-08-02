@@ -15,6 +15,8 @@ be committed.
 
 - [End-to-end integration tutorial](integration/overview.md)
 - [端到端集成教程](integration/overview.zh-CN.md)
+- [Tombstone GC mode selection](integration/tombstone-gc.md)
+- [Tombstone GC 模式选择](integration/tombstone-gc.zh-CN.md)
 - [Intent-first CRDT setup](integration/intent-first-setup.md)
 - [按业务意图配置 CRDT](integration/intent-first-setup.zh-CN.md)
 - [Shared document without CRDT plumbing](integration/shared-document.md)

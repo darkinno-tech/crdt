@@ -62,7 +62,7 @@ make test
 - G-Counter、PN-Counter、G-Set、add-wins OR-Set 和因果 MV-Register。
 - 有界规范化 state/delta 帧、确定性 snapshot、恢复计划，以及可复用 replica ID 所需的 HLC 状态。
 - 默认使用稳定 run-v2 帧的 RGA 协作文本；并提供对密集 HLC 链显式协商的 packed-v3 帧，以及稳定有界 rich-text、observed-remove tree、list、XML fragment 层。
-- Delta 批处理、Merkle 反熵、精确确认的 tombstone-GC 协调，以及 Manifest 绑定的 replica/inbox 恢复辅助能力。
+- Delta 批处理、Merkle 反熵、精确确认的 tombstone-GC 协调、面向可丢弃状态的显式仅本地清理，以及 Manifest 绑定的 replica/inbox 恢复辅助能力。
 - 以按需模块提供的有界 live WebSocket provider、独立 bbolt durable relay、Redis/PostgreSQL/MySQL/SQLite durable-log 实现，以及本地 bbolt/文件 checkpoint Store 参考实现。
 - 可选、由 Manifest 协商的[压缩感知外层帧 v2](docs/protocol/frame-v2.md)，提供显式 v1 转换，但不改变 CRDT TypeID 或语义。
 - [RGA 诊断混淆](docs/integration/debug-obfuscation.zh-CN.md)：替换文本内容，同时保留隔离调试时间线的结构。
@@ -77,6 +77,7 @@ make test
 | 不接触 CRDT 底层细节地使用命名 Map/Array | [共享文档指南](docs/integration/shared-document.zh-CN.md) 与 `(cd examples && go run ./shared-document)` |
 | 不手抄协议 ID 地选择 CRDT | [按业务意图配置](docs/integration/intent-first-setup.zh-CN.md) 和 `go run ./cmd/crdt-profile -format json` |
 | 构建完整客户端流程 | [端到端集成](docs/integration/overview.zh-CN.md) |
+| 有界清理可丢弃本地缓存的 tombstone | [Tombstone GC 模式选择](docs/integration/tombstone-gc.zh-CN.md) |
 | 安全跨越本地重启 | [本地 checkpoint Store](docs/integration/local-checkpoint.zh-CN.md) 与 `(cd examples && go run ./persistent-replica)` |
 | 增加重放与重连 | [durable relay 参考](docs/integration/durable-provider.zh-CN.md) |
 | 选择浏览器、WebRTC、Redis、PostgreSQL、MySQL 或 SQLite 边界 | [Provider architecture](docs/integration/provider-architecture.md) |

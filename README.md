@@ -64,7 +64,7 @@ core only. `make test` traverses the core and every opt-in module.
 - Bounded canonical state/delta frames, deterministic snapshots, recovery plans, and persisted HLC state for reusable replica identities.
 - A local, bounded multi-type undo/redo command stack plus a content-addressed snapshot version DAG for browser history and branches; both remain outside replication frames and are host-persisted metadata.
 - RGA collaborative text with stable run-v2 frames by default, plus explicitly negotiated packed-v3 frames for dense HLC runs; stable bounded rich-text, observed-remove tree, and nested document-tree protocols; plus list and XML-fragment layers.
-- Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, and manifest-bound replica/inbox recovery helpers.
+- Delta batching, Merkle anti-entropy, exact-acknowledgement tombstone-GC coordination, explicit local-only cleanup for disposable state, and manifest-bound replica/inbox recovery helpers.
 - Opt-in modules for a bounded live WebSocket provider, a separate bbolt-backed durable relay with cursor replay and optional state-vector catch-up, Redis/PostgreSQL/MySQL/SQLite durable-log implementations, a bounded WebRTC DataChannel bridge, and local bbolt/file checkpoint Store references.
 - Optional, manifest-negotiated [compression-aware outer frame v2](docs/protocol/frame-v2.md) with explicit v1 conversion; it does not change CRDT TypeIDs or semantics.
 - [RGA diagnostic obfuscation](docs/integration/debug-obfuscation.md) that replaces text content while retaining an isolated debug timeline structure.
@@ -79,6 +79,7 @@ All implemented frame pairs are stable and use the zero-value `ProtocolPolicy`. 
 | Use named shared Map/Array objects without CRDT plumbing | [Shared-document guide](docs/integration/shared-document.md) and `(cd examples && go run ./shared-document)` |
 | Choose a CRDT without hand-copying protocol IDs | [Intent-first setup](docs/integration/intent-first-setup.md) and `go run ./cmd/crdt-profile -format json` |
 | Build a complete client flow | [End-to-end integration](docs/integration/overview.md) |
+| Bound a disposable local cache's tombstones | [Tombstone GC mode selection](docs/integration/tombstone-gc.md) |
 | Survive local restarts safely | [Local checkpoint Store references](docs/integration/local-checkpoint.md) and `(cd examples && go run ./persistent-replica)` |
 | Add replay and reconnect | [Durable relay reference](docs/integration/durable-provider.md) |
 | Choose browser, WebRTC, Redis, PostgreSQL, MySQL, or SQLite boundaries | [Provider architecture](docs/integration/provider-architecture.md) |
