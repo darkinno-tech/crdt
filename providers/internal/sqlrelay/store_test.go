@@ -31,7 +31,7 @@ func TestStoreAppendsRetriesConflictsAndReplays(t *testing.T) {
 	wrongDigest := append([]byte(nil), digest[:]...)
 	wrongDigest[0] ^= 1
 	pool := &scriptPool{transactions: []*scriptTransaction{
-		appendScript(dialect, manifest.GroupID, change, encoded, 0, 0, 0),
+		appendScript(dialect, manifest.GroupID, change, encoded),
 		duplicateScript(dialect, manifest.GroupID, change, 1, digest[:], true),
 		duplicateScript(dialect, manifest.GroupID, change, 1, wrongDigest, false),
 		replayScript(dialect, manifest.GroupID, 0, 1, [][]any{{int64(1), encoded}}),
@@ -230,7 +230,7 @@ func TestStoreAppendFailurePaths(t *testing.T) {
 	change := testChange(t, manifest, "alice", 1, 1)
 	encoded := mustEncode(t, change)
 	appendFailure := func(query string) *scriptTransaction {
-		transaction := appendScript(dialect, manifest.GroupID, change, encoded, 0, 0, 0)
+		transaction := appendScript(dialect, manifest.GroupID, change, encoded)
 		for index := range transaction.steps {
 			if transaction.steps[index].query == query {
 				transaction.steps[index].err = errors.New("database unavailable")
@@ -292,7 +292,7 @@ func TestStoreAppendFailurePaths(t *testing.T) {
 			pool.verify(t, []sql.TxOptions{dialect.AppendOptions})
 		})
 	}
-	transaction := appendScript(dialect, manifest.GroupID, change, encoded, 0, 0, 0)
+	transaction := appendScript(dialect, manifest.GroupID, change, encoded)
 	transaction.commitErr = errors.New("commit unavailable")
 	pool := &scriptPool{transactions: []*scriptTransaction{transaction}}
 	store := testStore(t, pool, dialect, 8, 1<<20)
@@ -440,7 +440,7 @@ func BenchmarkStoreAppendSimulated(b *testing.B) {
 		options:      make([]sql.TxOptions, 0, b.N),
 	}
 	for index := range pool.transactions {
-		pool.transactions[index] = appendScript(dialect, manifest.GroupID, change, encoded, 0, 0, 0)
+		pool.transactions[index] = appendScript(dialect, manifest.GroupID, change, encoded)
 	}
 	store := testStore(b, pool, dialect, uint64(b.N)+1, 1<<20)
 	b.ReportAllocs()
@@ -476,15 +476,15 @@ func testDialect() Dialect {
 	}
 }
 
-func appendScript(dialect Dialect, groupID string, change replica.Change, encoded []byte, highWater, count, usedBytes int64) *scriptTransaction {
+func appendScript(dialect Dialect, groupID string, change replica.Change, encoded []byte) *scriptTransaction {
 	digest := sha256.Sum256(encoded)
 	return &scriptTransaction{steps: []scriptStep{
 		{kind: stepExec, query: dialect.InsertGroup, args: []any{groupID}},
-		{kind: stepRow, query: dialect.LockGroup, args: []any{groupID}, values: []any{highWater, count, usedBytes}},
+		{kind: stepRow, query: dialect.LockGroup, args: []any{groupID}, values: []any{int64(0), int64(0), int64(0)}},
 		{kind: stepRow, query: dialect.ReadDot, args: []any{groupID, change.Dot.Actor, int64(change.Dot.Counter)}, err: sql.ErrNoRows},
 		{kind: stepExec, query: dialect.InsertEvent, args: []any{groupID, int64(1), encoded}},
 		{kind: stepExec, query: dialect.InsertDot, args: []any{groupID, change.Dot.Actor, int64(change.Dot.Counter), int64(1), digest[:]}},
-		{kind: stepExec, query: dialect.UpdateGroup, args: []any{int64(1), count + 1, usedBytes + int64(len(encoded)), groupID}},
+		{kind: stepExec, query: dialect.UpdateGroup, args: []any{int64(1), int64(1), int64(len(encoded)), groupID}},
 	}, expectCommit: true}
 }
 
