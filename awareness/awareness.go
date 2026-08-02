@@ -266,12 +266,9 @@ func (store *Store) Heartbeat(actor string, now time.Time) (Update, error) {
 		store.mu.Unlock()
 		return Update{}, ErrClockExhausted
 	}
-	update := cloneUpdate(current.update)
-	update.Clock++
-	store.records[actor] = record{update: update, lastSeen: now}
-	store.publishLocked(Local, update, now)
+	update := store.heartbeatLocked(actor, current, now)
 	store.mu.Unlock()
-	return cloneUpdate(update), nil
+	return update, nil
 }
 
 // Remove creates and installs the next removal update for actor. It is useful
@@ -289,7 +286,13 @@ func (store *Store) next(actor string, state []byte, now time.Time) (Update, err
 	clock := uint64(1)
 	if current, exists := store.records[actor]; exists {
 		if current.update.Clock == math.MaxUint64 {
+			store.mu.Unlock()
 			return Update{}, ErrClockExhausted
+		}
+		if current.update.Online() && bytes.Equal(state, current.update.State) {
+			update := store.heartbeatLocked(actor, current, now)
+			store.mu.Unlock()
+			return update, nil
 		}
 		clock = current.update.Clock + 1
 	}
@@ -305,6 +308,17 @@ func (store *Store) next(actor string, state []byte, now time.Time) (Update, err
 	store.publishLocked(Local, update, now)
 	store.mu.Unlock()
 	return cloneUpdate(update), nil
+}
+
+// heartbeatLocked advances one retained online state without reparsing its
+// canonical JSON. store.mu must be held. The stored state is private to Store,
+// while the returned update is copied for the caller.
+func (store *Store) heartbeatLocked(actor string, current record, now time.Time) Update {
+	update := current.update
+	update.Clock++
+	store.records[actor] = record{update: update, lastSeen: now}
+	store.publishLocked(Local, update, now)
+	return cloneUpdate(update)
 }
 
 // Apply installs a newer remote update. Duplicates and stale updates are

@@ -1,6 +1,7 @@
 package awareness
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -114,6 +115,34 @@ func TestStoreHeartbeatReusesOnlineStateAndRejectsOfflineActors(t *testing.T) {
 	}
 	if _, err := store.Heartbeat(" ", now); !errors.Is(err, ErrInvalidActor) {
 		t.Fatalf("invalid actor Heartbeat = %v, want %v", err, ErrInvalidActor)
+	}
+}
+
+func TestStoreSetExactCanonicalStateUsesHeartbeatSemantics(t *testing.T) {
+	options := DefaultOptions()
+	options.Timeout = time.Second
+	store := mustStore(t, options)
+	now := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC)
+	first, err := store.Set("alice", []byte(`{ "name":"Alice", "cursor":4 }`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(first.State), `{"cursor":4,"name":"Alice"}`; got != want {
+		t.Fatalf("initial canonical state = %q, want %q", got, want)
+	}
+	if !store.Expire(now.Add(2 * time.Second)) {
+		t.Fatal("initial state did not expire")
+	}
+	second, err := store.Set("alice", first.State, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Clock != first.Clock+1 || !bytes.Equal(second.State, first.State) {
+		t.Fatalf("unchanged Set = %#v, want next heartbeat from %#v", second, first)
+	}
+	active := store.ActiveAt(now.Add(2 * time.Second))
+	if len(active) != 1 || active[0].Clock != second.Clock || !bytes.Equal(active[0].State, first.State) {
+		t.Fatalf("unchanged Set did not refresh active state: %#v", active)
 	}
 }
 
