@@ -73,6 +73,39 @@ func BenchmarkGCounterBindingParallel(b *testing.B) {
 	})
 }
 
+// BenchmarkGCounterObserverRemoteApply measures one decoded remote delta at a
+// reactive target. It is a controlled in-process baseline, not transport,
+// browser paint, persistence, or production-capacity evidence.
+func BenchmarkGCounterObserverRemoteApply(b *testing.B) {
+	source, err := observe.NewGCounterObserver("benchmark-source")
+	if err != nil {
+		b.Fatal(err)
+	}
+	target, err := observe.NewGCounterObserver("benchmark-target")
+	if err != nil {
+		b.Fatal(err)
+	}
+	subscription, err := target.Subscribe(func(observe.Event[observe.GCounterView]) {})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		subscription.Unsubscribe()
+		<-subscription.Done()
+	})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		delta, err := source.Increment(1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if changed, err := target.ApplyDelta(delta); err != nil || !changed {
+			b.Fatalf("ApplyDelta() = %t, %v", changed, err)
+		}
+	}
+}
+
 func benchmarkCounter(b *testing.B, replicaID string) *counter.GCounter {
 	b.Helper()
 	value, err := counter.NewGCounter(replicaID)

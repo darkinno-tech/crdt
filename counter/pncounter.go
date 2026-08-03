@@ -147,17 +147,25 @@ func (c *PNCounter) Merge(other *PNCounter) error {
 
 // ApplyDelta joins delta into c.
 func (c *PNCounter) ApplyDelta(delta PNCounterDelta) error {
+	_, err := c.ApplyDeltaChanged(delta)
+	return err
+}
+
+// ApplyDeltaChanged joins delta into c and reports whether it extended either
+// retained component map. It makes duplicate remote delivery observable to a
+// caller without weakening the counter's idempotent join semantics.
+func (c *PNCounter) ApplyDeltaChanged(delta PNCounterDelta) (bool, error) {
 	if c == nil {
-		return ErrNilPNCounter
+		return false, ErrNilPNCounter
 	}
 	if err := validatePNCounts(delta.positive, delta.negative); err != nil {
-		return err
+		return false, err
 	}
 	c.mu.Lock()
-	joinCounts(c.positive, delta.positive)
-	joinCounts(c.negative, delta.negative)
+	changed := joinCountsChanged(c.positive, delta.positive)
+	changed = joinCountsChanged(c.negative, delta.negative) || changed
 	c.mu.Unlock()
-	return nil
+	return changed, nil
 }
 
 // Merge joins other into d and returns a new delta without modifying either
@@ -378,6 +386,17 @@ func joinCounts(target, source map[string]uint64) {
 			target[replicaID] = value
 		}
 	}
+}
+
+func joinCountsChanged(target, source map[string]uint64) bool {
+	changed := false
+	for replicaID, value := range source {
+		if value > target[replicaID] {
+			target[replicaID] = value
+			changed = true
+		}
+	}
+	return changed
 }
 
 func sumCounts(counts map[string]uint64) *big.Int {

@@ -8,6 +8,44 @@ CRDT 协议、持久化重放、传输、认证或存储。
 合并、恢复或获授权维护时使用它。不要把 `observe.Event.Version` 发送给对端：
 它只是进程内 UI 版本，不是因果时钟或持久化确认。
 
+## 分布式 Counter 观察器
+
+`NewGCounterObserver` 和 `NewPNCounterObserver` 把现有 Counter delta API
+接入这一层本地观察边界。本地 `Increment` / `Decrement` 返回供已认证传输使用的
+规范 delta；接收端仍按 Counter 的既有限额解码，再调用 `ApplyDelta`。
+
+```go
+model, err := observe.NewGCounterObserver("browser-tab")
+if err != nil { /* handle */ }
+
+subscription, err := model.Subscribe(func(event observe.Event[observe.GCounterView]) {
+	if event.Value.Overflow {
+		showAggregateOverflow()
+		return
+	}
+	renderCounter(event.Value.Value)
+})
+if err != nil { /* handle */ }
+defer subscription.Unsubscribe()
+
+delta, err := model.Increment(1)
+if err != nil { /* handle */ }
+encoded, err := delta.MarshalBinary() // 在对象外认证并发送
+if err != nil { /* handle */ }
+
+received, err := counter.UnmarshalGCounterDelta(encoded)
+if err != nil { /* reject */ }
+changed, err := model.ApplyDelta(received)
+if err != nil { /* reject */ }
+// 重复或已被包含的 delta 会返回 changed == false，且不会产生新的 Remote UI 版本。
+_ = changed
+```
+
+`PNCounterView.Value` 是十进制字符串，因此回调不会接触可变 `big.Int`，也不会
+丢失合法 `uint64` 分量的数值范围。这些 helper 不增加网络、认证、确认、持久化或
+恢复契约；主机仍负责 frame 准入、持久化 outbox/state 安装，以及 replica/manifest
+协议边界。
+
 ## 将计数器绑定到界面
 
 视图函数在 `Store` 串行化操作期间运行，必须返回可安全保留的值。标量和字符串
@@ -63,9 +101,9 @@ if err := model.Mutate(observe.Remote, func(current *counter.GCounter) error {
 ```
 
 合并、恢复和维护操作分别使用 `observe.Merge`、`observe.Restore`、
-`observe.Maintenance`。成功安装的重复 delta 仍可能发出 `Remote` 事件；对于
-按状态重绘的 UI 这是安全的，也避免泛型包装器错误地声称能识别所有 CRDT 的
-语义变更。
+`observe.Maintenance`。通过通用 `Mutate` 成功安装的重复 delta 仍可能发出
+`Remote` 事件，因为它不能判断所有 CRDT 的语义变化。`MutateIf` 和 Counter
+观察器可以在类型本身提供 changed 结果时抑制这类冗余版本。
 
 ## 投递与生命周期契约
 
@@ -99,6 +137,7 @@ if err := model.Mutate(observe.Remote, func(current *counter.GCounter) error {
 go test ./observe -count=1
 go test -race ./observe -count=1
 GOMAXPROCS=1 go test -run '^$' -bench 'BenchmarkGCounterBinding' -benchmem ./observe
+GOMAXPROCS=1 go test -run '^$' -bench 'BenchmarkGCounterObserverRemoteApply' -benchmem ./observe
 ```
 
 包内测试覆盖初始投递、错误、慢订阅者合并、回调重入、回调 panic、关闭、并发
