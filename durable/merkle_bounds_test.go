@@ -177,7 +177,7 @@ func TestMerkleStoreAndIndexFailClosedAtResourceBoundaries(t *testing.T) {
 		t.Fatalf("invalid HLC relay id err=%v", err)
 	}
 
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4)
 	defer func() { _ = store.Close() }()
 	first, err := store.Append(manifest.GroupID, durableTestChange(t, manifest, "alice", 1, 1))
 	if err != nil {
@@ -296,7 +296,7 @@ func TestMerkleInternalValidation(t *testing.T) {
 
 func TestMerkleStoreAdditionalFailureAndDuplicatePaths(t *testing.T) {
 	manifest := durableTestManifest(t)
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4)
 	defer func() { _ = store.Close() }()
 	if _, err := store.MerkleSnapshot("missing", 4, 1<<20, manifest, crdt.ProtocolPolicy{}, 1<<20, 128); err != nil {
 		t.Fatalf("empty HLC/Merkle snapshot err=%v", err)
@@ -345,7 +345,7 @@ func TestMerkleStoreAdditionalFailureAndDuplicatePaths(t *testing.T) {
 		t.Fatalf("missing group event request err=%v", err)
 	}
 
-	corrupt := durableMerkleTestStore(t, t.TempDir()+"/corrupt.db", 4, 1<<20)
+	corrupt := durableMerkleTestStore(t, t.TempDir()+"/corrupt.db", 4)
 	defer func() { _ = corrupt.Close() }()
 	committed, err := corrupt.Append(manifest.GroupID, durableTestChange(t, manifest, "bob", 1, 1))
 	if err != nil {
@@ -370,7 +370,7 @@ func TestMerkleStoreAdditionalFailureAndDuplicatePaths(t *testing.T) {
 
 func TestMerkleHandlerSubscriptionGuards(t *testing.T) {
 	manifest := durableTestManifest(t)
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4)
 	defer func() { _ = store.Close() }()
 	handler, group := durableTestHandler(t, store, manifest)
 	peer := &serverPeer{}
@@ -482,7 +482,7 @@ func TestMerkleClientRefusesLegacyProtocolDowngrade(t *testing.T) {
 
 func TestMerkleClientCheckpointFailureDoesNotAdvanceCursor(t *testing.T) {
 	manifest := durableTestManifest(t)
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4)
 	defer func() { _ = store.Close() }()
 	committed, err := store.Append(manifest.GroupID, durableTestChange(t, manifest, "alice", 1, 1))
 	if err != nil {
@@ -607,7 +607,7 @@ func TestMerkleClientFailsClosedForMalformedCompletionAndInstallError(t *testing
 		t.Fatalf("malformed complete runSession err=%v", err)
 	}
 
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4)
 	defer func() { _ = store.Close() }()
 	if _, err := store.Append(manifest.GroupID, durableTestChange(t, manifest, "alice", 1, 1)); err != nil {
 		t.Fatal(err)

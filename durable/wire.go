@@ -354,19 +354,20 @@ func marshalMerkleInventoryChunks(leaves []MerkleLeaf, maxControl int) ([][]byte
 		return nil
 	}
 	for _, leaf := range leaves {
-		candidate := append(current, marshalMerkleLeaf(leaf))
-		encoded, err := json.Marshal(merkleInventoryMessage{Version: merkleProtocolVersion, Kind: "inventory", Leaves: candidate})
+		encodedLeaf := marshalMerkleLeaf(leaf)
+		current = append(current, encodedLeaf)
+		encoded, err := json.Marshal(merkleInventoryMessage{Version: merkleProtocolVersion, Kind: "inventory", Leaves: current})
 		if err != nil || len(encoded) > maxControl {
+			current = current[:len(current)-1]
 			if len(current) == 0 || flush(false) != nil {
 				return nil, errInvalidWire
 			}
-			candidate = append(current, marshalMerkleLeaf(leaf))
-			encoded, err = json.Marshal(merkleInventoryMessage{Version: merkleProtocolVersion, Kind: "inventory", Leaves: candidate})
+			current = append(current, encodedLeaf)
+			encoded, err = json.Marshal(merkleInventoryMessage{Version: merkleProtocolVersion, Kind: "inventory", Leaves: current})
 			if err != nil || len(encoded) > maxControl {
 				return nil, errInvalidWire
 			}
 		}
-		current = candidate
 	}
 	if err := flush(true); err != nil {
 		return nil, err
@@ -416,19 +417,20 @@ func marshalMerkleRequestChunks(identities []crdt.Tag, maxControl int) ([][]byte
 		return nil
 	}
 	for _, identity := range identities {
-		candidate := append(current, marshalMerkleTag(identity))
-		encoded, err := json.Marshal(merkleRequestMessage{Version: merkleProtocolVersion, Kind: "request", Identities: candidate})
+		encodedIdentity := marshalMerkleTag(identity)
+		current = append(current, encodedIdentity)
+		encoded, err := json.Marshal(merkleRequestMessage{Version: merkleProtocolVersion, Kind: "request", Identities: current})
 		if err != nil || len(encoded) > maxControl {
+			current = current[:len(current)-1]
 			if len(current) == 0 || flush(false) != nil {
 				return nil, errInvalidWire
 			}
-			candidate = append(current, marshalMerkleTag(identity))
-			encoded, err = json.Marshal(merkleRequestMessage{Version: merkleProtocolVersion, Kind: "request", Identities: candidate})
+			current = append(current, encodedIdentity)
+			encoded, err = json.Marshal(merkleRequestMessage{Version: merkleProtocolVersion, Kind: "request", Identities: current})
 			if err != nil || len(encoded) > maxControl {
 				return nil, errInvalidWire
 			}
 		}
-		current = candidate
 	}
 	if err := flush(true); err != nil {
 		return nil, err

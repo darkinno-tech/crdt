@@ -301,12 +301,13 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 	}
-	if connection.Subprotocol() == StateVectorSubprotocol {
+	switch connection.Subprotocol() {
+	case StateVectorSubprotocol:
 		complete, err := marshalCatchUpComplete(highWater)
 		if err != nil || connection.Write(handshakeContext, websocket.MessageText, complete) != nil {
 			return
 		}
-	} else if connection.Subprotocol() == MerkleSubprotocol {
+	case MerkleSubprotocol:
 		complete, err := marshalMerkleComplete(boundary)
 		if err != nil || connection.Write(handshakeContext, websocket.MessageText, complete) != nil {
 			return
@@ -335,21 +336,22 @@ func (handler *Handler) serverHandshake(ctx context.Context, connection *websock
 	}
 	var remote replica.Manifest
 	request := subscriptionRequest{}
-	if connection.Subprotocol() == MerkleSubprotocol {
+	switch connection.Subprotocol() {
+	case MerkleSubprotocol:
 		parsedRemote, root, parseErr := unmarshalMerkleHello(data)
 		if parseErr != nil {
 			return nil, subscriptionRequest{}, parseErr
 		}
 		remote = parsedRemote
 		request.merkleRoot = &root
-	} else if connection.Subprotocol() == StateVectorSubprotocol {
+	case StateVectorSubprotocol:
 		vector, parsedRemote, parseErr := stateVectorHandshake(data, handler.limits)
 		if parseErr != nil {
 			return nil, subscriptionRequest{}, parseErr
 		}
 		remote = parsedRemote
 		request.vector = &vector
-	} else {
+	default:
 		var resume uint64
 		remote, resume, err = unmarshalHello(data)
 		if err != nil {

@@ -15,7 +15,7 @@ import (
 func TestStorePersistsRelayHLCAndMerkleInventory(t *testing.T) {
 	manifest := durableTestManifest(t)
 	path := t.TempDir() + "/relay.db"
-	store := durableMerkleTestStore(t, path, 8, 1<<20)
+	store := durableMerkleTestStore(t, path, 8)
 	first, err := store.Append(manifest.GroupID, durableTestChange(t, manifest, "alice", 1, 1))
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestStorePersistsRelayHLCAndMerkleInventory(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	store = durableMerkleTestStore(t, path, 8, 1<<20)
+	store = durableMerkleTestStore(t, path, 8)
 	defer func() { _ = store.Close() }()
 	third, err := store.Append(manifest.GroupID, durableTestChange(t, manifest, "alice", 2, 3))
 	if err != nil {
@@ -50,7 +50,7 @@ func TestStorePersistsRelayHLCAndMerkleInventory(t *testing.T) {
 
 func TestMerkleReconnectClientRepairsMissingEventsThenStartsLive(t *testing.T) {
 	manifest := durableTestManifest(t)
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 16, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 16)
 	defer func() { _ = store.Close() }()
 	var committed []Event
 	for _, change := range []replica.Change{
@@ -144,7 +144,7 @@ func TestMerkleReconnectClientRepairsMissingEventsThenStartsLive(t *testing.T) {
 
 func TestMerkleReconnectClientAcceptsEqualRootWithoutHistoryTransfer(t *testing.T) {
 	manifest := durableTestManifest(t)
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4)
 	defer func() { _ = store.Close() }()
 	committed, err := store.Append(manifest.GroupID, durableTestChange(t, manifest, "alice", 1, 1))
 	if err != nil {
@@ -197,7 +197,7 @@ func TestMerkleReconnectClientAcceptsEqualRootWithoutHistoryTransfer(t *testing.
 
 func TestMerkleIndexFailsClosedOnUnexpectedHistory(t *testing.T) {
 	manifest := durableTestManifest(t)
-	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4, 1<<20)
+	store := durableMerkleTestStore(t, t.TempDir()+"/relay.db", 4)
 	defer func() { _ = store.Close() }()
 	first, err := store.Append(manifest.GroupID, durableTestChange(t, manifest, "alice", 1, 1))
 	if err != nil {
@@ -224,9 +224,9 @@ func TestMerkleIndexFailsClosedOnUnexpectedHistory(t *testing.T) {
 	}
 }
 
-func durableMerkleTestStore(t *testing.T, path string, maxEvents, maxBytes uint64) *Store {
+func durableMerkleTestStore(t *testing.T, path string, maxEvents uint64) *Store {
 	t.Helper()
-	store, err := OpenStore(path, StoreConfig{MaxEvents: maxEvents, MaxBytes: maxBytes, HLCReplicaID: "relay"})
+	store, err := OpenStore(path, StoreConfig{MaxEvents: maxEvents, MaxBytes: 1 << 20, HLCReplicaID: "relay"})
 	if err != nil {
 		t.Fatal(err)
 	}

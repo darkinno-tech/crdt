@@ -600,6 +600,9 @@ func (client *ReconnectClient) setErr(err error) {
 }
 
 func normalizeClientLimits(config ClientConfig) (clientLimits, error) {
+	if config.MaxMerkleLeaves < 0 || config.MaxMerkleBytes < 0 {
+		return clientLimits{}, ErrInvalidConfig
+	}
 	result := clientLimits{
 		maxMessageBytes:       config.MaxMessageBytes,
 		maxActorBytes:         config.MaxActorBytes,
