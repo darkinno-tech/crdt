@@ -27,6 +27,39 @@ The same run also retained the existing Map/Array workloads. They are regression
 signals only because the two new rows have different work shapes; this report
 does not claim a relative speedup or a capacity threshold.
 
+## Local update-path optimization follow-up
+
+The local write path previously normalized a one-operation update before
+admission, then normalized the accumulated update again before emitting it.
+Each normalization canonicalizes its whole JSON envelope to enforce the byte
+limit. The first benchmark made that repeated work visible in the cold Text
+path, where the same 3,072-entry operation was repeatedly traversed.
+
+The follow-up keeps the boundary checks but changes their placement:
+
+- Normalize one local operation before state admission, and compute its
+  canonical byte size once for the exact future-envelope budget.
+- Store a private normalized copy in the pending transaction. This preserves
+  the published update if JavaScript callers mutate a returned operation
+  object at runtime despite its readonly TypeScript contract.
+- Emit the already-admitted pending operation list directly. Incoming updates
+  still use full `normalizeUpdate` validation before any mutation.
+
+On the same host, Node version, command, payload, warmup count, and five-sample
+scheme, the cold Text workload changed as follows. These are controlled local
+development measurements rather than browser, mobile, retained-memory, or
+production-capacity claims.
+
+| Version | Samples (ms/op) | Median (ms/op) | Change from baseline |
+| --- | --- | ---: | ---: |
+| NativeText baseline | 51.007, 48.277, 50.048, 51.518, 47.725 | 50.048 | — |
+| Local preflight + flush optimization | 39.547, 36.109, 39.436, 35.659, 36.312 | 36.312 | -27.4% |
+
+The optimized run also retained the 331,677-byte canonical wire payload and
+the remote convergence assertion. The focused regression test additionally
+checks that the emitted bytes remain canonical and that a pending delete cannot
+be changed through mutation of its returned JavaScript object.
+
 ## Interpretation and limits
 
 - Text indexes are UTF-16 code units, while immutable wire nodes hold exactly
