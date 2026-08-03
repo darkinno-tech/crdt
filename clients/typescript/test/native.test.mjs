@@ -285,6 +285,26 @@ test("NativeText resolves reversed parents and delete-before-insert delivery", (
   assert.equal(late.getText("body").toString(), "ab");
 });
 
+test("NativeText retains canonical outbound bytes and isolates pending transaction records", () => {
+  const document = new NativeDocument("writer");
+  const updates = recordUpdates(document);
+  const body = document.getText("body");
+  body.insert(0, "a😀");
+  assert.equal(
+    new TextDecoder().decode(encodeNativeUpdate(updates[0])),
+    '{"actor":"writer","operations":[{"entries":[{"after":null,"content":"a","id":{"actor":"writer","counter":1}},{"after":{"actor":"writer","counter":1},"content":"😀","id":{"actor":"writer","counter":2}}],"kind":"text-insert","target":"body"}],"version":1}',
+  );
+
+  document.transact(() => {
+    const deletion = body.delete(0, 1);
+    deletion.ids[0].actor = "unsupported-runtime-mutation";
+  });
+  const operation = updates[1].operations[0];
+  assert.equal(operation.kind, "text-delete");
+  assert.deepEqual(operation.ids, [{ actor: "writer", counter: 1 }]);
+  assert.equal(body.toString(), "😀");
+});
+
 test("NativeText preflights malformed, conflicting, and over-limit state without mutation", () => {
   const document = new NativeDocument("local", { maxPendingItems: 1, maxTextItems: 4, maxTextTombstones: 1 });
   const body = document.getText("body");

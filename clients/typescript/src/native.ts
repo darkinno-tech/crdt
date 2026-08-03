@@ -1284,15 +1284,11 @@ export class NativeDocument {
   /** @internal */
   _applyLocal(operation: NativeOperation): NativeOperation {
     this._assertOpen();
-    // Normalize and preflight one operation first. Re-encoding every prior
-    // operation for each member of a large transaction is quadratic, while
-    // the exact canonical envelope size is additive after normalization.
-    const normalized = normalizeUpdate({
-      version: NATIVE_UPDATE_VERSION,
-      actor: this.replicaID,
-      operations: [operation],
-    }, this.limits);
-    const normalizedOperation = normalized.operations[0]!;
+    // Local version/actor/count are document invariants. Normalize the one
+    // operation directly, then reuse its canonical JSON for the exact future
+    // envelope budget. Going through normalizeUpdate here would canonicalize
+    // this same large operation once only to canonicalize it again below.
+    const normalizedOperation = normalizeOperation(operation, this.limits);
     if (this.#pendingOperations.length >= this.limits.maxOperationsPerUpdate) {
       throw resourceLimit();
     }
@@ -1308,7 +1304,10 @@ export class NativeDocument {
       operations: [normalizedOperation],
     });
     this.#applyPrepared(prepared);
-    this.#pendingOperations.push(normalizedOperation);
+    // Keep the outbound transaction record private. Array/Text delete APIs
+    // return their operation object, so sharing that object would let an
+    // unsupported runtime mutation affect a not-yet-flushed transaction.
+    this.#pendingOperations.push(normalizeOperation(normalizedOperation, this.limits));
     this.#pendingOperationBytes += operationBytes;
     if (this.#transactionDepth === 0) {
       this.#flushLocal();
@@ -1416,10 +1415,14 @@ export class NativeDocument {
     if (this.#pendingOperations.length === 0) {
       return;
     }
-    const update = normalizeUpdate(
-      { version: NATIVE_UPDATE_VERSION, actor: this.replicaID, operations: this.#pendingOperations },
-      this.limits,
-    );
+    // Every pending operation was normalized and exact-size-accounted before
+    // state admission. Revalidating and canonicalizing the full transaction
+    // here would repeat O(update-size) work on every local flush.
+    const update: NativeUpdate = {
+      version: NATIVE_UPDATE_VERSION,
+      actor: this.replicaID,
+      operations: this.#pendingOperations,
+    };
     this.#pendingOperations = [];
     this.#pendingOperationBytes = 0;
     const origin = this.#transactionOrigin;
