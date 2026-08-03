@@ -35,6 +35,21 @@ Array object --RGA position--> bytes | owned object ID
 Array object --tombstone--> deleted RGA position
 ```
 
+## JSON values without JSON-blob merges
+
+`Map.SetJSON` and `Array.InsertJSON` accept only canonical JSON scalars:
+`null`, booleans, strings, and numbers. They preserve large numbers as
+`json.Number`, reject trailing data/non-canonical raw bytes on `GetJSON`, and
+apply the document's scalar-byte and depth limits before a local mutation.
+
+JSON objects and arrays are intentionally not scalar values. Model each one as
+an owned `Map` or `Array` child using `CreateMap`, `CreateArray`, `InsertMap`,
+or `InsertArray`; this gives a nested field or array position its own identity
+and allows independent concurrent edits to merge. Accepting a recursive JSON
+blob at this API would turn its whole subtree into one LWW value and defeat the
+document-tree CRDT's purpose. This is an API facade over the published
+document-tree-v2 frames, not another JSON wire format or a TypeID change.
+
 A child declaration embeds its exact owner: root name, map `{object,key}`, or
 array `{object,position}`. The reference that installs it carries the same tag
 as the child ID. An existing child therefore cannot be inserted at a second key
