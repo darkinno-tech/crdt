@@ -16,28 +16,28 @@ use (
 	./telemetry
 )
 
-replace github.com/DarkInno/crdt v1.0.34 => .
+replace github.com/DarkInno/crdt v1.0.35 => .
 
-replace github.com/DarkInno/crdt/durable v1.0.34 => ./durable
+replace github.com/DarkInno/crdt/durable v1.0.35 => ./durable
 
-replace github.com/DarkInno/crdt/examples v1.0.34 => ./examples
+replace github.com/DarkInno/crdt/examples v1.0.35 => ./examples
 
-replace github.com/DarkInno/crdt/extensions v1.0.34 => ./extensions
+replace github.com/DarkInno/crdt/extensions v1.0.35 => ./extensions
 
-replace github.com/DarkInno/crdt/persistence v1.0.34 => ./persistence
+replace github.com/DarkInno/crdt/persistence v1.0.35 => ./persistence
 
-replace github.com/DarkInno/crdt/telemetry v1.0.34 => ./telemetry
+replace github.com/DarkInno/crdt/telemetry v1.0.35 => ./telemetry
 
-replace github.com/DarkInno/crdt/providers/internal/sqlrelay v1.0.34 => ./providers/internal/sqlrelay
+replace github.com/DarkInno/crdt/providers/internal/sqlrelay v1.0.35 => ./providers/internal/sqlrelay
 
-replace github.com/DarkInno/crdt/providers/mssql v1.0.34 => ./providers/mssql
+replace github.com/DarkInno/crdt/providers/mssql v1.0.35 => ./providers/mssql
 
-replace github.com/DarkInno/crdt/providers/mysql v1.0.34 => ./providers/mysql
+replace github.com/DarkInno/crdt/providers/mysql v1.0.35 => ./providers/mysql
 
-replace github.com/DarkInno/crdt/providers/postgres v1.0.34 => ./providers/postgres
+replace github.com/DarkInno/crdt/providers/postgres v1.0.35 => ./providers/postgres
 
-replace github.com/DarkInno/crdt/providers/redis v1.0.34 => ./providers/redis
+replace github.com/DarkInno/crdt/providers/redis v1.0.35 => ./providers/redis
 
-replace github.com/DarkInno/crdt/providers/sqlite v1.0.34 => ./providers/sqlite
+replace github.com/DarkInno/crdt/providers/sqlite v1.0.35 => ./providers/sqlite
 
-replace github.com/DarkInno/crdt/providers/webrtc v1.0.34 => ./providers/webrtc
+replace github.com/DarkInno/crdt/providers/webrtc v1.0.35 => ./providers/webrtc

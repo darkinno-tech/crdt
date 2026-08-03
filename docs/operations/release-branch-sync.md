@@ -15,14 +15,15 @@ fast-forward the retained branches to that exact SHA.
 
 ## Admission and ordering
 
-The sync-release-branches job runs only when all of the following are true:
+The release workflow dispatches the `Release branch sync` workflow from the
+protected `main` ref only when all of the following are true:
 
 1. A same-repository preprod to main pull request was merged.
 2. Create-stable-tag completed successfully.
 3. The corresponding GitHub Release was created or already existed.
 4. Main still equals the merged candidate SHA.
 
-The job shares the release-tag concurrency group. It fetches exactly main,
+The dispatched job shares the release-tag concurrency group. It fetches exactly main,
 preprod, and beta, then performs an ordinary push only when the branch tip is
 an ancestor of the candidate. It never uses force push.
 
@@ -40,19 +41,21 @@ published. A newly advanced preprod branch is also left untouched.
 
 ## Security boundary
 
-The workflow has contents read permission; branch writes use a dedicated
-repository Deploy key stored as the RELEASE_BRANCH_SYNC_DEPLOY_KEY environment
-secret. The release-branch-sync environment permits deployments from main only.
-The active preprod-release-train ruleset preserves pull-request, status check,
-deletion, and non-fast-forward protections while allowing the Deploy-key actor
-to execute this narrow post-release fast-forward.
+The release workflow has only `actions: write` while it dispatches the follow-up
+job. The dispatched workflow has contents-read permission; branch writes use a
+dedicated repository Deploy key stored as the
+RELEASE_BRANCH_SYNC_DEPLOY_KEY environment secret. The release-branch-sync
+environment permits deployments from main only. The active
+preprod-release-train ruleset preserves pull-request, status check, deletion,
+and non-fast-forward protections while allowing the Deploy-key actor to execute
+this narrow post-release fast-forward.
 
 Operational controls:
 
 - Keep exactly one write-enabled Deploy key in this repository: the dedicated
   release-sync key.
 - Do not expose the environment to beta, feature branches, forks, or
-  pull-request workflows.
+  pull-request workflows. In particular, do not permit `refs/pull/*/merge`.
 - Rotate the key by replacing both the repository Deploy key and environment
   secret, then verify the ruleset remains active.
 - Investigate any ruleset-bypass audit event; a bypass must correspond to a
