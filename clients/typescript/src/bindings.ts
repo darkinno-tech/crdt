@@ -313,27 +313,74 @@ export function bindQuillPlainText(
   return bindRGAPlainText(document, port, options);
 }
 
+/** One replacement from Monaco's `IModelContentChangedEvent`. */
+export interface MonacoContentChange {
+  /** UTF-16 offset of the former range in the model. */
+  readonly rangeOffset: number;
+  /** UTF-16 length of the former range in the model. */
+  readonly rangeLength: number;
+  /** Replacement text in the model's current UTF-16 projection. */
+  readonly text: string;
+}
+
+/** The Monaco content-event fields needed for the bounded fast path. */
+export interface MonacoContentChangedEvent {
+  /** Monaco orders multi-change batches from document end to beginning. */
+  readonly changes: readonly MonacoContentChange[];
+  /** A model reset has no trustworthy single replacement identity here. */
+  readonly isFlush?: boolean;
+  /** An EOL-mode conversion is rendered as one atomic full-text replacement. */
+  readonly isEolChange?: boolean;
+}
+
 /** Structural type for a Monaco ITextModel without a Monaco dependency. */
 export interface MonacoTextPort {
   getValue(): string;
+  /** Avoids materialising the model's complete text on native single edits. */
+  getValueLength?(): number;
   setValue(value: string): void;
-  onDidChangeContent(listener: () => void): { dispose(): void };
+  onDidChangeContent(listener: (event: MonacoContentChangedEvent) => void): { dispose(): void };
 }
 
-/** Binds a Monaco text model; the host owns transport, awareness, and cursors. */
+/**
+ * Binds a Monaco text model; the host owns transport, awareness, and cursors.
+ *
+ * A current Monaco model supplies its post-edit UTF-16 length plus exactly one
+ * former range and replacement. That allows the shared RGA binding to reuse
+ * its bounded incremental projection, without reading the complete model. A
+ * batch, flush, EOL-mode change, legacy port, or inconsistent event keeps the
+ * one-frame full-text fallback so no part of a multi-edit transaction can be
+ * committed separately.
+ */
 export function bindMonacoPlainText(
   document: RGAWasmDocument,
   model: MonacoTextPort,
   options: BindRGAPlainTextOptions,
 ): RGAPlainTextBinding {
-  return bindRGAPlainText(document, {
+  let binding: RGAPlainTextBinding | undefined;
+  const result = bindRGAPlainText(document, {
     readText: () => model.getValue(),
     writeText: (value) => model.setValue(value),
     observeText: (listener) => {
-      const subscription = model.onDidChangeContent(listener);
+      const subscription = model.onDidChangeContent((event) => {
+        // `bindRGAPlainText` writes its initial document projection after it
+        // subscribes. That write is already authoritative, so it must not be
+        // mistaken for a local user mutation before this binding is assigned.
+        if (binding === undefined) {
+          return;
+        }
+        const replacement = singleMonacoReplacement(event, monacoValueLength(model));
+        if (replacement !== undefined) {
+          binding.applyUTF16Replacement(replacement);
+        } else {
+          listener();
+        }
+      });
       return () => subscription.dispose();
     },
   }, options);
+  binding = result;
+  return result;
 }
 
 /** The subset of a CodeMirror 6 `EditorView` used by this binding. */
@@ -1184,6 +1231,57 @@ function singleCodeMirrorReplacement(
     return undefined;
   }
   return invalid ? undefined : result;
+}
+
+function monacoValueLength(model: MonacoTextPort): number | undefined {
+  if (typeof model.getValueLength !== "function") {
+    return undefined;
+  }
+  try {
+    const length = model.getValueLength();
+    return Number.isSafeInteger(length) && length >= 0 ? length : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function singleMonacoReplacement(
+  event: unknown,
+  documentLength: number | undefined,
+): EditorUTF16Replacement | undefined {
+  if (
+    !isRecord(event) || event.isFlush === true || event.isEolChange === true ||
+    !Array.isArray(event.changes) || event.changes.length !== 1 ||
+    typeof documentLength !== "number" || !Number.isSafeInteger(documentLength) || documentLength < 0
+  ) {
+    return undefined;
+  }
+  const change = event.changes[0];
+  if (!isMonacoContentChange(change)) {
+    return undefined;
+  }
+  const oldLength = documentLength - change.text.length + change.rangeLength;
+  const end = change.rangeOffset + change.rangeLength;
+  if (!Number.isSafeInteger(oldLength) || oldLength < 0 || !Number.isSafeInteger(end) || end > oldLength) {
+    return undefined;
+  }
+  return {
+    from: change.rangeOffset,
+    to: end,
+    insert: change.text,
+    newLength: documentLength,
+  };
+}
+
+function isMonacoContentChange(value: unknown): value is MonacoContentChange {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const rangeOffset = value.rangeOffset;
+  const rangeLength = value.rangeLength;
+  return typeof rangeOffset === "number" && Number.isSafeInteger(rangeOffset) && rangeOffset >= 0 &&
+    typeof rangeLength === "number" && Number.isSafeInteger(rangeLength) && rangeLength >= 0 &&
+    typeof value.text === "string";
 }
 
 function selectionPort(value: PlainTextEditorPort): SelectionEditorPort | undefined {
