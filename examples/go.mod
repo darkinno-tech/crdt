@@ -3,9 +3,9 @@ module github.com/DarkInno/crdt/examples
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.35
-	github.com/DarkInno/crdt/extensions v1.0.35
-	github.com/DarkInno/crdt/persistence v1.0.35
+	github.com/DarkInno/crdt v1.0.36
+	github.com/DarkInno/crdt/extensions v1.0.36
+	github.com/DarkInno/crdt/persistence v1.0.36
 	github.com/coder/websocket v1.8.13
 )
 

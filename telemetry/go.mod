@@ -3,7 +3,7 @@ module github.com/DarkInno/crdt/telemetry
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.35
+	github.com/DarkInno/crdt v1.0.36
 	go.opentelemetry.io/otel v1.29.0
 	go.opentelemetry.io/otel/metric v1.29.0
 	go.opentelemetry.io/otel/sdk/metric v1.29.0
