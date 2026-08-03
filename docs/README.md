@@ -74,11 +74,14 @@ be committed.
 - [原生多语言 RGA 交付决策](design/native-multilanguage-rga.zh-CN.md)
 - [Native client CRDT type-coverage decision](design/native-client-type-coverage.md)
 - [原生客户端 CRDT 类型覆盖决策](design/native-client-type-coverage.zh-CN.md)
+- [Durable HLC/Merkle anti-entropy design](design/durable-hlc-merkle-anti-entropy.md)
+- [Durable HLC/Merkle 反熵设计](design/durable-hlc-merkle-anti-entropy.zh-CN.md)
 
 ## Operations and architecture
 
 - [Production configuration, errors, and telemetry](operations/production-readiness.md)
 - [Go module layout and release procedure](operations/go-module-release.md)
+- [Retained release-branch synchronization](operations/release-branch-sync.md)
 - [Merkle state-repair CLI runbook](operations/merkle-sync-cli.md)
 - [Merkle 状态修复 CLI 手册](operations/merkle-sync-cli.zh-CN.md)
 - [Cross-host probe deployment runbook](operations/cross-host-probe.md)

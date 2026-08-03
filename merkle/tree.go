@@ -30,13 +30,30 @@ type treeEntry struct {
 	digest [sha256.Size]byte
 }
 
+// Entry is one immutable key-to-digest binding in a Tree. It is useful for
+// bounded anti-entropy inventories: callers can compare a remote inventory
+// without transferring the canonical values that produced its digests.
+//
+// Entry does not authenticate its key or digest. The transport still needs to
+// authenticate the peer and validate any value fetched after reconciliation.
+type Entry struct {
+	Key    string
+	Digest [sha256.Size]byte
+}
+
 func NewTree() *Tree { return &Tree{entries: make(map[string][sha256.Size]byte)} }
 
 func (t *Tree) Insert(key string, value []byte) {
+	t.InsertDigest(key, sha256.Sum256(value))
+}
+
+// InsertDigest records a precomputed canonical-value digest. It avoids
+// rehashing values when a caller receives a Merkle inventory whose leaf
+// digests have already been calculated by an authenticated peer.
+func (t *Tree) InsertDigest(key string, digest [sha256.Size]byte) {
 	if t == nil {
 		return
 	}
-	digest := sha256.Sum256(value)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if current, exists := t.entries[key]; exists && current == digest {
@@ -44,6 +61,23 @@ func (t *Tree) Insert(key string, value []byte) {
 	}
 	t.entries[key] = digest
 	t.invalidateRootLocked()
+}
+
+// Entries returns a sorted, detached inventory of the tree's leaf bindings.
+// The caller owns the returned slice. It deliberately exposes digests only;
+// Tree never retains the input values supplied to Insert.
+func (t *Tree) Entries() []Entry {
+	if t == nil {
+		return nil
+	}
+	t.mu.RLock()
+	entries := make([]Entry, 0, len(t.entries))
+	for key, digest := range t.entries {
+		entries = append(entries, Entry{Key: key, Digest: digest})
+	}
+	t.mu.RUnlock()
+	sort.Slice(entries, func(left, right int) bool { return entries[left].Key < entries[right].Key })
+	return entries
 }
 
 // Delete removes key from t. It is safe to call for a missing key.
