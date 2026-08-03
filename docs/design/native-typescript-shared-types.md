@@ -3,7 +3,8 @@
 ## Decision
 
 Add a dependency-free `native-ts-v1` document layer for browser/WebView
-structured state: `NativeDocument`, LWW `NativeMap`, and RGA `NativeArray`.
+structured state: `NativeDocument`, LWW `NativeMap`, RGA `NativeArray`, and
+plain-text RGA `NativeText`.
 Keep it explicitly separate from the existing canonical Go frame and RGA
 run-v2 contracts. This is a new opt-in client-to-client protocol, not a new Go
 TypeID and not a transparent fallback for a Go replication group.
@@ -46,6 +47,12 @@ compatibility.
 - Array entries are immutable `(id, after, value)` nodes. The graph must be
   acyclic; rendering is deterministic depth-first traversal with descending
   sibling IDs. Delete tombstones win even when delivered before insertion.
+- Text entries are immutable `(id, after, content)` nodes where `content` is
+  exactly one Unicode scalar. Its public `length`, `insert`, and `delete`
+  offsets are UTF-16 code units, matching JavaScript strings and browser
+  editor ports; a request that would split a surrogate pair is rejected.
+  Text is intentionally plain: marks, embeds, block structure, and rich-text
+  Delta operations remain separate negotiated contracts.
 - An incoming update is fully normalized, type-checked, conflict-checked, and
   capacity-checked before it mutates roots, map entries, nodes, tombstones,
   pending queues, or the local counter.
@@ -55,8 +62,9 @@ compatibility.
 ## Resource and security boundaries
 
 Defaults bound a raw update to 1 MiB, operations to 10,000, root types to 128,
-map entries to 10,000, array nodes/tombstones to 100,000 each, unresolved array
-nodes to 10,000, values to 64 KiB, and nested values to depth 32/10,000 items.
+map entries to 10,000, array nodes/tombstones to 100,000 each, text
+nodes/tombstones to 100,000 each, unresolved sequence nodes to 10,000, values
+to 64 KiB, and nested values to depth 32/10,000 items.
 The limits are deployment policy and must be equal or lower at every peer.
 
 The protocol validates shape, resource use, and deterministic merge semantics;
@@ -69,6 +77,12 @@ Values are copied JSON values and are atomic. Nested JavaScript objects are not
 live shared types; applications use separately named root maps/arrays for data
 requiring independent concurrent merge.
 
+`NativeText` is a `native-ts-text-v1` semantic capability. A host must bind it
+to the same authenticated document/schema/limit declaration as the base native
+document and must not send a Text-root update to an older peer that does not
+advertise this capability. The older peer fails closed on the unknown operation
+rather than being silently treated as a Go/Wasm or Yjs-compatible client.
+
 ## Performance model
 
 `NativeMap` lookup/update/`size` are amortized O(1) plus value-copy cost.
@@ -80,6 +94,14 @@ have linear components for index/range resolution or copying. Child lists are
 sorted only when projected, which avoids re-sorting a batch of inserts. Large
 arrays should live in a Worker and edits should be grouped with `transact`.
 
+`NativeText` stores one Unicode scalar per RGA node. This makes local and
+remote UTF-16 boundary validation unambiguous and preserves deterministic
+delete-before-insert handling, at the cost of retained metadata per character.
+It caches both the visible scalar projection and its joined string, so repeated
+`length`/`toString()` reads are O(1) after a structural change has rebuilt the
+projection. It is appropriate for bounded plain-text fields, not for a large
+rich-text document; use the negotiated Go/Wasm rich-text path for that case.
+
 State export splits canonical JSON by incrementally counted bytes without
 allocating a `TextEncoder` buffer for every size check. It must not serialize an
 ever-growing candidate update per array entry: that causes O(n²) time and makes
@@ -90,7 +112,8 @@ delivery, state encode/recovery, and cached visible reads.
 ## Validation plan
 
 - Unit tests: copied values, transactions/observers, LWW ties, RGA ordering,
-  delete-before-insert, pending-parent resolution, type/tag/cycle conflicts,
+  delete-before-insert, pending-parent resolution, Text UTF-16/surrogate
+  boundaries, type/tag/cycle conflicts,
   configured capacity rejection (including multi-byte UTF-8 limits), canonical
   decoding, cache invalidation, and snapshot counters.
 - Robustness: 600 deterministic malformed-byte samples must either decode to a

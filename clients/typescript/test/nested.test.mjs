@@ -124,6 +124,22 @@ test("nested references reject ID mismatch, aliasing, and malformed marker value
   assert.equal(root.has("second"), false);
 });
 
+test("nested documents fail closed on separately negotiated NativeText operations", () => {
+  const document = new NativeNestedDocument("target");
+  const root = document.getMap("root");
+  root.set("title", "unchanged");
+  assertCode(() => document.applyUpdate({
+    version: 1,
+    actor: "text-peer",
+    operations: [{
+      kind: "text-insert",
+      target: "body",
+      entries: [{ id: { actor: "text-peer", counter: 1 }, after: null, content: "x" }],
+    }],
+  }), "type_conflict");
+  assert.equal(root.get("title"), "unchanged");
+});
+
 test("rejected local child creation leaves nested metadata and counters unchanged", () => {
   const byteBounded = new NativeNestedDocument("alice", { maxUpdateBytes: 1, maxValueBytes: 1 });
   const root = byteBounded.getMap("root");

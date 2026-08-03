@@ -138,8 +138,10 @@ func NewWithOptions[T crdt.StateReporter, V any](value T, view func(T) V, option
 }
 
 // Mutate runs mutation under Store's serialization gate. A nil or failed
-// mutation does not advance Version or notify subscribers. The wrapped CRDT
-// operation must retain its documented all-or-nothing-on-error behavior.
+// mutation does not advance Version or notify subscribers. Mutate assumes a
+// successful mutation changed the application-visible state; callers that can
+// determine otherwise should use MutateIf. The wrapped CRDT operation must
+// retain its documented all-or-nothing-on-error behavior.
 //
 // mutation is intentionally not a notification callback: it may change T and
 // must not recursively call methods on the same Store. Subscribers run only
@@ -154,18 +156,47 @@ func (s *Store[T, V]) Mutate(origin Origin, mutation func(T) error) error {
 	if mutation == nil {
 		return ErrNilMutation
 	}
+	_, err := s.MutateIf(origin, func(value T) (bool, error) {
+		return true, mutation(value)
+	})
+	return err
+}
+
+// MutateIf runs mutation under Store's serialization gate and publishes a
+// revision only when mutation reports changed. A nil, failed, or unchanged
+// mutation does not advance Version or notify subscribers. It is suitable for
+// idempotent remote CRDT joins whose caller can determine whether a duplicate
+// delivery extended retained state.
+//
+// Like Mutate, mutation is not a notification callback and must not recursively
+// call methods on the same Store. Subscribers run only after this method
+// releases the Store lock, so they may safely start a later mutation.
+func (s *Store[T, V]) MutateIf(origin Origin, mutation func(T) (changed bool, err error)) (bool, error) {
+	if s == nil {
+		return false, ErrNilStore
+	}
+	if !origin.mutation() {
+		return false, ErrInvalidOrigin
+	}
+	if mutation == nil {
+		return false, ErrNilMutation
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return ErrClosed
+		return false, ErrClosed
 	}
-	if err := mutation(s.value); err != nil {
-		return err
+	changed, err := mutation(s.value)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
+		return false, nil
 	}
 	s.version++
 	if !s.hub.active() {
-		return nil
+		return true, nil
 	}
 	s.hub.publish(Event[V]{
 		Version: s.version,
@@ -173,7 +204,7 @@ func (s *Store[T, V]) Mutate(origin Origin, mutation func(T) error) error {
 		Value:   s.view(s.value),
 		State:   s.value.State(),
 	})
-	return nil
+	return true, nil
 }
 
 // Snapshot returns the current reactive view. Its Origin is Initial because

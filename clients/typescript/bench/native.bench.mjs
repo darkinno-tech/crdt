@@ -10,6 +10,13 @@ cachedReadCards.push(Array.from({ length: 4096 }, (_, index) => `card-${index}`)
 if (cachedReadCards.length !== 4096) {
   throw new Error("cached read fixture did not initialize");
 }
+const cachedTextDocument = new NativeDocument("cached-text-reader");
+const cachedText = cachedTextDocument.getText("body");
+const CACHED_TEXT = "x".repeat(4096);
+cachedText.insert(0, CACHED_TEXT);
+if (cachedText.length !== CACHED_TEXT.length) {
+  throw new Error("cached text fixture did not initialize");
+}
 const stateVectorSource = new NativeDocument("state-vector-source");
 const stateVectorTarget = new NativeDocument("state-vector-target");
 const stateVectorUpdates = recordUpdates(stateVectorSource);
@@ -21,11 +28,13 @@ const stateVectorPeer = stateVectorTarget.getStateVector();
 console.log(`runtime=node-${process.version} workload=native-ts-v1 controlled=true`);
 benchmark("cold_append_and_encoded_merge_4096", 6, runAppendAndMerge);
 benchmark("cold_middle_insert_and_encoded_merge_4096", 8, runMiddleInsertAndMerge);
+benchmark("cold_text_insert_and_encoded_merge_4096", 6, runTextInsertAndMerge);
 benchmark("shuffled_duplicate_three_editor_session", 6, runShuffledThreeEditorSession);
 benchmark("cold_state_encode_and_restore_4096", 6, runStateEncodeAndRestore);
 benchmark("cold_state_vector_bootstrap_and_repair_4096", 6, runSparseStateVectorDiff);
 benchmark("warm_sparse_state_vector_diff_4096", 64, runWarmSparseStateVectorDiff);
 benchmark("cached_visible_projection_reads_4096", 2, runCachedProjectionReads, "reads");
+benchmark("cached_text_reads_4096", 2, runCachedTextReads, "reads");
 
 function benchmark(name, iterations, operation, measurementName = "bytes") {
   for (let warmup = 0; warmup < 2; warmup += 1) {
@@ -74,6 +83,20 @@ function runMiddleInsertAndMerge() {
   const merged = target.getArray("cards");
   if (merged.length !== values.length + 1 || merged.get(2048) !== "middle") {
     throw new Error("middle-insert benchmark did not converge");
+  }
+  return encoded.byteLength;
+}
+
+function runTextInsertAndMerge() {
+  const source = new NativeDocument("text-source");
+  const target = new NativeDocument("text-target");
+  const updates = recordUpdates(source);
+  const content = "a😀中".repeat(1024);
+  source.getText("body").insert(0, content);
+  const encoded = encodeNativeUpdate(updates[0]);
+  target.applyEncodedUpdate(encoded);
+  if (target.getText("body").toString() !== content) {
+    throw new Error("text benchmark did not converge");
   }
   return encoded.byteLength;
 }
@@ -166,6 +189,20 @@ function runCachedProjectionReads() {
   }
   if (checksum !== CACHED_READS_PER_OPERATION * 4096) {
     throw new Error("cached projection benchmark read an unexpected length");
+  }
+  return CACHED_READS_PER_OPERATION;
+}
+
+function runCachedTextReads() {
+  let checksum = 0;
+  for (let index = 0; index < CACHED_READS_PER_OPERATION; index += 1) {
+    checksum += cachedText.length;
+    if (cachedText.toString() !== CACHED_TEXT) {
+      throw new Error("cached text benchmark read an unexpected value");
+    }
+  }
+  if (checksum !== CACHED_READS_PER_OPERATION * CACHED_TEXT.length) {
+    throw new Error("cached text benchmark read an unexpected length");
   }
   return CACHED_READS_PER_OPERATION;
 }

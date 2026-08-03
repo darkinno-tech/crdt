@@ -128,10 +128,22 @@ undoDelta, err := history.Undo()
 // Replicate undoDelta exactly like any other local RGA delta.
 ```
 
-Undo history is process-local and intentionally not serialized. Call `Clear`
-before compaction. If a retained predecessor has already been compacted,
-undo/redo fails with `text.ErrUndoAnchorGone` instead of guessing a new offset
-and changing user intent.
+Undo history is process-local and intentionally not serialized. Its default
+policy retains at most 256 entries and 1,048,576 Unicode scalar values;
+callers that need another local policy can use `NewUndoManagerWithOptions`.
+When a successful edit would exceed the total retained budget, the manager
+releases the complete local stack and captures that newest edit. An individual
+edit larger than `MaxRunes` fails with `text.ErrUndoHistoryLimit` before it
+changes the RGA. These limits bound local metadata only; they do not replace
+RGA, frame, outbox, storage, identity, or transport limits.
+
+Call `Clear` before compaction. If either a retained predecessor or a position
+that a compensating tombstone must target has already been compacted, undo/redo
+fails with `text.ErrUndoAnchorGone` instead of guessing a new offset or
+reintroducing an obsolete tombstone. Local history clearing and compaction
+authorization remain application responsibilities: replicated compaction still
+requires the authenticated exact-acknowledgement epoch, durable post-compaction
+checkpoint, and retirement of obsolete deltas.
 
 ## Verification
 
@@ -143,4 +155,5 @@ go test -race ./list ./xml ./text -count=1
 go test -run=^$ -fuzz=FuzzRGAUnmarshal -fuzztime=250000x -parallel=1 ./list
 go test -run=^$ -fuzz=FuzzParseDocument -fuzztime=250000x -parallel=1 ./xml
 go test -run='^$' -bench='BenchmarkRGAAppendIndexedList|BenchmarkRGAValuesTenThousand' -benchmem ./list
+go test -run='^$' -bench='BenchmarkUndoManagerInsertUndoDiscardRedo' -benchmem ./text
 ```

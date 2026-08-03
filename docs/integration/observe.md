@@ -10,6 +10,47 @@ react to local edits, successfully installed remote deltas, merges, recovery,
 or approved maintenance. Do not send `observe.Event.Version` to peers: it is a
 process-local UI revision, not a causal clock or durable acknowledgement.
 
+## Distributed counter observers
+
+`NewGCounterObserver` and `NewPNCounterObserver` combine the existing counter
+delta APIs with this local observation boundary. A local `Increment` or
+`Decrement` returns the canonical counter delta for an authenticated transport;
+the receiving side decodes it with the usual counter limits and calls
+`ApplyDelta`.
+
+```go
+model, err := observe.NewGCounterObserver("browser-tab")
+if err != nil { /* handle */ }
+
+subscription, err := model.Subscribe(func(event observe.Event[observe.GCounterView]) {
+	if event.Value.Overflow {
+		showAggregateOverflow()
+		return
+	}
+	renderCounter(event.Value.Value)
+})
+if err != nil { /* handle */ }
+defer subscription.Unsubscribe()
+
+delta, err := model.Increment(1)
+if err != nil { /* handle */ }
+encoded, err := delta.MarshalBinary() // authenticate and send outside this object
+if err != nil { /* handle */ }
+
+received, err := counter.UnmarshalGCounterDelta(encoded)
+if err != nil { /* reject */ }
+changed, err := model.ApplyDelta(received)
+if err != nil { /* reject */ }
+// changed is false for a duplicate/subsumed delivery, which emits no Remote UI revision.
+_ = changed
+```
+
+`PNCounterView.Value` is a decimal string, so a callback never receives a
+mutable `big.Int` or loses valid uint64 component range. These helpers add no
+network, authentication, acknowledgement, persistence, or recovery contract;
+the host still owns framing admission, durable outbox/state installation, and
+the replica/manifest protocol boundary.
+
 ## Bind a counter to a view
 
 The view function runs while `Store` serializes an operation. It must return a
@@ -71,8 +112,9 @@ if err := model.Mutate(observe.Remote, func(current *counter.GCounter) error {
 
 Likewise use `observe.Merge`, `observe.Restore`, or `observe.Maintenance` for
 the corresponding successful operation. A successful duplicate delta may emit
-another `Remote` view event; this is safe for a state-rendering UI and avoids
-claiming a generic wrapper can infer semantic change from every CRDT type.
+another `Remote` view event through generic `Mutate`, because it cannot infer
+semantic change for every CRDT type. `MutateIf` and the counter observers let a
+caller with a type-specific changed result suppress that redundant revision.
 
 ## Delivery and lifecycle contract
 
@@ -109,6 +151,7 @@ existing replica/durable recovery contracts.
 go test ./observe -count=1
 go test -race ./observe -count=1
 GOMAXPROCS=1 go test -run '^$' -bench 'BenchmarkGCounterBinding' -benchmem ./observe
+GOMAXPROCS=1 go test -run '^$' -bench 'BenchmarkGCounterObserverRemoteApply' -benchmem ./observe
 ```
 
 The package tests cover initial delivery, errors, slow-subscriber coalescing,
