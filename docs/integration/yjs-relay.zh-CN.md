@@ -95,6 +95,11 @@ handler, err := extensions.NewYJSHandler(extensions.YJSConfig{
     AuthorizeSubscription: func(peer extensions.Peer, room string) error {
         // 校验租户/文档读权限。
     },
+    RevalidateSubscription: func(ctx context.Context, peer extensions.Peer, room string) error {
+        // 对当前读权限复核；撤销、策略后端不可用或超时均返回错误。
+    },
+    RevalidateInterval: 30 * time.Second,
+    RevalidateTimeout:  2 * time.Second,
     Authorize: func(peer extensions.Peer, room string, kind extensions.YJSMessageKind) error {
         // 独立校验文档写入或 presence 权限。
     },
@@ -112,6 +117,13 @@ awareness client 数量。慢 peer 会被断开，不会造成无界应用内存
 断开而被移除。relay 接受标准的同 clock `null` 下线状态，并只保留有上限的
 clock/owner tombstone（不保留 awareness JSON），以阻止延迟到达的旧状态复活 ghost cursor。
 相同或更旧的非空重传会被安全忽略；来自另一连接的当前竞争状态会关闭其发送端。
+
+`AuthorizeSubscription` 仅控制 upgrade。若产品可在 WebSocket 保持连接期间撤销读权限，还必须配置
+`RevalidateSubscription`：其回调收到不可变的已认证 `Peer`、room 与有上限的 context。回调返回错误或
+超时会关闭 subscriber 并丢弃已排队的 fan-out；已在网络写入中的消息无法撤回。撤销后的最长窗口为
+`RevalidateInterval + RevalidateTimeout`。仅在设置回调时，零 interval 采用一分钟，零 timeout 采用五秒
+（若显式 interval 更短则 timeout 会被限制为该值）；设置 duration 却没有回调会被拒绝为无效配置。必须按 peer 与 room 复核应用授权，
+不得依据 Yjs client ID、state vector、awareness payload 或旧 cookie 读取结果。
 
 ## 持久化和恢复边界
 

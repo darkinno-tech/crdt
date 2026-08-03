@@ -110,6 +110,12 @@ handler, err := extensions.NewYJSHandler(extensions.YJSConfig{
     AuthorizeSubscription: func(peer extensions.Peer, room string) error {
         // Check tenant/document read access.
     },
+    RevalidateSubscription: func(ctx context.Context, peer extensions.Peer, room string) error {
+        // Recheck the authenticated peer against current read access. Return
+        // an error for revocation, policy-backend failure, or timeout.
+    },
+    RevalidateInterval: 30 * time.Second,
+    RevalidateTimeout:  2 * time.Second,
     Authorize: func(peer extensions.Peer, room string, kind extensions.YJSMessageKind) error {
         // Check document write/presence permission independently.
     },
@@ -131,6 +137,19 @@ clock/owner tombstones (no awareness JSON) to prevent a delayed pre-removal
 state from resurrecting a ghost cursor. Equal or older non-null retransmits are
 harmlessly ignored; a current competing state from another connection closes
 that publisher.
+
+`AuthorizeSubscription` controls the upgrade. If the product can revoke read
+access while a WebSocket remains open, also configure
+`RevalidateSubscription`: its callback receives the immutable authenticated
+`Peer`, room, and a bounded context. A callback error or timeout closes the
+subscriber and drops queued fan-out work; an already in-flight network write
+cannot be recalled. The post-revocation window is bounded by
+`RevalidateInterval + RevalidateTimeout`. With the callback present, a zero
+interval selects one minute and a zero timeout selects five seconds (capped at
+a shorter selected interval); providing a duration without the callback is
+rejected as invalid
+configuration. Recheck application authorization by peer and room, never by a
+Yjs client ID, state vector, awareness payload, or stale cookie read.
 
 ## Persistence and recovery boundary
 
