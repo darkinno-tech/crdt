@@ -3,7 +3,7 @@ module github.com/DarkInno/crdt/persistence
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.35
+	github.com/DarkInno/crdt v1.0.36
 	go.etcd.io/bbolt v1.3.10
 )
 

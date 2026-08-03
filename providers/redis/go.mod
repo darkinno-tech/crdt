@@ -3,8 +3,8 @@ module github.com/DarkInno/crdt/providers/redis
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.35
-	github.com/DarkInno/crdt/durable v1.0.35
+	github.com/DarkInno/crdt v1.0.36
+	github.com/DarkInno/crdt/durable v1.0.36
 	github.com/alicebob/miniredis/v2 v2.30.4
 	github.com/redis/go-redis/v9 v9.16.0
 )
