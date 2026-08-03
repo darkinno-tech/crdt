@@ -139,6 +139,8 @@ export type {
   EditorUTF16Replacement,
   EditorTextSelection,
   LexicalTextPort,
+  MonacoContentChange,
+  MonacoContentChangedEvent,
   MonacoTextPort,
   PlainTextEditorPort,
   ProseMirrorRichTextPort,

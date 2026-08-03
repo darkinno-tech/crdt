@@ -12,7 +12,7 @@ import TiptapParagraph from "@tiptap/extension-paragraph";
 import TiptapText from "@tiptap/extension-text";
 
 import { decodeFrame } from "../dist/frame.js";
-import { bindBlockNoteRichText, bindCodeMirrorPlainText, bindQuillRichText, bindRGAPlainText, bindTiptapRichText } from "../dist/bindings.js";
+import { bindBlockNoteRichText, bindCodeMirrorPlainText, bindMonacoPlainText, bindQuillRichText, bindRGAPlainText, bindTiptapRichText } from "../dist/bindings.js";
 import {
   CRDTRuntimeError,
   RICH_TEXT_PROTOCOL,
@@ -394,6 +394,45 @@ test("CodeMirror-shaped binding exchanges actual Go Wasm RGA frames without echo
   assert.equal(bobDocument.close(), true);
 });
 
+test("Monaco-shaped native replacements exchange actual Go Wasm frames without a model echo", () => {
+  const aliceDocument = loaderRuntime.create("monaco-binding-alice");
+  const bobDocument = loaderRuntime.create("monaco-binding-bob");
+  const aliceEditor = new TestMonacoPort("const draft = true;");
+  const bobEditor = new TestTextPort("");
+  const aliceFrames = [];
+  const bobFrames = [];
+  const alice = bindMonacoPlainText(aliceDocument, aliceEditor, {
+    initialContent: "editor",
+    onLocalFrame: (frame) => aliceFrames.push(frame),
+  });
+  const bob = bindRGAPlainText(bobDocument, bobEditor, {
+    onLocalFrame: (frame) => bobFrames.push(frame),
+  });
+  for (const frame of aliceFrames) {
+    bob.applyRemote(frame);
+  }
+  assert.equal(bobEditor.readText(), "const draft = true;");
+  assert.equal(bobFrames.length, 0);
+
+  aliceEditor.userReplace(6, 11, "reviewed");
+  const aliceEdit = aliceFrames.at(-1);
+  assert.ok(aliceEdit instanceof Uint8Array);
+  bob.applyRemote(aliceEdit);
+  assert.equal(bobEditor.readText(), "const reviewed = true;");
+  assert.equal(bobFrames.length, 0);
+
+  bobEditor.userWrite("const merged = true;");
+  const bobEdit = bobFrames.at(-1);
+  assert.ok(bobEdit instanceof Uint8Array);
+  alice.applyRemote(bobEdit);
+  assert.equal(aliceEditor.value, "const merged = true;");
+  assert.equal(aliceFrames.length, 2);
+  assert.equal(alice.destroy(), true);
+  assert.equal(bob.destroy(), true);
+  assert.equal(aliceDocument.close(), true);
+  assert.equal(bobDocument.close(), true);
+});
+
 test("TypeScript loader rejects a Wasm artifact whose expected protocol does not match", async () => {
   await assert.rejects(
     () => wasmModule.initRGAWasm({ wasmURL: `${assets.url}/crdt-rga.wasm`, expectedProtocol: incompatibleProtocol }),
@@ -635,6 +674,45 @@ class TestCodeMirrorPort {
 
   userWrite(value) {
     this.value = value;
+  }
+}
+
+class TestMonacoPort {
+  #listeners = new Set();
+
+  constructor(value) {
+    this.value = value;
+  }
+
+  getValue() {
+    return this.value;
+  }
+
+  getValueLength() {
+    return this.value.length;
+  }
+
+  setValue(value) {
+    this.value = value;
+    this.#emit({ changes: [], isFlush: true });
+  }
+
+  onDidChangeContent(listener) {
+    this.#listeners.add(listener);
+    return { dispose: () => this.#listeners.delete(listener) };
+  }
+
+  userReplace(from, to, text) {
+    this.value = `${this.value.slice(0, from)}${text}${this.value.slice(to)}`;
+    this.#emit({
+      changes: [{ rangeOffset: from, rangeLength: to - from, text }],
+      isFlush: false,
+      isEolChange: false,
+    });
+  }
+
+  #emit(event) {
+    for (const listener of [...this.#listeners]) listener(event);
   }
 }
 

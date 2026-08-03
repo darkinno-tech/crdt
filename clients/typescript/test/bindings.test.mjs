@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   bindCodeMirrorPlainText,
   bindLexicalPlainText,
+  bindMonacoPlainText,
   bindQuillRichText,
   bindQuillPlainText,
   bindRGAPlainText,
@@ -142,6 +143,49 @@ class InstrumentedCodeMirrorPort {
     }
     this.value = value;
     return nativeCodeMirrorUpdate(changes);
+  }
+}
+
+class InstrumentedMonacoPort {
+  constructor(value = "", { supportsLength = true } = {}) {
+    this.value = value;
+    this.valueReads = 0;
+    this.lengthReads = 0;
+    this.listeners = new Set();
+    if (!supportsLength) this.getValueLength = undefined;
+  }
+
+  getValue() {
+    this.valueReads += 1;
+    return this.value;
+  }
+
+  getValueLength() {
+    this.lengthReads += 1;
+    return this.value.length;
+  }
+
+  setValue(value) {
+    this.value = value;
+    this.emit({ changes: [], isFlush: true });
+  }
+
+  onDidChangeContent(listener) {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  userReplace(from, to, text, event = undefined) {
+    this.value = `${this.value.slice(0, from)}${text}${this.value.slice(to)}`;
+    this.emit(event ?? {
+      changes: [{ rangeOffset: from, rangeLength: to - from, text }],
+      isFlush: false,
+      isEolChange: false,
+    });
+  }
+
+  emit(event) {
+    for (const listener of [...this.listeners]) listener(event);
   }
 }
 
@@ -450,6 +494,87 @@ test("CodeMirror native replacements enforce the negotiated bound before RGA mut
   assert.throws(() => binding.applyViewUpdate(view.userReplace(0, 4, "banana")), /resource_limit/);
   assert.equal(document.text(), "safe");
   assert.equal(view.state.doc.toString(), "safe");
+  assert.equal(frames.length, 0);
+  assert.equal(binding.destroy(), true);
+});
+
+test("Monaco native single changes retain Unicode rune offsets without re-reading the model", () => {
+  const document = new FakeRGA("a🙂z");
+  const model = new InstrumentedMonacoPort("a🙂z");
+  const frames = [];
+  const binding = bindMonacoPlainText(document, model, { onLocalFrame: (frame) => frames.push(frame) });
+  const readsBeforeChange = model.valueReads;
+  const lengthReadsBeforeChange = model.lengthReads;
+
+  model.userReplace(1, 3, "ß");
+  assert.equal(model.valueReads, readsBeforeChange, "a native Monaco edit must not materialise the complete model");
+  assert.equal(model.lengthReads, lengthReadsBeforeChange + 1);
+  assert.equal(document.text(), "aßz");
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(frames[0])), {
+    kind: "replace", offset: 1, count: 1, value: "ß",
+  });
+  assert.equal(binding.destroy(), true);
+});
+
+test("Monaco batches, flushes, EOL changes, and legacy ports retain one atomic full-text fallback", () => {
+  const document = new FakeRGA("abcd");
+  const model = new InstrumentedMonacoPort("abcd");
+  const frames = [];
+  const binding = bindMonacoPlainText(document, model, { onLocalFrame: (frame) => frames.push(frame) });
+  const readsBeforeBatch = model.valueReads;
+
+  model.userReplace(0, 1, "X", {
+    changes: [
+      { rangeOffset: 2, rangeLength: 1, text: "Y" },
+      { rangeOffset: 0, rangeLength: 1, text: "X" },
+    ],
+    isFlush: false,
+    isEolChange: false,
+  });
+  assert.equal(document.text(), "Xbcd");
+  assert.equal(model.valueReads, readsBeforeBatch + 1);
+  assert.deepEqual(JSON.parse(new TextDecoder().decode(frames[0])), {
+    kind: "replace", offset: 0, count: 1, value: "X",
+  });
+
+  model.userReplace(1, 1, "\r\n", { changes: [], isFlush: false, isEolChange: true });
+  assert.equal(document.text(), "X\r\nbcd");
+  assert.equal(frames.length, 2);
+
+  model.userReplace(model.value.length, model.value.length, "!", {
+    changes: [{ rangeOffset: 100, rangeLength: 0, text: "!" }],
+    isFlush: false,
+    isEolChange: false,
+  });
+  assert.equal(document.text(), "X\r\nbcd!");
+  assert.equal(frames.length, 3, "out-of-range event coordinates must not discard accepted editor text");
+
+  const legacyDocument = new FakeRGA("safe");
+  const legacyModel = new InstrumentedMonacoPort("safe", { supportsLength: false });
+  const legacyFrames = [];
+  const legacy = bindMonacoPlainText(legacyDocument, legacyModel, { onLocalFrame: (frame) => legacyFrames.push(frame) });
+  legacyModel.userReplace(0, 4, "legacy");
+  assert.equal(legacyDocument.text(), "legacy");
+  assert.equal(legacyFrames.length, 1);
+  assert.equal(legacy.destroy(), true);
+  assert.equal(binding.destroy(), true);
+});
+
+test("Monaco replacement limits restore the model and remote frames do not echo", () => {
+  const document = new FakeRGA("safe", { maxLocalEditBytes: 4, maxLocalEditRunes: 4 });
+  const model = new InstrumentedMonacoPort("safe");
+  const frames = [];
+  const binding = bindMonacoPlainText(document, model, { onLocalFrame: (frame) => frames.push(frame) });
+
+  assert.throws(() => model.userReplace(0, 4, "banana"), /resource_limit/);
+  assert.equal(document.text(), "safe");
+  assert.equal(model.value, "safe");
+  assert.equal(frames.length, 0);
+
+  const remote = new FakeRGA("safe");
+  binding.applyRemote(remote.replace(0, 0, "remote "));
+  assert.equal(document.text(), "remote safe");
+  assert.equal(model.value, "remote safe");
   assert.equal(frames.length, 0);
   assert.equal(binding.destroy(), true);
 });
