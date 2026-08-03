@@ -3,8 +3,8 @@
 This directory gives browsers and JavaScript/WebView clients two deliberately
 separate local-merge paths:
 
-1. `src/native.ts` is a dependency-free TypeScript document with `NativeMap`
-   and `NativeArray` shared types. It avoids Wasm download/startup overhead for
+1. `src/native.ts` is a dependency-free TypeScript document with `NativeMap`,
+   `NativeArray`, and plain-text `NativeText` shared types. It avoids Wasm download/startup overhead for
    structured application state where all peers select its native TS contract.
 2. `src/frame.ts` is a dependency-free TypeScript decoder for the canonical
    v1 outer frame. It validates magic, version, shortest varints, lengths and
@@ -40,6 +40,11 @@ without claiming Yjs API or wire compatibility:
   left neighbour, concurrent siblings use the same deterministic ID ordering,
   and deletes retain structural tombstones. Parent-missing inserts wait in a
   bounded queue; delete-before-insert is supported.
+- `document.getText(name)` returns a plain-text RGA `NativeText`. Its
+  `length`, `insert(index, content)`, and `delete(index, length)` positions are
+  UTF-16 code units, matching browser editor and JavaScript string APIs;
+  `toString()` returns the current text. Every wire entry is one Unicode scalar
+  and the client rejects a position that would split a surrogate pair.
 - `document.transact()` emits one local update after a group of mutations.
   `onUpdate()` supplies transport-ready operations and `observe()` on a type
   runs after the transaction has been applied.
@@ -57,6 +62,7 @@ import { decodeNativeUpdate, encodeNativeUpdate, NativeDocument } from "@darkinn
 const alice = new NativeDocument("alice-device-7");
 const metadata = alice.getMap("metadata");
 const cards = alice.getArray("cards");
+const body = alice.getText("body");
 
 alice.onUpdate(({ update }) => {
   // Authenticate and authorize this message at the transport boundary first.
@@ -66,12 +72,20 @@ alice.onUpdate(({ update }) => {
 alice.transact(() => {
   metadata.set("title", "Roadmap");
   cards.push([{ id: "card-1", title: "Draft" }]);
+  body.insert(0, "Draft notes");
 }, "local-editor");
 
 socket.onmessage = ({ data }) => {
   alice.applyUpdate(decodeNativeUpdate(new Uint8Array(data)), "remote-peer");
 };
 ```
+
+`NativeText` requires the separately declared `native-ts-text-v1` semantic
+capability. It is plain text only: formatting, embeds, rich-text Delta APIs,
+and Go/Wasm RGA interoperability are intentionally out of scope. Do not send a
+Text-root update to a native peer that has not negotiated this capability; it
+will fail closed on the unknown operation. Use the negotiated Go/Wasm rich-text
+runtime for document bodies requiring marks, blocks, or embeds.
 
 ### Native state-vector anti-entropy
 
@@ -209,7 +223,7 @@ it changes state.
 
 `native-ts-v1` now has a browser facade at
 `@darkinno/crdt-client/browser`. `openNativeBrowserDocument` restores an
-append-only IndexedDB record before exposing the same named Map/Array API. It
+append-only IndexedDB record before exposing the same named Map/Array/Text API. It
 persists a local mutation before an optional transport is allowed to receive
 it, and an application can wait for the local recovery boundary with
 `flush()`:
@@ -516,18 +530,21 @@ engine.
 ## 中文说明
 
 该目录同时提供纯 TypeScript 的结构化 CRDT 和 Go RGA 的 Wasm 路径。`NativeDocument`
-提供 `NativeMap`（LWW）与 `NativeArray`（带墓碑、乱序待父节点处理的 RGA），适合所有
-参与者明确选择 `native-ts-v1` 的浏览器/WebView 结构化状态同步，因此不需要 Wasm 的下载和
-启动成本。它的更新是规范 JSON，和 Go 的 CRDT frame、TypeID、run-v2 完全不同；不能把
-native 更新送给 Go decoder，也不能把它伪装成已有复制组的一部分。
+提供 `NativeMap`（LWW）、`NativeArray`（带墓碑、乱序待父节点处理的 RGA）和纯文本
+`NativeText`（每个 Unicode 标量一个 RGA 节点），适合所有参与者明确选择 `native-ts-v1`
+的浏览器/WebView 结构化状态同步，因此不需要 Wasm 的下载和启动成本。Text 的
+`length`、`insert`、`delete` 使用浏览器字符串相同的 UTF-16 code-unit 偏移，拒绝将代理对
+拆开。它的更新是规范 JSON，和 Go 的 CRDT frame、TypeID、run-v2 完全不同；不能把 native
+更新送给 Go decoder，也不能把它伪装成已有复制组的一部分。
 
 `transact()` 将本地多个改动合成一个 update，`onUpdate()` 交给宿主网络层，
 `applyUpdate()` 在完整校验后才合并，因此重复与乱序投递可收敛。值为深拷贝 JSON，嵌套
 对象是原子 LWW 值；本版本不支持嵌套 shared type。默认上限为 1 MiB/update、10,000
-op/update、10,000 map entry、100,000 array node/墓碑、10,000 pending node、64 KiB/value
-与深度 32。宿主仍必须完成身份认证、授权、schema/limit 协商、传输 body 上限、重放治理和
-加密；canonical JSON 与 CRDT 合并都不提供这些安全能力。快照必须把 root 声明、`updates`
-与本地 `counter` 原子持久化，避免重启后复用 ID。
+op/update、10,000 map entry、100,000 array node/墓碑、100,000 text node/墓碑、10,000
+pending node、64 KiB/value 与深度 32。Text 必须协商 `native-ts-text-v1` 能力；未协商旧端
+应 fail-closed，不能按 Array、Yjs 或 Go/Wasm rich text 解释。宿主仍必须完成身份认证、授权、
+schema/limit 协商、传输 body 上限、重放治理和加密；canonical JSON 与 CRDT 合并都不提供这些
+安全能力。快照必须把 root 声明、`updates` 与本地 `counter` 原子持久化，避免重启后复用 ID。
 
 ### 原生 State Vector 与反熵
 
@@ -538,10 +555,10 @@ op/update、10,000 map entry、100,000 array node/墓碑、10,000 pending node�
 `actor -> 最大 counter`：native 更新允许乱序抵达，且被拒绝的本地操作可能留下未使用的
 counter；仅保存最大值会把缺失操作错误地声明为已知，反熵时可能漏传状态。
 
-State Vector 仅用于优化传输，不是成员资格、授权或持久 receipt 的证据。Array 删除没有独立
-dot，因此即使对端已有插入 ID，状态修复也会保留并重传 tombstone，以保证 delete-before-insert
-收敛。新快照及浏览器 IndexedDB metadata 会将 vector 与 root、updates、本地 counter 原子保存；
-旧快照没有 vector 时仍可恢复，但只会保守地识别其保留状态中出现过的 ID。
+State Vector 仅用于优化传输，不是成员资格、授权或持久 receipt 的证据。Array/Text 删除没有
+独立 dot，因此即使对端已有插入 ID，状态修复也会保留并重传 tombstone，以保证 delete-before-
+insert 收敛。新快照及浏览器 IndexedDB metadata 会将 vector 与 root、updates、本地 counter
+原子保存；旧快照没有 vector 时仍可恢复，但只会保守地识别其保留状态中出现过的 ID。
 
 对于必须与 Go、原生移动端或既有 RGA 数据互通的组，仍然使用下面的 Wasm run-v2 路径；它
 复用同一份 Go 编辑、乱序、墓碑和 HLC 语义，而不是维护一份隐式兼容的第二实现。
@@ -549,7 +566,7 @@ dot，因此即使对端已有插入 ID，状态修复也会保留并重传 tomb
 ## 浏览器原生文档：几行代码实现本地优先与恢复
 
 `@darkinno/crdt-client/browser` 的 `openNativeBrowserDocument` 在暴露
-Map/Array API 前先从 IndexedDB 恢复，并将本地变更写入追加日志。最小使用方式如下：
+Map/Array/Text API 前先从 IndexedDB 恢复，并将本地变更写入追加日志。最小使用方式如下：
 
 ```ts
 import { createBrowserReplicaID, openNativeBrowserDocument } from "@darkinno/crdt-client/browser";
@@ -560,6 +577,7 @@ const board = await openNativeBrowserDocument({
 });
 board.getMap("metadata").set("title", "Roadmap");
 board.getArray("cards").push([{ id: "draft", status: "open" }]);
+board.getText("body").insert(0, "纯文本草稿");
 await board.flush(); // 本地恢复记录已提交
 ```
 
