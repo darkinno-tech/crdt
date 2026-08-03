@@ -91,6 +91,39 @@ int main() {
     Require(recovered.Text() == alice.Text(),
             "same-ID clock recovery produced a conflicting mutation");
 
+    const crdt_limits rga_limits{
+        .max_frame_bytes = 1U << 20U,
+        .max_payload_bytes = 1U << 20U,
+        .max_string_bytes = 64U << 10U,
+        .max_nodes = 1,
+        .max_tags = 1,
+        .max_tombstones = 1,
+        .max_pending_nodes = 1,
+        .max_pending_bytes = 1,
+    };
+    Rga limited_rga("cpp-limited", rga_limits);
+    [[maybe_unused]] const auto limited_initial = limited_rga.Insert(0, "A");
+    const auto limited_state = limited_rga.State();
+    Rga limited_recovered(limited_rga.Clock(), rga_limits);
+    limited_recovered.Apply(Bytes(limited_state));
+    Rga unbounded_rga("cpp-unbounded");
+    const auto excess_delta = unbounded_rga.Insert(0, "B");
+    const auto rga_limit_state = limited_recovered.State();
+    const auto rga_limit_clock = limited_recovered.Clock();
+    try {
+      limited_recovered.Apply(Bytes(excess_delta));
+      throw std::runtime_error("recovered RGA accepted a frame above its node limit");
+    } catch (const Error& error) {
+      Require(error.Code() == CRDT_RESOURCE_LIMIT, "RGA limit returned the wrong status");
+    }
+    Require(limited_recovered.State() == rga_limit_state,
+            "RGA over-limit frame changed recovered state");
+    const auto actual_rga_limit_clock = limited_recovered.Clock();
+    Require(actual_rga_limit_clock.replica_id == rga_limit_clock.replica_id &&
+                actual_rga_limit_clock.wall_time == rga_limit_clock.wall_time &&
+                actual_rga_limit_clock.logical == rga_limit_clock.logical,
+            "RGA over-limit frame changed recovered HLC");
+
     const auto map_vector = Hex("435244540109000e01016105616c69636501000101783c3edf37");
     LwwMap map_reader("cpp-map-vector-reader");
     map_reader.Apply(Bytes(map_vector));

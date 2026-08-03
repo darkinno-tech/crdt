@@ -59,7 +59,11 @@ The library's limits are a second line of defense, never admission control.
 Hosts must cap transport bodies before copying, authenticate the user/peer,
 authorize the exact document/schema/epoch/TypeID pair, apply replay policy,
 and use TLS/encryption as appropriate. A checksum detects accidental
-corruption only.
+corruption only. `Limits`/`crdt_limits` are manifest data: a native binding
+must pass the same values at first construction and `ClockState` recovery.
+Default constructors are only safe for groups that explicitly negotiated the
+default policy; a restart must not silently widen frame, retained-node,
+tombstone, or pending-parent limits.
 
 The Rust C ABI has opaque mutex-protected handles and transferred buffers with
 one `crdt_buffer_free` release path. FFI callers receive status codes rather
