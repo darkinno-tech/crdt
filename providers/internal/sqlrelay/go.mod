@@ -3,8 +3,8 @@ module github.com/DarkInno/crdt/providers/internal/sqlrelay
 go 1.21.0
 
 require (
-	github.com/DarkInno/crdt v1.0.34
-	github.com/DarkInno/crdt/durable v1.0.34
+	github.com/DarkInno/crdt v1.0.35
+	github.com/DarkInno/crdt/durable v1.0.35
 )
 
 require (
