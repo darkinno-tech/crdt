@@ -6,7 +6,8 @@ the negotiated Go/Wasm `RGAWasmDocument` to a text editor surface:
 - `bindRGAPlainText` accepts a minimal read/write/observe port.
 - `bindQuillPlainText` directly adapts Quill 2's `getText`, `setText`, and
   `text-change` APIs.
-- `bindMonacoPlainText` adapts an `ITextModel`-shaped value surface.
+- `bindMonacoPlainText` adapts an `ITextModel`-shaped value surface and its
+  native single-change event when the model exposes `getValueLength()`.
 - `bindCodeMirrorPlainText` directly adapts a CodeMirror 6 `EditorView`-shaped
   port. Its `applyViewUpdate()` is called from the host's configured update
   listener.
@@ -67,6 +68,26 @@ binding = bindCodeMirrorPlainText(document, view, {
 });
 ```
 
+Monaco's `ITextModel` notifies the binding directly; no editor listener is
+needed in application code. A current model's content event carries the old
+UTF-16 `rangeOffset`/`rangeLength` and replacement `text`, while
+`getValueLength()` supplies the post-edit size. Exactly one non-flush,
+non-EOL-mode change therefore follows the same bounded incremental path as
+CodeMirror. A multi-cursor batch, `setValue`/flush, EOL-mode conversion,
+malformed event, unavailable length method, or inconsistent size deliberately
+falls back to one whole-document atomic replacement.
+
+```ts
+const binding = bindMonacoPlainText(document, model, {
+  onLocalFrame(frame) {
+    // Validate the RGA Manifest, append to the durable outbox, then send.
+    outbox.append(frame);
+  },
+});
+
+socket.onmessage = ({ data }) => binding.applyRemote(new Uint8Array(data));
+```
+
 Tiptap is direct only with its minimal `Document`, `Paragraph`, and `Text`
 extensions. The binding reads canonical JSON rather than HTML and rejects a
 mark, attribute, embed, hard break, or unknown node before it can be emitted:
@@ -86,17 +107,18 @@ inside `editor.update()`, and `registerTextContentListener()` delegates to
 Lexical's listener. This avoids treating a rich Lexical tree as an untyped
 string transport.
 
-CodeMirror's single-range native updates avoid the former full-document
-Unicode prefix/suffix comparison. The binding keeps a 4,096-UTF-16-unit chunk
-index with rune counts, so it validates the UTF-16 boundaries and finds the RGA
-rune range without materializing the entire editor text. Only a changed chunk
-is normally updated; a change that crosses chunks rebuilds the small index.
-The changed text must still fit the runtime's negotiated byte/rune limit; an
-over-limit replacement is rejected and the editor is restored to its last
-replicated text. A multi-range, absent, or inconsistent native change falls
-back to one full-text atomic replacement rather than emitting multiple frames
-that could partially succeed. This avoids a delete-plus-later-insert sequence
-that could otherwise leave a local, unreplicable delete-only state.
+CodeMirror's single-range and Monaco's one-change native updates avoid the
+former full-document Unicode prefix/suffix comparison. The binding keeps a
+4,096-UTF-16-unit chunk index with rune counts, so it validates the UTF-16
+boundaries and finds the RGA rune range without materializing the entire editor
+text. Only a changed chunk is normally updated; a change that crosses chunks
+rebuilds the small index. The changed text must still fit the runtime's
+negotiated byte/rune limit; an over-limit replacement is rejected and the
+editor is restored to its last replicated text. A multi-range, flush, EOL-mode,
+absent, or inconsistent native change falls back to one full-text atomic
+replacement rather than emitting multiple frames that could partially succeed.
+This avoids a delete-plus-later-insert sequence that could otherwise leave a
+local, unreplicable delete-only state.
 
 Remote frames merge through the Wasm RGA before the adapter replaces editor
 text; a write guard prevents that replacement from echoing into
@@ -160,10 +182,12 @@ make wasm-bindings-benchmark
 ```
 
 The benchmark targets report controlled local-machine samples, not a
-browser/device SLA. Both print `native_incremental` and
-`full_projection_fallback` samples under the same workload. The simulated
-target isolates adapter work; the Wasm target includes a 12,288-rune
-CodeMirror-port document, real Go negotiated-RGA replacement, and receiver application
-for each edit. Set `CRDT_BINDINGS_INITIAL_RUNES` for a larger simulated text
-fixture. The current two-host, five-sample evidence and its limits are in the
-[2026-08-01 cross-host benchmark](../operations/rga-incremental-editor-benchmark-2026-08-01.md).
+browser/device SLA. The simulated target prints `codemirror` and `monaco`
+surfaces, each with `native_incremental` and `full_projection_fallback` samples
+under the same workload. The Wasm target includes a 12,288-rune CodeMirror-port
+document, real Go negotiated-RGA replacement, and receiver application for
+each edit. Set `CRDT_BINDINGS_INITIAL_RUNES` for a larger simulated text
+fixture. The CodeMirror two-host evidence is in the
+[2026-08-01 cross-host benchmark](../operations/rga-incremental-editor-benchmark-2026-08-01.md);
+the Monaco controlled baseline and its limits are in the
+[2026-08-03 Monaco benchmark](../operations/monaco-incremental-editor-benchmark-2026-08-03.md).
