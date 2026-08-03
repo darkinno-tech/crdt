@@ -109,10 +109,10 @@ jobs:
             exit 1
           fi
 
-  sync-release-branches:
-    # A stable tag and its GitHub Release must both exist before retained
-    # release branches may move. The dedicated deploy key is exposed only to
-    # this main-restricted environment, never to beta or pull-request code.
+  dispatch-release-branch-sync:
+    # The pull_request event uses refs/pull/*/merge, which cannot safely be
+    # admitted to an environment holding a branch-write deploy key. Dispatch
+    # the protected sync workflow from main after publication instead.
     needs: create-stable-tag
     if: >-
       needs.create-stable-tag.result == 'success' &&
@@ -122,81 +122,23 @@ jobs:
       group: main-release-tag
       cancel-in-progress: false
     permissions:
-      contents: read
-    environment: release-branch-sync
+      actions: write
     env:
       CANDIDATE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
-          persist-credentials: false
-      - name: Configure restricted Git transport
-        id: transport
+      - name: Dispatch retained-branch synchronization from main
         shell: bash
-        env:
-          RELEASE_BRANCH_SYNC_DEPLOY_KEY: ${{ secrets.RELEASE_BRANCH_SYNC_DEPLOY_KEY }}
         run: |
           set -euo pipefail
-          if [[ -z "${RELEASE_BRANCH_SYNC_DEPLOY_KEY}" ]]; then
-            echo "release branch-sync deploy key is unavailable" >&2
+          if [[ ! "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected a 40-character lowercase main merge SHA, got: ${CANDIDATE_SHA}" >&2
             exit 1
           fi
-
-          transport_dir="${RUNNER_TEMP}/release-branch-sync"
-          install -d -m 700 "${transport_dir}"
-          key_file="${transport_dir}/id_ed25519"
-          known_hosts="${transport_dir}/known_hosts"
-          umask 077
-          printf '%s\n' "${RELEASE_BRANCH_SYNC_DEPLOY_KEY}" > "${key_file}"
-          # GitHub publishes this ED25519 host key fingerprint as
-          # SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU.
-          printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "${known_hosts}"
-          printf 'key_file=%s\nknown_hosts=%s\n' "${key_file}" "${known_hosts}" >> "${GITHUB_OUTPUT}"
-      - name: Fast-forward retained release branches
-        shell: bash
-        env:
-          KEY_FILE: ${{ steps.transport.outputs.key_file }}
-          KNOWN_HOSTS: ${{ steps.transport.outputs.known_hosts }}
-        run: |
-          set -euo pipefail
-          cleanup() {
-            rm -f "${KEY_FILE}" "${KNOWN_HOSTS}"
-            rmdir "$(dirname "${KEY_FILE}")" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          export GIT_SSH_COMMAND="ssh -i ${KEY_FILE} -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${KNOWN_HOSTS}"
-          git remote set-url origin "git@github.com:${GITHUB_REPOSITORY}.git"
-          git fetch --force origin \
-            refs/heads/main:refs/remotes/origin/main \
-            refs/heads/preprod:refs/remotes/origin/preprod \
-            refs/heads/beta:refs/remotes/origin/beta
-
-          if [[ "$(git rev-parse origin/main)" != "${CANDIDATE_SHA}" ]]; then
-            echo "main advanced after promotion; refusing branch synchronization" >&2
-            exit 1
-          fi
-
-          for branch in preprod beta; do
-            current="$(git rev-parse "origin/${branch}")"
-            if [[ "${current}" == "${CANDIDATE_SHA}" ]]; then
-              echo "${branch} already points to ${CANDIDATE_SHA}"
-              continue
-            fi
-            if ! git merge-base --is-ancestor "${current}" "${CANDIDATE_SHA}"; then
-              echo "${branch} advanced to ${current}; leaving it unchanged"
-              continue
-            fi
-            git push origin "${CANDIDATE_SHA}:refs/heads/${branch}"
-          done
-
-          git fetch --force origin refs/heads/main:refs/remotes/origin/main
-          if [[ "$(git rev-parse origin/main)" != "${CANDIDATE_SHA}" ]]; then
-            echo "main advanced during branch synchronization; a later release run must reconcile retained branches" >&2
-            exit 1
-          fi
+          gh workflow run release-branch-sync.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref main \
+            -f candidate_sha="${CANDIDATE_SHA}"
 
   publish-notes:
     if: >-
