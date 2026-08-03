@@ -37,6 +37,8 @@ type ClientConfig struct {
 	MaxActorBytes         int
 	MaxQueuedChanges      int
 	MaxStateVectorEntries int
+	MaxMerkleLeaves       int
+	MaxMerkleBytes        int
 	HandshakeTimeout      time.Duration
 	WriteTimeout          time.Duration
 	PingInterval          time.Duration
@@ -53,7 +55,21 @@ type ClientConfig struct {
 	// required with StateVector because a skipped log event is never proof that
 	// its payload was installed.
 	OnCatchUp func(highWater uint64) error
-	OnEvent   func(Event) error
+	// MerkleRoot returns the root reconstructed from the same durable local
+	// event inventory as the concrete CRDT checkpoint. When all three Merkle
+	// callbacks are supplied, the client requests v3 without sending a state
+	// vector.
+	MerkleRoot func() [32]byte
+	// ReconcileMerkle compares the complete, bounded remote inventory against
+	// that durable local inventory and returns the sorted HLC identities absent
+	// locally. It must reject an unexpected local-only or differently-digested
+	// leaf instead of silently accepting a divergent history.
+	ReconcileMerkle func([]MerkleLeaf) ([]crdt.Tag, error)
+	// OnMerkleCatchUp atomically records the completed checkpoint boundary
+	// after all requested events have been installed and MerkleRoot equals the
+	// remote root. It is required for a v3 client.
+	OnMerkleCatchUp func(MerkleBoundary) error
+	OnEvent         func(Event) error
 }
 
 type clientLimits struct {
@@ -61,6 +77,8 @@ type clientLimits struct {
 	maxActorBytes         int
 	maxQueued             int
 	maxStateVectorEntries int
+	maxMerkleLeaves       uint64
+	maxMerkleBytes        uint64
 	handshake             time.Duration
 	write                 time.Duration
 	pingInterval          time.Duration
@@ -94,6 +112,13 @@ func NewReconnectClient(endpoint string, manifest replica.Manifest, config Clien
 		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
 	}
 	if config.StateVector != nil && config.OnCatchUp == nil {
+		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
+	}
+	usesMerkle := config.MerkleRoot != nil || config.ReconcileMerkle != nil || config.OnMerkleCatchUp != nil
+	if usesMerkle && (config.MerkleRoot == nil || config.ReconcileMerkle == nil || config.OnMerkleCatchUp == nil) {
+		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
+	}
+	if usesMerkle && config.StateVector != nil {
 		return nil, invalidConfig("durable.new_reconnect_client", ErrInvalidConfig)
 	}
 	parsed, err := url.Parse(endpoint)
@@ -187,7 +212,7 @@ func (client *ReconnectClient) Run(ctx context.Context) error {
 			client.setErr(err)
 			return err
 		}
-		if errors.Is(err, errInvalidWire) || errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrStateVectorUnavailable) {
+		if errors.Is(err, errInvalidWire) || errors.Is(err, ErrInvalidConfig) || errors.Is(err, ErrStateVectorUnavailable) || errors.Is(err, ErrAntiEntropyUnavailable) {
 			client.setErr(err)
 			return err
 		}
@@ -206,6 +231,8 @@ func (client *ReconnectClient) Run(ctx context.Context) error {
 func (client *ReconnectClient) runSession(parent context.Context) error {
 	vector := replica.Frontier{}
 	useStateVector := client.config.StateVector != nil
+	useMerkle := client.config.MerkleRoot != nil
+	var merkleRoot [32]byte
 	if useStateVector {
 		vector = client.config.StateVector()
 		if _, err := stateVectorEntries(vector, client.limits.maxStateVectorEntries, client.limits.maxActorBytes); err != nil {
@@ -213,7 +240,14 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 		}
 	}
 	protocols := []string{Subprotocol}
-	if useStateVector {
+	if useMerkle {
+		merkleRoot = client.config.MerkleRoot()
+		// A v3 checkpoint is not interchangeable with the legacy cursor
+		// protocol. Offering v1 here would let a server silently replace the
+		// caller's root-equality recovery proof with a relay-local sequence.
+		// v1/v2 callers keep their established compatibility paths below.
+		protocols = []string{MerkleSubprotocol}
+	} else if useStateVector {
 		protocols = []string{StateVectorSubprotocol, Subprotocol}
 	}
 	handshakeContext, cancelHandshake := context.WithTimeout(parent, client.limits.handshake)
@@ -228,11 +262,11 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 		return err
 	}
 	defer func() { _ = connection.CloseNow() }()
-	if connection.Subprotocol() != Subprotocol && connection.Subprotocol() != StateVectorSubprotocol {
+	if connection.Subprotocol() != Subprotocol && connection.Subprotocol() != StateVectorSubprotocol && connection.Subprotocol() != MerkleSubprotocol {
 		return errInvalidWire
 	}
 	connection.SetReadLimit(int64(controlLimit(client.limits.maxMessageBytes)))
-	hello, err := client.marshalHello(connection.Subprotocol(), vector)
+	hello, err := client.marshalHello(connection.Subprotocol(), vector, merkleRoot)
 	if err != nil || len(hello) > controlLimit(client.limits.maxMessageBytes) {
 		return errInvalidWire
 	}
@@ -243,7 +277,12 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 	if err != nil || messageType != websocket.MessageText {
 		return errInvalidWire
 	}
+	var merkleBoundary MerkleBoundary
 	remote, highWater, welcomeErr := unmarshalWelcomeForSubprotocol(connection.Subprotocol(), data)
+	if connection.Subprotocol() == MerkleSubprotocol {
+		remote, merkleBoundary, welcomeErr = unmarshalMerkleWelcome(data, client.limits.maxActorBytes)
+		highWater = merkleBoundary.HighWater
+	}
 	if welcomeErr != nil {
 		return unmarshalError(data)
 	}
@@ -252,6 +291,9 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 	}
 	if client.Cursor() > highWater {
 		return ErrReplayUnavailable
+	}
+	if connection.Subprotocol() == MerkleSubprotocol {
+		return client.runMerkleSession(parent, handshakeContext, connection, merkleRoot, merkleBoundary)
 	}
 	connection.SetReadLimit(int64(client.limits.maxMessageBytes))
 	sessionContext, cancelSession := context.WithCancel(parent)
@@ -329,7 +371,140 @@ func (client *ReconnectClient) runSession(parent context.Context) error {
 	}
 }
 
-func (client *ReconnectClient) marshalHello(subprotocol string, vector replica.Frontier) ([]byte, error) {
+func (client *ReconnectClient) runMerkleSession(parent, handshakeContext context.Context, connection *websocket.Conn, localRoot [32]byte, boundary MerkleBoundary) error {
+	if client.config.MerkleRoot == nil || client.config.ReconcileMerkle == nil || client.config.OnMerkleCatchUp == nil {
+		return ErrInvalidConfig
+	}
+	if localRoot != boundary.Root {
+		leaves := make([]MerkleLeaf, 0)
+		for {
+			messageType, data, err := connection.Read(handshakeContext)
+			if err != nil || messageType != websocket.MessageText {
+				return errInvalidWire
+			}
+			part, done, err := unmarshalMerkleInventory(data, client.limits.maxActorBytes)
+			if err != nil || uint64(len(part)) > client.limits.maxMerkleLeaves-uint64(len(leaves)) {
+				return errInvalidWire
+			}
+			leaves = append(leaves, part...)
+			if done {
+				break
+			}
+		}
+		if err := validateMerkleLeaves(leaves, client.limits.maxMerkleLeaves, client.limits.maxMerkleBytes, client.limits.maxActorBytes); err != nil {
+			return errInvalidWire
+		}
+		identities, err := client.config.ReconcileMerkle(leaves)
+		if err != nil {
+			return fmt.Errorf("reconcile HLC/Merkle inventory: %w", err)
+		}
+		if err := validateMerkleIdentityRequest(identities, client.limits.maxMerkleLeaves, client.limits.maxMerkleBytes, client.limits.maxActorBytes); err != nil {
+			return errInvalidWire
+		}
+		chunks, err := marshalMerkleRequestChunks(identities, controlLimit(client.limits.maxMessageBytes))
+		if err != nil {
+			return errInvalidWire
+		}
+		for _, chunk := range chunks {
+			if err := connection.Write(handshakeContext, websocket.MessageText, chunk); err != nil {
+				return err
+			}
+		}
+		expected := make(map[string]struct{}, len(identities))
+		for _, identity := range identities {
+			expected[merkleLeafKey(identity)] = struct{}{}
+		}
+		for len(expected) > 0 {
+			messageType, data, err := connection.Read(handshakeContext)
+			if err != nil || messageType != websocket.MessageBinary {
+				return errInvalidWire
+			}
+			sequence, tag, dot, delta, err := unmarshalMerkleEvent(data, client.limits.maxMessageBytes, client.limits.maxActorBytes)
+			if err != nil || sequence > boundary.HighWater {
+				return errInvalidWire
+			}
+			key := merkleLeafKey(tag)
+			if _, requested := expected[key]; !requested {
+				return errInvalidWire
+			}
+			event, err := newEventFromWire(client.manifest, client.policy, sequence, dot, delta)
+			if err != nil {
+				return errInvalidWire
+			}
+			event.HLC = tag
+			if err := client.config.OnEvent(event); err != nil {
+				return fmt.Errorf("durably install HLC/Merkle event %d: %w", sequence, err)
+			}
+			delete(expected, key)
+		}
+	}
+	messageType, data, err := connection.Read(handshakeContext)
+	if err != nil || messageType != websocket.MessageText {
+		return errInvalidWire
+	}
+	completed, err := unmarshalMerkleComplete(data, client.limits.maxActorBytes)
+	if err != nil || completed != boundary {
+		return errInvalidWire
+	}
+	if client.config.MerkleRoot() != boundary.Root {
+		return ErrAntiEntropyUnavailable
+	}
+	if err := client.config.OnMerkleCatchUp(boundary); err != nil {
+		return fmt.Errorf("durably checkpoint HLC/Merkle catch-up at %d: %w", boundary.HighWater, err)
+	}
+	client.setCursor(boundary.HighWater)
+	connection.SetReadLimit(int64(client.limits.maxMessageBytes))
+	sessionContext, cancelSession := context.WithCancel(parent)
+	defer cancelSession()
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		client.heartbeat(sessionContext, connection)
+	}()
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- client.writeLoop(sessionContext, connection) }()
+	defer func() {
+		cancelSession()
+		_ = connection.CloseNow()
+		<-heartbeatDone
+		<-writerDone
+	}()
+	client.setErr(nil)
+	for {
+		messageType, data, err := connection.Read(sessionContext)
+		if err != nil {
+			return err
+		}
+		if messageType != websocket.MessageBinary {
+			return errInvalidWire
+		}
+		sequence, tag, dot, delta, err := unmarshalMerkleEvent(data, client.limits.maxMessageBytes, client.limits.maxActorBytes)
+		if err != nil {
+			return err
+		}
+		if want := client.Cursor() + 1; sequence != want {
+			return ErrReplayUnavailable
+		}
+		event, err := newEventFromWire(client.manifest, client.policy, sequence, dot, delta)
+		if err != nil {
+			return errInvalidWire
+		}
+		event.HLC = tag
+		if err := client.config.OnEvent(event); err != nil {
+			return fmt.Errorf("durably install live HLC/Merkle event %d: %w", sequence, err)
+		}
+		client.setCursor(sequence)
+	}
+}
+
+func (client *ReconnectClient) marshalHello(subprotocol string, vector replica.Frontier, roots ...[32]byte) ([]byte, error) {
+	if subprotocol == MerkleSubprotocol {
+		if len(roots) != 1 {
+			return nil, errInvalidWire
+		}
+		root := roots[0]
+		return marshalMerkleHello(client.manifest, root)
+	}
 	if subprotocol == StateVectorSubprotocol {
 		return marshalStateVectorHello(client.manifest, vector, client.limits.maxStateVectorEntries, client.limits.maxActorBytes)
 	}
@@ -425,11 +600,16 @@ func (client *ReconnectClient) setErr(err error) {
 }
 
 func normalizeClientLimits(config ClientConfig) (clientLimits, error) {
+	if config.MaxMerkleLeaves < 0 || config.MaxMerkleBytes < 0 {
+		return clientLimits{}, ErrInvalidConfig
+	}
 	result := clientLimits{
 		maxMessageBytes:       config.MaxMessageBytes,
 		maxActorBytes:         config.MaxActorBytes,
 		maxQueued:             config.MaxQueuedChanges,
 		maxStateVectorEntries: config.MaxStateVectorEntries,
+		maxMerkleLeaves:       uint64(config.MaxMerkleLeaves),
+		maxMerkleBytes:        uint64(config.MaxMerkleBytes),
 		handshake:             config.HandshakeTimeout,
 		write:                 config.WriteTimeout,
 		pingInterval:          config.PingInterval,
@@ -449,6 +629,12 @@ func normalizeClientLimits(config ClientConfig) (clientLimits, error) {
 	if result.maxStateVectorEntries == 0 {
 		result.maxStateVectorEntries = defaultClientStateVectorEntries
 	}
+	if result.maxMerkleLeaves == 0 {
+		result.maxMerkleLeaves = defaultMerkleLeaves
+	}
+	if result.maxMerkleBytes == 0 {
+		result.maxMerkleBytes = defaultMerkleBytes
+	}
 	if result.handshake == 0 {
 		result.handshake = defaultHandshakeTimeout
 	}
@@ -467,7 +653,7 @@ func normalizeClientLimits(config ClientConfig) (clientLimits, error) {
 	if result.maxBackoff == 0 {
 		result.maxBackoff = defaultMaxBackoff
 	}
-	if result.maxMessageBytes < 1024 || result.maxActorBytes <= 0 || result.maxActorBytes > frame.DefaultLimits().MaxStringBytes || result.maxQueued <= 0 || result.maxStateVectorEntries <= 0 || result.handshake <= 0 || result.write <= 0 || result.pingInterval <= 0 || result.pingTimeout <= 0 || result.minBackoff <= 0 || result.maxBackoff < result.minBackoff {
+	if result.maxMessageBytes < 1024 || result.maxActorBytes <= 0 || result.maxActorBytes > frame.DefaultLimits().MaxStringBytes || result.maxQueued <= 0 || result.maxStateVectorEntries <= 0 || result.maxMerkleLeaves == 0 || result.maxMerkleBytes < uint64(result.maxActorBytes+32) || result.handshake <= 0 || result.write <= 0 || result.pingInterval <= 0 || result.pingTimeout <= 0 || result.minBackoff <= 0 || result.maxBackoff < result.minBackoff {
 		return clientLimits{}, ErrInvalidConfig
 	}
 	return result, nil

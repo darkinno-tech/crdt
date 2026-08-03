@@ -1,6 +1,7 @@
 package durable
 
 import (
+	"crypto/sha256"
 	"errors"
 	"net/http"
 
@@ -28,6 +29,16 @@ var (
 	// Callers must fall back to a valid cursor replay or bootstrap from a
 	// validated application checkpoint; accepting a partial catch-up is unsafe.
 	ErrStateVectorUnavailable = errors.New("crdt durable: state-vector catch-up unavailable")
+	// ErrAntiEntropyUnavailable reports that a storage implementation cannot
+	// produce a complete bounded HLC/Merkle inventory. The caller must
+	// bootstrap from a validated application checkpoint rather than accepting a
+	// partial repair.
+	ErrAntiEntropyUnavailable = errors.New("crdt durable: HLC/Merkle anti-entropy unavailable")
+	// ErrMerkleDiverged reports a local inventory that contains a leaf absent
+	// from the authoritative relay view or the same HLC identity with a
+	// different digest. Repair must bootstrap or be investigated; it must not
+	// silently drop either history.
+	ErrMerkleDiverged = errors.New("crdt durable: HLC/Merkle histories diverged")
 	// ErrCorruptStore reports damaged or internally inconsistent durable data.
 	// The relay fails closed rather than guessing which operation to omit.
 	ErrCorruptStore = errors.New("crdt durable: corrupt store")
@@ -46,6 +57,13 @@ const Subprotocol = "crdt-durable-v1"
 // protocol. A v2 peer proves only its own installed Dot prefixes; the vector
 // is neither authentication, a receipt, nor permission to compact tombstones.
 const StateVectorSubprotocol = "crdt-durable-v2"
+
+// MerkleSubprotocol identifies the optional HLC/Merkle anti-entropy protocol.
+// It does not send a replica state vector. Each committed durable event has a
+// relay-generated HLC identity, and a Merkle root commits to its canonical
+// event contents. Roots only detect divergence; they do not authenticate a
+// peer, acknowledge persistence, or authorize tombstone compaction.
+const MerkleSubprotocol = "crdt-durable-v3"
 
 // Peer is an authenticated application identity. ID must be stable and must
 // never be copied from a client-controlled CRDT actor identifier.
@@ -86,7 +104,11 @@ type GroupConfig struct {
 // within its group and is the only valid durable replay cursor.
 type Event struct {
 	Sequence uint64
-	Change   replica.Change
+	// HLC is the relay-persisted HLC identity used by MerkleSubprotocol. It is
+	// zero for v1/v2 stores and events. It is independent from tags contained
+	// inside an application CRDT delta.
+	HLC    crdt.Tag
+	Change replica.Change
 }
 
 // AppendResult records the outcome of one idempotent log append. A duplicate
@@ -126,6 +148,49 @@ type Log interface {
 type StateVectorLog interface {
 	Log
 	CatchUp(groupID string, vector replica.Frontier, maxEvents, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) ([]Event, uint64, error)
+}
+
+// MerkleLeaf identifies one immutable event in a Merkle anti-entropy
+// inventory. Digest is SHA-256 over the canonical HLC plus durable change
+// envelope; HLC is the leaf key and is allocated atomically with that event.
+// Neither field is an authorization credential.
+type MerkleLeaf struct {
+	HLC    crdt.Tag
+	Digest [sha256.Size]byte
+}
+
+// MerkleSnapshot is one immutable relay-log view. HighWater and HLC form the
+// replay-to-live boundary; Leaves is a complete bounded inventory matching
+// Root. Empty logs have a zero HLC and the canonical empty Merkle root.
+type MerkleSnapshot struct {
+	Root      [sha256.Size]byte
+	HighWater uint64
+	HLC       crdt.Tag
+	Leaves    []MerkleLeaf
+}
+
+// MerkleBoundary is the durable checkpoint boundary emitted after a v3 repair.
+// The application persists it with its concrete CRDT state, HLC state, local
+// Merkle inventory, and cursor before the client accepts live traffic.
+type MerkleBoundary struct {
+	Root      [sha256.Size]byte
+	HighWater uint64
+	HLC       crdt.Tag
+}
+
+// MerkleLog is an optional Log capability for bounded no-state-vector
+// anti-entropy. A caller first compares a MerkleSnapshot root, then, only on
+// divergence, compares its complete bounded leaf inventory and requests the
+// HLC identities it lacks. Snapshot and Events must fail closed when either
+// requested set cannot be complete within the supplied limits.
+//
+// MerkleEnabled permits a storage implementation to keep v1/v2 support while
+// requiring explicit HLC persistence before it advertises v3.
+type MerkleLog interface {
+	Log
+	MerkleEnabled() bool
+	MerkleSnapshot(groupID string, maxLeaves, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) (MerkleSnapshot, error)
+	MerkleEvents(groupID string, identities []crdt.Tag, maxEvents, maxBytes uint64, manifest replica.Manifest, policy crdt.ProtocolPolicy, maxMessageBytes, maxActorBytes int) ([]Event, error)
 }
 
 func invalidConfig(operation string, cause error) error {

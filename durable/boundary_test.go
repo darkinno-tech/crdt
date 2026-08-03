@@ -458,6 +458,12 @@ func TestNilAndInvalidEdgesFailClosed(t *testing.T) {
 	if _, err := normalizeClientLimits(ClientConfig{MaxMessageBytes: 1}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("invalid client limits = %v", err)
 	}
+	if _, err := normalizeClientLimits(ClientConfig{MaxMerkleLeaves: -1}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("negative merkle leaves = %v", err)
+	}
+	if _, err := normalizeClientLimits(ClientConfig{MaxMerkleBytes: -1}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("negative merkle bytes = %v", err)
+	}
 	if got := nextBackoff(time.Millisecond, time.Second); got != 2*time.Millisecond {
 		t.Fatalf("uncapped backoff = %s", got)
 	}

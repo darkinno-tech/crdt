@@ -63,7 +63,7 @@ make test
 - 有界规范化 state/delta 帧、确定性 snapshot、恢复计划，以及可复用 replica ID 所需的 HLC 状态。
 - 默认使用稳定 run-v2 帧的 RGA 协作文本；并提供对密集 HLC 链显式协商的 packed-v3 帧，以及稳定有界 rich-text、observed-remove tree、list、XML fragment 层。
 - Delta 批处理、Merkle 反熵、精确确认的 tombstone-GC 协调、面向可丢弃状态的显式仅本地清理，以及 Manifest 绑定的 replica/inbox 恢复辅助能力。
-- 以按需模块提供的有界 live WebSocket provider、独立 bbolt durable relay、Redis/PostgreSQL/MySQL/SQL Server/SQLite durable-log 实现，以及本地 bbolt/文件 checkpoint Store 参考实现。
+- 以按需模块提供的有界 live WebSocket provider、独立 bbolt durable relay（cursor 重放、兼容的可选 state-vector catch-up，以及可选无 state-vector 的 HLC/Merkle 反熵）、Redis/PostgreSQL/MySQL/SQL Server/SQLite durable-log 实现，以及本地 bbolt/文件 checkpoint Store 参考实现。
 - 可选、由 Manifest 协商的[压缩感知外层帧 v2](docs/protocol/frame-v2.md)，提供显式 v1 转换，但不改变 CRDT TypeID 或语义。
 - [RGA 诊断混淆](docs/integration/debug-obfuscation.zh-CN.md)：替换文本内容，同时保留隔离调试时间线的结构。
 
