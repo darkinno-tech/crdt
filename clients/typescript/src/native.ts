@@ -1,13 +1,13 @@
 /**
- * A dependency-free, browser-oriented CRDT document with Map and Array shared
- * types. This is intentionally a separate `native-ts-v1` update contract: it
+ * A dependency-free, browser-oriented CRDT document with Map, Array, and Text
+ * shared types. This is intentionally a separate `native-ts-v1` update contract: it
  * is not a Go CRDT frame and must not be sent to a Go frame decoder.
  *
- * Map values use LWW resolution. Array values use an RGA-style immutable node
- * graph: inserts name their left neighbour, deletes retain tombstones, and
- * concurrent siblings are ordered by their immutable IDs. Updates are
- * transport-agnostic, commutative, and idempotent once admitted by this
- * document's bounded validator.
+ * Map values use LWW resolution. Array values and Text scalars use RGA-style
+ * immutable node graphs: inserts name their left neighbour, deletes retain
+ * tombstones, and concurrent siblings are ordered by their immutable IDs.
+ * Updates are transport-agnostic, commutative, and idempotent once admitted
+ * by this document's bounded validator.
  */
 
 const TEXT_ENCODER = new TextEncoder();
@@ -16,6 +16,8 @@ const ROOT_PARENT = "root";
 
 export const NATIVE_UPDATE_VERSION = 1;
 export const NATIVE_STATE_VECTOR_VERSION = 1;
+/** Required semantic capability for documents that declare NativeText roots. */
+export const NATIVE_TEXT_SEMANTICS = "native-ts-text-v1";
 
 /** JSON values are copied on entry and exit, so callers cannot mutate CRDT state by reference. */
 export type NativeValue =
@@ -65,11 +67,34 @@ export interface NativeArrayDeleteOperation {
   readonly ids: readonly NativeID[];
 }
 
+/** One immutable Unicode scalar stored by a NativeText RGA. */
+export interface NativeTextEntry {
+  readonly id: NativeID;
+  /** `null` is the synthetic beginning of the text. */
+  readonly after: NativeID | null;
+  /** Exactly one Unicode scalar; UTF-16 indexes never split it. */
+  readonly content: string;
+}
+
+export interface NativeTextInsertOperation {
+  readonly kind: "text-insert";
+  readonly target: string;
+  readonly entries: readonly NativeTextEntry[];
+}
+
+export interface NativeTextDeleteOperation {
+  readonly kind: "text-delete";
+  readonly target: string;
+  readonly ids: readonly NativeID[];
+}
+
 export type NativeOperation =
   | NativeMapSetOperation
   | NativeMapDeleteOperation
   | NativeArrayInsertOperation
-  | NativeArrayDeleteOperation;
+  | NativeArrayDeleteOperation
+  | NativeTextInsertOperation
+  | NativeTextDeleteOperation;
 
 /** A canonical, JSON-encoded update may be forwarded without interpreting its operations. */
 export interface NativeUpdate {
@@ -114,6 +139,8 @@ export interface NativeDocumentLimits {
   readonly maxMapKeyBytes: number;
   readonly maxArrayItems: number;
   readonly maxArrayTombstones: number;
+  readonly maxTextItems: number;
+  readonly maxTextTombstones: number;
   readonly maxPendingItems: number;
   readonly maxValueBytes: number;
   readonly maxValueDepth: number;
@@ -136,6 +163,8 @@ export const DEFAULT_NATIVE_LIMITS: Readonly<NativeDocumentLimits> = Object.free
   maxMapKeyBytes: 1_024,
   maxArrayItems: 100_000,
   maxArrayTombstones: 100_000,
+  maxTextItems: 100_000,
+  maxTextTombstones: 100_000,
   maxPendingItems: 10_000,
   maxValueBytes: 64 << 10,
   maxValueDepth: 32,
@@ -173,7 +202,7 @@ export interface NativeUpdateEvent {
 }
 
 export interface NativeTypeEvent extends NativeUpdateEvent {
-  readonly target: NativeMap | NativeArray;
+  readonly target: NativeMap | NativeArray | NativeText;
 }
 
 export type NativeUpdateListener = (event: NativeUpdateEvent) => void;
@@ -211,9 +240,10 @@ interface MapEntry {
 }
 
 interface ArrayNode extends NativeArrayEntry {}
+interface TextNode extends NativeTextEntry {}
 
-type RootType = "map" | "array";
-type Root = NativeMap | NativeArray;
+type RootType = "map" | "array" | "text";
+type Root = NativeMap | NativeArray | NativeText;
 
 interface PreparedUpdate {
   readonly update: NativeUpdate;
@@ -704,6 +734,266 @@ export class NativeArray<T extends NativeValue = NativeValue> {
 }
 
 /**
+ * A plain-text RGA whose public indexes are UTF-16 code-unit offsets, matching
+ * browser editor and JavaScript string APIs. Each admitted node owns one
+ * Unicode scalar, so an insert or delete can never split a surrogate pair.
+ * Formatting, embeds, and rich-text deltas deliberately belong to separate
+ * negotiated contracts.
+ */
+export class NativeText {
+  readonly #nodes = new Map<string, TextNode>();
+  readonly #pending = new Map<string, TextNode>();
+  readonly #waitingByParent = new Map<string, TextNode[]>();
+  readonly #deleted = new Set<string>();
+  readonly #children = new Map<string, TextNode[]>();
+  readonly #listeners = new Set<NativeTypeListener>();
+  #childrenDirty = false;
+  #visibleCache: TextNode[] | undefined;
+  #textCache: string | undefined;
+
+  constructor(
+    private readonly document: NativeDocument,
+    readonly name: string,
+  ) {}
+
+  /** The current number of UTF-16 code units, equal to `toString().length`. */
+  get length(): number {
+    this.document._assertOpen();
+    return this.#visibleText().length;
+  }
+
+  get pendingCount(): number {
+    this.document._assertOpen();
+    return this.#pending.size;
+  }
+
+  toString(): string {
+    this.document._assertOpen();
+    return this.#visibleText();
+  }
+
+  insert(index: number, content: string): void {
+    this.document._assertOpen();
+    const scalars = this.document._textScalars(content);
+    const visible = this.#visibleNodes();
+    const nodeIndex = textNodeIndexAtUTF16Offset(visible, index);
+    if (scalars.length === 0) {
+      return;
+    }
+    if (this.#nodes.size + this.#pending.size + scalars.length > this.document.limits.maxTextItems) {
+      throw resourceLimit();
+    }
+    let after = nodeIndex === 0 ? null : copyID(visible[nodeIndex - 1]!.id);
+    const entries: NativeTextEntry[] = [];
+    for (const scalar of scalars) {
+      const entry: NativeTextEntry = { id: this.document._nextID(), after, content: scalar };
+      entries.push(entry);
+      after = copyID(entry.id);
+    }
+    this.document._applyLocal({ kind: "text-insert", target: this.name, entries });
+  }
+
+  /** Tombstones one UTF-16-aligned visible range and supports delete-before-insert delivery. */
+  delete(index: number, length: number): NativeTextDeleteOperation {
+    this.document._assertOpen();
+    if (!Number.isSafeInteger(length) || length < 0 || !Number.isSafeInteger(index) || index < 0 || index + length > Number.MAX_SAFE_INTEGER) {
+      throw invalidUpdate();
+    }
+    const visible = this.#visibleNodes();
+    const start = textNodeIndexAtUTF16Offset(visible, index);
+    const end = textNodeIndexAtUTF16Offset(visible, index + length);
+    if (start === end) {
+      return { kind: "text-delete", target: this.name, ids: [] };
+    }
+    const ids = visible.slice(start, end).map((node) => copyID(node.id));
+    return this.document._applyLocal({ kind: "text-delete", target: this.name, ids }) as NativeTextDeleteOperation;
+  }
+
+  observe(listener: NativeTypeListener): () => void {
+    this.document._assertOpen();
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  /** @internal */
+  _preflight(
+    inserts: readonly NativeTextInsertOperation[],
+    deletes: readonly NativeTextDeleteOperation[],
+  ): void {
+    const incoming = new Map<string, TextNode>();
+    for (const operation of inserts) {
+      for (const entry of operation.entries) {
+        const key = idKey(entry.id);
+        const current = this.#nodes.get(key) ?? this.#pending.get(key);
+        if (current !== undefined) {
+          if (!equalTextNode(current, entry)) {
+            throw stateConflict();
+          }
+          continue;
+        }
+        if (incoming.has(key)) {
+          throw stateConflict();
+        }
+        incoming.set(key, copyTextNode(entry));
+      }
+    }
+    if (this.#nodes.size + this.#pending.size + incoming.size > this.document.limits.maxTextItems) {
+      throw resourceLimit();
+    }
+
+    assertTextAcyclic(incoming, this.#nodes, this.#pending);
+    let unresolved = 0;
+    const resolving = new Set<string>();
+    const resolved = new Set<string>();
+    for (const [key, entry] of incoming) {
+      if (!isTextResolvable(entry, incoming, this.#nodes, resolving, resolved)) {
+        unresolved += 1;
+      }
+    }
+    if (this.#pending.size + unresolved > this.document.limits.maxPendingItems) {
+      throw resourceLimit();
+    }
+
+    const newTombstones = new Set<string>();
+    for (const operation of deletes) {
+      for (const id of operation.ids) {
+        const key = idKey(id);
+        if (!this.#deleted.has(key)) {
+          newTombstones.add(key);
+        }
+      }
+    }
+    if (this.#deleted.size + newTombstones.size > this.document.limits.maxTextTombstones) {
+      throw resourceLimit();
+    }
+  }
+
+  /** @internal */
+  _apply(operation: NativeTextInsertOperation | NativeTextDeleteOperation): boolean {
+    let changed = false;
+    if (operation.kind === "text-insert") {
+      for (const entry of operation.entries) {
+        const key = idKey(entry.id);
+        if (this.#nodes.has(key) || this.#pending.has(key)) {
+          continue;
+        }
+        this.#receive(copyTextNode(entry));
+        changed = true;
+      }
+      return changed;
+    }
+    for (const id of operation.ids) {
+      const key = idKey(id);
+      if (!this.#deleted.has(key)) {
+        this.#deleted.add(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.#visibleCache = undefined;
+      this.#textCache = undefined;
+    }
+    return changed;
+  }
+
+  /** @internal */
+  _stateOperations(vector?: StateVectorLookup): NativeOperation[] {
+    if (this.#pending.size !== 0) {
+      throw incompleteState();
+    }
+    const operations: NativeOperation[] = [];
+    const entries = topologicalTextNodes(this.#nodes).filter((entry) => vector === undefined || !stateVectorHas(vector, entry.id));
+    for (const chunk of chunkTextEntries(entries, this.document.limits, this.document.replicaID, this.name)) {
+      operations.push({ kind: "text-insert", target: this.name, entries: chunk });
+    }
+    const ids = [...this.#deleted].map(parseIDKey).sort(compareID);
+    // Text deletes, like array deletes, reference insertion IDs rather than
+    // defining a separate dot. Retain them in every repair until a negotiated
+    // tombstone-GC protocol can prove they are no longer needed.
+    for (const chunk of chunkTextDeleteIDs(ids, this.document.limits, this.document.replicaID, this.name)) {
+      operations.push({ kind: "text-delete", target: this.name, ids: chunk });
+    }
+    return operations;
+  }
+
+  /** @internal */
+  _notify(event: NativeTypeEvent): void {
+    for (const listener of [...this.#listeners]) {
+      listener(event);
+    }
+  }
+
+  #receive(node: TextNode): void {
+    const parentKey = node.after === null ? ROOT_PARENT : idKey(node.after);
+    if (node.after !== null && !this.#nodes.has(parentKey)) {
+      this.#pending.set(idKey(node.id), node);
+      const waiting = this.#waitingByParent.get(parentKey) ?? [];
+      waiting.push(node);
+      this.#waitingByParent.set(parentKey, waiting);
+      return;
+    }
+    this.#integrateAndResolve(node);
+  }
+
+  #integrateAndResolve(node: TextNode): void {
+    this.#integrate(node);
+    const waiting = this.#waitingByParent.get(idKey(node.id));
+    if (waiting === undefined) {
+      return;
+    }
+    this.#waitingByParent.delete(idKey(node.id));
+    for (const child of waiting) {
+      this.#pending.delete(idKey(child.id));
+      this.#integrateAndResolve(child);
+    }
+  }
+
+  #integrate(node: TextNode): void {
+    const key = idKey(node.id);
+    this.#nodes.set(key, node);
+    const parentKey = node.after === null ? ROOT_PARENT : idKey(node.after);
+    const children = this.#children.get(parentKey) ?? [];
+    children.push(node);
+    this.#children.set(parentKey, children);
+    this.#childrenDirty = true;
+    this.#visibleCache = undefined;
+    this.#textCache = undefined;
+  }
+
+  #visibleNodes(): TextNode[] {
+    this.document._assertOpen();
+    if (this.#visibleCache !== undefined) {
+      return this.#visibleCache;
+    }
+    if (this.#childrenDirty) {
+      for (const children of this.#children.values()) {
+        children.sort((left, right) => compareID(right.id, left.id));
+      }
+      this.#childrenDirty = false;
+    }
+    const visible: TextNode[] = [];
+    const stack: TextNode[] = [];
+    pushTextChildren(stack, this.#children.get(ROOT_PARENT));
+    while (stack.length !== 0) {
+      const node = stack.pop()!;
+      if (!this.#deleted.has(idKey(node.id))) {
+        visible.push(node);
+      }
+      pushTextChildren(stack, this.#children.get(idKey(node.id)));
+    }
+    this.#visibleCache = visible;
+    return visible;
+  }
+
+  #visibleText(): string {
+    if (this.#textCache === undefined) {
+      this.#textCache = this.#visibleNodes().map((node) => node.content).join("");
+    }
+    return this.#textCache;
+  }
+}
+
+/**
  * A document owns named root types, a local actor counter, transaction
  * boundaries, and update listeners. It has no network, persistence, identity,
  * authorization, encryption, or replay policy; hosts own those boundaries.
@@ -761,6 +1051,22 @@ export class NativeDocument {
     const array = new NativeArray<T>(this, name);
     this.#roots.set(name, array);
     return array;
+  }
+
+  getText(name: string): NativeText {
+    this._assertOpen();
+    this._assertRootName(name);
+    const existing = this.#roots.get(name);
+    if (existing !== undefined) {
+      if (!(existing instanceof NativeText)) {
+        throw typeConflict();
+      }
+      return existing;
+    }
+    this.#assertRootCapacity();
+    const text = new NativeText(this, name);
+    this.#roots.set(name, text);
+    return text;
   }
 
   /** Groups local mutations into one update and one observer turn. */
@@ -853,7 +1159,10 @@ export class NativeDocument {
     this._assertOpen();
     const roots: NativeRoot[] = [...this.#roots.values()]
       .sort((left, right) => compareText(left.name, right.name))
-      .map((root) => ({ name: root.name, type: root instanceof NativeMap ? "map" : "array" }));
+      .map((root) => ({
+        name: root.name,
+        type: root instanceof NativeMap ? "map" : root instanceof NativeArray ? "array" : "text",
+      }));
     return { roots, counter: this.#counter, stateVector: this.#stateVector.toVector() };
   }
 
@@ -876,8 +1185,10 @@ export class NativeDocument {
       rootNames.add(normalized.name);
       if (normalized.type === "map") {
         document.getMap(normalized.name);
-      } else {
+      } else if (normalized.type === "array") {
         document.getArray(normalized.name);
+      } else {
+        document.getText(normalized.name);
       }
     }
     const suppliedVector = snapshot.stateVector === undefined ? undefined : normalizeStateVector(snapshot.stateVector, document.limits);
@@ -927,6 +1238,11 @@ export class NativeDocument {
   /** @internal */
   _copyValue(value: NativeValue): NativeValue {
     return copyAndValidateValue(value, this.limits);
+  }
+
+  /** @internal */
+  _textScalars(value: string): string[] {
+    return splitTextScalars(value, this.limits);
   }
 
   /** @internal */
@@ -1010,6 +1326,8 @@ export class NativeDocument {
     const mapOperations = new Map<NativeMap, Array<NativeMapSetOperation | NativeMapDeleteOperation>>();
     const arrayInserts = new Map<NativeArray, NativeArrayInsertOperation[]>();
     const arrayDeletes = new Map<NativeArray, NativeArrayDeleteOperation[]>();
+    const textInserts = new Map<NativeText, NativeTextInsertOperation[]>();
+    const textDeletes = new Map<NativeText, NativeTextDeleteOperation[]>();
 
     for (const operation of normalized.operations) {
       const expected = rootTypeFor(operation);
@@ -1018,9 +1336,17 @@ export class NativeDocument {
         if (this.#roots.size + newRoots.size >= this.limits.maxRootTypes) {
           throw resourceLimit();
         }
-        root = expected === "map" ? new NativeMap(this, operation.target) : new NativeArray(this, operation.target);
+        root = expected === "map"
+          ? new NativeMap(this, operation.target)
+          : expected === "array"
+            ? new NativeArray(this, operation.target)
+            : new NativeText(this, operation.target);
         newRoots.set(operation.target, root);
-      } else if ((expected === "map" && !(root instanceof NativeMap)) || (expected === "array" && !(root instanceof NativeArray))) {
+      } else if (
+        (expected === "map" && !(root instanceof NativeMap)) ||
+        (expected === "array" && !(root instanceof NativeArray)) ||
+        (expected === "text" && !(root instanceof NativeText))
+      ) {
         throw typeConflict();
       }
       roots.set(operation.target, root);
@@ -1028,14 +1354,22 @@ export class NativeDocument {
         const operations = mapOperations.get(root) ?? [];
         operations.push(operation as NativeMapSetOperation | NativeMapDeleteOperation);
         mapOperations.set(root, operations);
-      } else if (operation.kind === "array-insert") {
+      } else if (root instanceof NativeArray && operation.kind === "array-insert") {
         const operations = arrayInserts.get(root) ?? [];
         operations.push(operation);
         arrayInserts.set(root, operations);
-      } else {
+      } else if (root instanceof NativeArray && operation.kind === "array-delete") {
         const operations = arrayDeletes.get(root) ?? [];
-        operations.push(operation as NativeArrayDeleteOperation);
+        operations.push(operation);
         arrayDeletes.set(root, operations);
+      } else if (root instanceof NativeText && operation.kind === "text-insert") {
+        const operations = textInserts.get(root) ?? [];
+        operations.push(operation);
+        textInserts.set(root, operations);
+      } else {
+        const operations = textDeletes.get(root as NativeText) ?? [];
+        operations.push(operation as NativeTextDeleteOperation);
+        textDeletes.set(root as NativeText, operations);
       }
     }
     for (const [root, operations] of mapOperations) {
@@ -1043,6 +1377,9 @@ export class NativeDocument {
     }
     for (const root of new Set([...arrayInserts.keys(), ...arrayDeletes.keys()])) {
       root._preflight(arrayInserts.get(root) ?? [], arrayDeletes.get(root) ?? []);
+    }
+    for (const root of new Set([...textInserts.keys(), ...textDeletes.keys()])) {
+      root._preflight(textInserts.get(root) ?? [], textDeletes.get(root) ?? []);
     }
     return { update: normalized, roots, newRoots, stateVectorPlan: this.#stateVector.plan(stateVectorIDs(normalized)) };
   }
@@ -1055,7 +1392,11 @@ export class NativeDocument {
     let ownCounter = this.#counter;
     for (const operation of prepared.update.operations) {
       const root = prepared.roots.get(operation.target)!;
-      const rootChanged = root instanceof NativeMap ? root._apply(operation as NativeMapSetOperation | NativeMapDeleteOperation) : root._apply(operation as NativeArrayInsertOperation | NativeArrayDeleteOperation);
+      const rootChanged = root instanceof NativeMap
+        ? root._apply(operation as NativeMapSetOperation | NativeMapDeleteOperation)
+        : root instanceof NativeArray
+          ? root._apply(operation as NativeArrayInsertOperation | NativeArrayDeleteOperation)
+          : root._apply(operation as NativeTextInsertOperation | NativeTextDeleteOperation);
       if (rootChanged) {
         changed = true;
         this.#changedRoots.add(root);
@@ -1329,6 +1670,40 @@ function normalizeOperation(value: unknown, limits: Readonly<NativeDocumentLimit
       }
       return { kind: "array-delete", target: record.target, ids };
     }
+    case "text-insert": {
+      assertExactKeys(record, ["entries", "kind", "target"]);
+      if (!Array.isArray(record.entries)) {
+        throw invalidUpdate();
+      }
+      if (record.entries.length === 0) {
+        throw invalidUpdate();
+      }
+      if (record.entries.length > limits.maxTextItems) {
+        throw resourceLimit();
+      }
+      return {
+        kind: "text-insert",
+        target: record.target,
+        entries: record.entries.map((entry) => normalizeTextEntry(entry, limits)),
+      };
+    }
+    case "text-delete": {
+      assertExactKeys(record, ["ids", "kind", "target"]);
+      if (!Array.isArray(record.ids)) {
+        throw invalidUpdate();
+      }
+      if (record.ids.length === 0) {
+        throw invalidUpdate();
+      }
+      if (record.ids.length > limits.maxTextTombstones) {
+        throw resourceLimit();
+      }
+      const ids = record.ids.map((id) => normalizeID(id, limits));
+      if (new Set(ids.map(idKey)).size !== ids.length) {
+        throw invalidUpdate();
+      }
+      return { kind: "text-delete", target: record.target, ids };
+    }
     default:
       throw invalidUpdate();
   }
@@ -1344,11 +1719,21 @@ function normalizeArrayEntry(value: unknown, limits: Readonly<NativeDocumentLimi
   };
 }
 
+function normalizeTextEntry(value: unknown, limits: Readonly<NativeDocumentLimits>): NativeTextEntry {
+  const record = requireRecord(value);
+  assertExactKeys(record, ["after", "content", "id"]);
+  return {
+    id: normalizeID(record.id, limits),
+    after: record.after === null ? null : normalizeID(record.after, limits),
+    content: normalizeTextScalar(record.content, limits),
+  };
+}
+
 function normalizeRoot(value: unknown, limits: Readonly<NativeDocumentLimits>): NativeRoot {
   const record = requireRecord(value);
   assertExactKeys(record, ["name", "type"]);
   assertBoundedText(record.name, limits.maxRootNameBytes, false);
-  if (record.type !== "map" && record.type !== "array") {
+  if (record.type !== "map" && record.type !== "array" && record.type !== "text") {
     throw invalidUpdate();
   }
   return { name: record.name, type: record.type };
@@ -1535,7 +1920,7 @@ function hasUnpairedSurrogate(value: string): boolean {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const following = value.charCodeAt(index + 1);
-      if (following < 0xdc00 || following > 0xdfff) {
+      if (!(following >= 0xdc00 && following <= 0xdfff)) {
         return true;
       }
       index += 1;
@@ -1562,6 +1947,37 @@ function copyAndValidateValue(value: unknown, limits: Readonly<NativeDocumentLim
     throw resourceLimit();
   }
   return copied;
+}
+
+function normalizeTextScalar(value: unknown, limits: Readonly<NativeDocumentLimits>): string {
+  if (typeof value !== "string" || value.length === 0 || hasUnpairedSurrogate(value)) {
+    throw invalidUpdate();
+  }
+  if (utf8ByteLength(value) > limits.maxValueBytes) {
+    throw resourceLimit();
+  }
+  if (utf8CodePointWidth(value, 0) !== value.length) {
+    throw invalidUpdate();
+  }
+  return value;
+}
+
+/** Splits a bounded, well-formed string only after rejecting excess input. */
+function splitTextScalars(value: unknown, limits: Readonly<NativeDocumentLimits>): string[] {
+  if (typeof value !== "string" || hasUnpairedSurrogate(value)) {
+    throw invalidUpdate();
+  }
+  if (utf8ByteLength(value) > limits.maxValueBytes) {
+    throw resourceLimit();
+  }
+  let scalarCount = 0;
+  for (let index = 0; index < value.length; index += utf8CodePointWidth(value, index)) {
+    scalarCount += 1;
+    if (scalarCount > limits.maxTextItems) {
+      throw resourceLimit();
+    }
+  }
+  return Array.from(value);
 }
 
 function copyValue(
@@ -1687,6 +2103,67 @@ function isResolvable(
   return result;
 }
 
+function assertTextAcyclic(
+  incoming: ReadonlyMap<string, TextNode>,
+  existing: ReadonlyMap<string, TextNode>,
+  pending: ReadonlyMap<string, TextNode>,
+): void {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (key: string): void => {
+    if (visited.has(key)) {
+      return;
+    }
+    if (visiting.has(key)) {
+      throw stateConflict();
+    }
+    const node = incoming.get(key) ?? existing.get(key) ?? pending.get(key);
+    if (node === undefined) {
+      return;
+    }
+    visiting.add(key);
+    if (node.after !== null) {
+      visit(idKey(node.after));
+    }
+    visiting.delete(key);
+    visited.add(key);
+  };
+  for (const key of incoming.keys()) {
+    visit(key);
+  }
+}
+
+function isTextResolvable(
+  entry: TextNode,
+  incoming: ReadonlyMap<string, TextNode>,
+  existing: ReadonlyMap<string, TextNode>,
+  resolving: Set<string>,
+  resolved: Set<string>,
+): boolean {
+  const key = idKey(entry.id);
+  if (resolved.has(key)) {
+    return true;
+  }
+  if (entry.after === null || existing.has(idKey(entry.after))) {
+    resolved.add(key);
+    return true;
+  }
+  if (resolving.has(key)) {
+    return false;
+  }
+  const parent = incoming.get(idKey(entry.after));
+  if (parent === undefined) {
+    return false;
+  }
+  resolving.add(key);
+  const result = isTextResolvable(parent, incoming, existing, resolving, resolved);
+  resolving.delete(key);
+  if (result) {
+    resolved.add(key);
+  }
+  return result;
+}
+
 function topologicalNodes(nodes: ReadonlyMap<string, ArrayNode>): ArrayNode[] {
   const children = new Map<string, ArrayNode[]>();
   for (const node of nodes.values()) {
@@ -1709,7 +2186,38 @@ function topologicalNodes(nodes: ReadonlyMap<string, ArrayNode>): ArrayNode[] {
   return output;
 }
 
+function topologicalTextNodes(nodes: ReadonlyMap<string, TextNode>): TextNode[] {
+  const children = new Map<string, TextNode[]>();
+  for (const node of nodes.values()) {
+    const parent = node.after === null ? ROOT_PARENT : idKey(node.after);
+    const values = children.get(parent) ?? [];
+    values.push(node);
+    children.set(parent, values);
+  }
+  for (const values of children.values()) {
+    values.sort((left, right) => compareID(left.id, right.id));
+  }
+  const output: TextNode[] = [];
+  const stack: TextNode[] = [];
+  pushTextChildren(stack, children.get(ROOT_PARENT));
+  while (stack.length !== 0) {
+    const node = stack.pop()!;
+    output.push(copyTextNode(node));
+    pushTextChildren(stack, children.get(idKey(node.id)));
+  }
+  return output;
+}
+
 function pushChildren(stack: ArrayNode[], children: readonly ArrayNode[] | undefined): void {
+  if (children === undefined) {
+    return;
+  }
+  for (let index = children.length - 1; index >= 0; index -= 1) {
+    stack.push(children[index]!);
+  }
+}
+
+function pushTextChildren(stack: TextNode[], children: readonly TextNode[] | undefined): void {
   if (children === undefined) {
     return;
   }
@@ -1784,6 +2292,72 @@ function chunkArrayDeleteIDs(
   return chunks;
 }
 
+function chunkTextEntries(
+  entries: readonly TextNode[],
+  limits: Readonly<NativeDocumentLimits>,
+  actor: string,
+  target: string,
+): NativeTextEntry[][] {
+  const chunks: NativeTextEntry[][] = [];
+  let current: NativeTextEntry[] = [];
+  const prefix = `{"actor":${canonicalJSON(actor)},"operations":[{"entries":[`;
+  const suffix = `],"kind":"text-insert","target":${canonicalJSON(target)}}],"version":1}`;
+  const fixedBytes = encodedLength(prefix) + encodedLength(suffix);
+  let currentBytes = fixedBytes;
+  for (const entry of entries) {
+    const entryBytes = encodedLength(canonicalJSON(entry));
+    const candidateBytes = currentBytes + (current.length === 0 ? 0 : 1) + entryBytes;
+    if (candidateBytes > limits.maxUpdateBytes) {
+      if (current.length === 0) {
+        throw resourceLimit();
+      }
+      chunks.push(current);
+      current = [copyTextNode(entry)];
+      currentBytes = fixedBytes + entryBytes;
+    } else {
+      current.push(copyTextNode(entry));
+      currentBytes = candidateBytes;
+    }
+  }
+  if (current.length !== 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+function chunkTextDeleteIDs(
+  ids: readonly NativeID[],
+  limits: Readonly<NativeDocumentLimits>,
+  actor: string,
+  target: string,
+): NativeID[][] {
+  const chunks: NativeID[][] = [];
+  let current: NativeID[] = [];
+  const prefix = `{"actor":${canonicalJSON(actor)},"operations":[{"ids":[`;
+  const suffix = `],"kind":"text-delete","target":${canonicalJSON(target)}}],"version":1}`;
+  const fixedBytes = encodedLength(prefix) + encodedLength(suffix);
+  let currentBytes = fixedBytes;
+  for (const id of ids) {
+    const idBytes = encodedLength(canonicalJSON(id));
+    const candidateBytes = currentBytes + (current.length === 0 ? 0 : 1) + idBytes;
+    if (candidateBytes > limits.maxUpdateBytes) {
+      if (current.length === 0) {
+        throw resourceLimit();
+      }
+      chunks.push(current);
+      current = [copyID(id)];
+      currentBytes = fixedBytes + idBytes;
+    } else {
+      current.push(copyID(id));
+      currentBytes = candidateBytes;
+    }
+  }
+  if (current.length !== 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
 function packOperations(
   operations: readonly NativeOperation[],
   actor: string,
@@ -1820,7 +2394,10 @@ function packOperations(
 }
 
 function rootTypeFor(operation: NativeOperation): RootType {
-  return operation.kind.startsWith("map-") ? "map" : "array";
+  if (operation.kind.startsWith("map-")) {
+    return "map";
+  }
+  return operation.kind.startsWith("array-") ? "array" : "text";
 }
 
 function operationIDs(operation: NativeOperation): readonly NativeID[] {
@@ -1831,6 +2408,10 @@ function operationIDs(operation: NativeOperation): readonly NativeID[] {
     case "array-insert":
       return operation.entries.map((entry) => entry.id);
     case "array-delete":
+      return operation.ids;
+    case "text-insert":
+      return operation.entries.map((entry) => entry.id);
+    case "text-delete":
       return operation.ids;
   }
 }
@@ -1851,6 +2432,13 @@ function stateVectorIDs(update: NativeUpdate): NativeID[] {
         // A delete references an insertion ID but does not prove that the
         // insertion body is available; keeping it out prevents unsafe diffs.
         break;
+      case "text-insert":
+        ids.push(...operation.entries.map((entry) => entry.id));
+        break;
+      case "text-delete":
+        // Text deletes have the same reference-only tombstone semantics as
+        // array deletes, so they cannot safely advance the sparse vector.
+        break;
     }
   }
   return ids;
@@ -1869,6 +2457,35 @@ function equalNode(left: ArrayNode, right: NativeArrayEntry): boolean {
 
 function copyNode(value: NativeArrayEntry): ArrayNode {
   return { id: copyID(value.id), after: value.after === null ? null : copyID(value.after), value: cloneValue(value.value) };
+}
+
+function equalTextNode(left: TextNode, right: NativeTextEntry): boolean {
+  return equalID(left.id, right.id) && equalNullableID(left.after, right.after) && left.content === right.content;
+}
+
+function copyTextNode(value: NativeTextEntry): TextNode {
+  return { id: copyID(value.id), after: value.after === null ? null : copyID(value.after), content: value.content };
+}
+
+function textNodeIndexAtUTF16Offset(nodes: readonly TextNode[], offset: number): number {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw invalidUpdate();
+  }
+  let current = 0;
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (offset === current) {
+      return index;
+    }
+    current += nodes[index]!.content.length;
+    if (offset < current) {
+      // A UTF-16 offset inside a surrogate pair is not a valid RGA boundary.
+      throw invalidUpdate();
+    }
+  }
+  if (offset === current) {
+    return nodes.length;
+  }
+  throw invalidUpdate();
 }
 
 function copyID(value: NativeID): NativeID {

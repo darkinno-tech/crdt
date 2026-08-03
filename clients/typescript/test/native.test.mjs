@@ -225,6 +225,123 @@ test("NativeArray keeps tombstones and resolves a reversed parent chain", () => 
   assert.deepEqual(late.getArray("tasks").toArray(), ["a", "c"]);
 });
 
+test("NativeText uses UTF-16 editor offsets, Unicode-scalar nodes, and one transaction observer turn", () => {
+  const source = new NativeDocument("source");
+  const updates = recordUpdates(source);
+  const body = source.getText("body");
+  const observerEvents = [];
+  body.observe(({ origin, target }) => observerEvents.push({ origin, target }));
+
+  source.transact(() => {
+    body.insert(0, "A😀中");
+    body.insert(1, "B");
+    body.delete(2, 2);
+  }, "editor");
+
+  assert.equal(body.toString(), "AB中");
+  assert.equal(body.length, 3);
+  assert.equal(updates.length, 1);
+  assert.equal(observerEvents.length, 1);
+  assert.equal(observerEvents[0].origin, "editor");
+  assert.equal(observerEvents[0].target, body);
+  assertCode(() => body.insert(2, "\uD800"), "invalid_update");
+  body.insert(2, "😀");
+  assert.equal(body.length, 5);
+  assertCode(() => body.insert(3, "x"), "invalid_update");
+  assertCode(() => body.delete(3, 1), "invalid_update");
+  assert.equal(body.toString(), "AB😀中");
+  assertCode(() => source.getMap("body"), "type_conflict");
+
+  const target = new NativeDocument("target");
+  target.applyEncodedUpdate(encodeNativeUpdate(updates[0]));
+  target.applyEncodedUpdate(encodeNativeUpdate(updates[1]));
+  assert.equal(target.getText("body").toString(), "AB😀中");
+  assert.deepEqual(decodeNativeUpdate(encodeNativeUpdate(updates[1])), updates[1]);
+});
+
+test("NativeText resolves reversed parents and delete-before-insert delivery", () => {
+  const source = new NativeDocument("source");
+  const updates = recordUpdates(source);
+  const body = source.getText("body");
+  body.insert(0, "a😀b");
+  const insert = updates[0];
+  const insertOperation = insert.operations[0];
+  assert.equal(insertOperation.kind, "text-insert");
+
+  const reversed = new NativeDocument("reversed");
+  reversed.applyUpdate({
+    version: 1,
+    actor: "relay",
+    operations: [{ ...insertOperation, entries: [...insertOperation.entries].reverse() }],
+  });
+  assert.equal(reversed.getText("body").pendingCount, 0);
+  assert.equal(reversed.getText("body").toString(), "a😀b");
+
+  body.delete(1, 2);
+  const deletion = updates[1];
+  const late = new NativeDocument("late");
+  late.applyUpdate(deletion);
+  late.applyUpdate(insert);
+  assert.equal(late.getText("body").toString(), "ab");
+});
+
+test("NativeText preflights malformed, conflicting, and over-limit state without mutation", () => {
+  const document = new NativeDocument("local", { maxPendingItems: 1, maxTextItems: 4, maxTextTombstones: 1 });
+  const body = document.getText("body");
+  assertCode(() => document.applyUpdate({
+    version: 1,
+    actor: "attacker",
+    operations: [{
+      kind: "text-insert",
+      target: "body",
+      entries: [{ id: { actor: "attacker", counter: 1 }, after: null, content: "two" }],
+    }],
+  }), "invalid_update");
+  assert.equal(body.toString(), "");
+
+  assertCode(() => document.applyUpdate({
+    version: 1,
+    actor: "attacker",
+    operations: [{
+      kind: "text-insert",
+      target: "body",
+      entries: [
+        { id: { actor: "attacker", counter: 1 }, after: { actor: "attacker", counter: 2 }, content: "a" },
+        { id: { actor: "attacker", counter: 2 }, after: { actor: "attacker", counter: 1 }, content: "b" },
+      ],
+    }],
+  }), "state_conflict");
+  assert.equal(body.toString(), "");
+
+  assertCode(() => document.applyUpdate({
+    version: 1,
+    actor: "attacker",
+    operations: [{
+      kind: "text-insert",
+      target: "body",
+      entries: [
+        { id: { actor: "attacker", counter: 3 }, after: { actor: "missing", counter: 1 }, content: "a" },
+        { id: { actor: "attacker", counter: 4 }, after: { actor: "missing", counter: 2 }, content: "b" },
+      ],
+    }],
+  }), "resource_limit");
+  assert.equal(body.pendingCount, 0);
+
+  body.insert(0, "ab");
+  body.delete(0, 1);
+  assertCode(() => body.delete(0, 1), "resource_limit");
+  assert.equal(body.toString(), "b");
+
+  const probe = new NativeDocument("writer");
+  const probeUpdates = recordUpdates(probe);
+  probe.getText("body").insert(0, "bounded");
+  const exactBytes = encodeNativeUpdate(probeUpdates[0]).byteLength;
+  const outputLimited = new NativeDocument("writer", { maxUpdateBytes: exactBytes - 1, maxValueBytes: exactBytes - 1 });
+  const outputLimitedBody = outputLimited.getText("body");
+  assertCode(() => outputLimitedBody.insert(0, "bounded"), "resource_limit");
+  assert.equal(outputLimitedBody.toString(), "");
+});
+
 test("native updates are canonical, bounded, and reject conflicts atomically", () => {
   const document = new NativeDocument("local", { maxPendingItems: 1 });
   const map = document.getMap("metadata");
@@ -351,6 +468,32 @@ test("sparse state vectors make state diffs safe after shuffled map and array de
   assert.deepEqual(restored.getStateVector(), source.getStateVector());
 });
 
+test("NativeText state repair retains delete tombstones and snapshots root declarations", () => {
+  const source = new NativeDocument("source");
+  const updates = recordUpdates(source);
+  const body = source.getText("body");
+  body.insert(0, "draft");
+  const insertion = updates[0];
+  body.delete(1, 3);
+
+  const receiver = new NativeDocument("receiver");
+  receiver.applyUpdate(insertion);
+  const repair = source.encodeStateAsUpdates(receiver.getStateVector());
+  assert.deepEqual(repair.flatMap((update) => update.operations).map((operation) => operation.kind), ["text-delete"]);
+  receiver.applyUpdate(repair[0]);
+  assert.equal(receiver.getText("body").toString(), "dt");
+  assert.equal(receiver.applyUpdate(repair[0]), false);
+
+  const empty = new NativeDocument("empty");
+  empty.getText("empty-body");
+  const emptyRestored = NativeDocument.restore("empty", empty.snapshot());
+  assert.equal(emptyRestored.getText("empty-body").toString(), "");
+  assertCode(() => emptyRestored.getArray("empty-body"), "type_conflict");
+
+  const restored = NativeDocument.restore("source", source.snapshot());
+  assert.equal(restored.getText("body").toString(), "dt");
+});
+
 test("state vectors are canonical, bounded, and preflight resource admission", () => {
   const vector = {
     version: 1,
@@ -470,4 +613,50 @@ test("three offline editors converge after shuffled duplicate delivery and state
   const recoveredOperation = recoveredUpdates[0].operations[0];
   assert.equal(recoveredOperation.kind, "map-set");
   assert.ok(recoveredOperation.id.counter > snapshot.counter);
+});
+
+test("three offline NativeText editors converge after shuffled duplicate delivery and recovery", () => {
+  const replicas = [new NativeDocument("alice"), new NativeDocument("bob"), new NativeDocument("carol")];
+  const texts = replicas.map((document) => document.getText("body"));
+  const queue = [];
+  for (const replica of replicas) {
+    replica.onUpdate(({ update }) => queue.push(update));
+  }
+
+  let random = 0x51ed270b;
+  const next = () => {
+    random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+    return random;
+  };
+  for (let turn = 0; turn < 180; turn += 1) {
+    const index = next() % texts.length;
+    const text = texts[index];
+    if ((next() % 3) === 0 && text.length !== 0) {
+      text.delete(next() % text.length, 1);
+    } else {
+      text.insert(next() % (text.length + 1), String.fromCharCode(97 + (next() % 4)));
+    }
+  }
+
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const update = queue[index];
+    applyEverywhere(replicas, [update]);
+    if ((index % 7) === 0) {
+      applyEverywhere(replicas, [update]);
+    }
+  }
+
+  const expected = texts[0].toString();
+  for (const text of texts.slice(1)) {
+    assert.equal(text.toString(), expected);
+    assert.equal(text.pendingCount, 0);
+  }
+  const snapshot = replicas[0].snapshot();
+  const restored = NativeDocument.restore("alice", snapshot);
+  assert.equal(restored.getText("body").toString(), expected);
+  const updates = recordUpdates(restored);
+  restored.getText("body").insert(restored.getText("body").length, "z");
+  const operation = updates[0].operations[0];
+  assert.equal(operation.kind, "text-insert");
+  assert.ok(operation.entries[0].id.counter > snapshot.counter);
 });

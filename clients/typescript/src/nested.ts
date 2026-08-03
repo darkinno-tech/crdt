@@ -627,6 +627,12 @@ export class NativeNestedDocument {
     const pendingContainers = new Map<string, NativeNestedType>();
 
     for (const operation of update.operations) {
+      // native-ts-nested-v1 owns Map/Array reference metadata only. A plain
+      // Text root is a separately negotiated native-ts-text-v1 capability and
+      // must not bypass this wrapper's type/accounting contract.
+      if (operation.kind === "text-insert" || operation.kind === "text-delete") {
+        throw new NativeCRDTError("type_conflict");
+      }
       for (const reference of referencesForOperation(operation, this.limits)) {
         const target = targetFor(reference.id, this.limits);
         const known = containers.get(target) ?? pendingContainers.get(target);
@@ -688,6 +694,9 @@ export class NativeNestedDocument {
           arrayStates.set(slot, reference === undefined ? {} : { reference });
         }
         continue;
+      }
+      if (operation.kind !== "array-delete") {
+        throw new NativeCRDTError("invalid_update");
       }
       for (const id of operation.ids) {
         const slot = arraySlot(operation.target, id);
