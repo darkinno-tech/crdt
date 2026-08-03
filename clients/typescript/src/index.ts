@@ -47,7 +47,9 @@ export {
   NativeCRDTError,
   NativeDocument,
   NativeMap,
+  NativeText,
   NATIVE_STATE_VECTOR_VERSION,
+  NATIVE_TEXT_SEMANTICS,
   NATIVE_UPDATE_VERSION,
 } from "./native.js";
 export type {
@@ -60,6 +62,9 @@ export type {
   NativeID,
   NativeMapDeleteOperation,
   NativeMapSetOperation,
+  NativeTextDeleteOperation,
+  NativeTextEntry,
+  NativeTextInsertOperation,
   NativeOperation,
   NativePersistenceMetadata,
   NativeRoot,
@@ -134,6 +139,8 @@ export type {
   EditorUTF16Replacement,
   EditorTextSelection,
   LexicalTextPort,
+  MonacoContentChange,
+  MonacoContentChangedEvent,
   MonacoTextPort,
   PlainTextEditorPort,
   ProseMirrorRichTextPort,

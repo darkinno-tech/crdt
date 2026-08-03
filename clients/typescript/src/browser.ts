@@ -11,6 +11,7 @@ import type {
   NativeRoot,
   NativeSnapshot,
   NativeStateVector,
+  NativeText,
   NativeTypeListener,
   NativeUpdate,
   NativeUpdateEvent,
@@ -243,6 +244,13 @@ export class NativeBrowserDocument {
     const array = this.document.getArray<T>(name);
     this.queueMetadata();
     return array;
+  }
+
+  getText(name: string): NativeText {
+    this.assertOpen();
+    const text = this.document.getText(name);
+    this.queueMetadata();
+    return text;
   }
 
   transact<T>(callback: () => T, origin?: unknown): T {

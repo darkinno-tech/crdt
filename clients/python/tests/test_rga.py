@@ -14,7 +14,7 @@ if "CRDT_RGA_LIBRARY" not in os.environ:
     os.environ["CRDT_RGA_LIBRARY"] = str(ROOT / "clients" / "rust" / "target" / "debug" / "libdarkinno_crdt_rga.dylib")
 
 sys.path.insert(0, str(ROOT / "clients" / "python"))
-from crdt_rga import CRDTError, LWWMap, LWWMapLimits, RGA  # noqa: E402
+from crdt_rga import CRDTError, LWWMap, LWWMapLimits, RGA, RGALimits  # noqa: E402
 
 
 class RgaBindingTests(unittest.TestCase):
@@ -51,6 +51,25 @@ class RgaBindingTests(unittest.TestCase):
             with self.assertRaises(CRDTError):
                 document.apply_frame(b"CRDT\x01\x14\x00\x00\x00\x00\x00\x00")
             self.assertEqual(document.text, before)
+
+    def test_recovery_retains_manifest_limits_and_rejects_atomically(self) -> None:
+        limits = RGALimits(max_nodes=1, max_tags=1, max_tombstones=1)
+        with RGA("python-limited", limits=limits) as limited:
+            limited.insert(0, "A")
+            snapshot = limited.state()
+            clock = limited.clock_state
+
+        with RGA(clock_state=clock, limits=limits) as recovered:
+            with RGA("python-unbounded") as writer:
+                recovered.apply_frame(snapshot)
+                incoming = writer.insert(0, "B")
+                before_state = recovered.state()
+                before_clock = recovered.clock_state
+                with self.assertRaises(CRDTError) as raised:
+                    recovered.apply_frame(incoming)
+                self.assertEqual(raised.exception.code, 3)
+                self.assertEqual(recovered.state(), before_state)
+                self.assertEqual(recovered.clock_state, before_clock)
 
 
 class LwwMapBindingTests(unittest.TestCase):

@@ -60,12 +60,20 @@ class Rga final {
       : Rga(std::span<const std::uint8_t>(
             reinterpret_cast<const std::uint8_t*>(replica_id.data()), replica_id.size())) {}
 
+  Rga(std::string_view replica_id, const crdt_limits& limits)
+      : Rga(std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(replica_id.data()), replica_id.size()),
+            limits) {}
+
   explicit Rga(std::span<const std::uint8_t> replica_id) : handle_(NewHandle(replica_id)) {}
 
   Rga(std::span<const std::uint8_t> replica_id, const crdt_limits& limits)
       : handle_(NewHandle(replica_id, &limits)) {}
 
   explicit Rga(const ClockState& clock_state) : handle_(NewHandle(clock_state)) {}
+
+  Rga(const ClockState& clock_state, const crdt_limits& limits)
+      : handle_(NewHandle(clock_state, &limits)) {}
 
   ~Rga() { crdt_rga_free(handle_); }
 
@@ -147,10 +155,15 @@ class Rga final {
     return handle;
   }
 
-  static crdt_rga* NewHandle(const ClockState& state) {
+  static crdt_rga* NewHandle(const ClockState& state, const crdt_limits* limits = nullptr) {
     crdt_rga* handle = nullptr;
-    CheckStatus(crdt_rga_new_from_clock(state.replica_id.data(), state.replica_id.size(),
-                                        state.wall_time, state.logical, &handle));
+    const auto status = limits == nullptr
+                            ? crdt_rga_new_from_clock(state.replica_id.data(), state.replica_id.size(),
+                                                      state.wall_time, state.logical, &handle)
+                            : crdt_rga_new_from_clock_with_limits(
+                                  state.replica_id.data(), state.replica_id.size(), state.wall_time,
+                                  state.logical, limits, &handle);
+    CheckStatus(status);
     if (handle == nullptr) {
       throw Error(CRDT_INTERNAL);
     }

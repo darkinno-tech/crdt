@@ -230,6 +230,54 @@ pub unsafe extern "C" fn crdt_rga_new_from_clock(
     logical: u64,
     out: *mut *mut CrdtRga,
 ) -> i32 {
+    // SAFETY: delegated to the checked constructor helper.
+    unsafe {
+        crdt_rga_new_from_clock_inner(
+            replica,
+            replica_len,
+            wall_time,
+            logical,
+            Limits::default(),
+            out,
+        )
+    }
+}
+
+/// Restores an empty RGA with a persisted HLC state and application-negotiated
+/// limits. Use the same limits that admitted the matching complete state frame
+/// so recovery cannot silently widen a replication group's resource policy.
+///
+/// # Safety
+/// The pointers follow the same requirements as [`crdt_rga_new`]; `limits`
+/// must point to one initialized [`CrdtLimits`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn crdt_rga_new_from_clock_with_limits(
+    replica: *const u8,
+    replica_len: usize,
+    wall_time: u64,
+    logical: u64,
+    limits: *const CrdtLimits,
+    out: *mut *mut CrdtRga,
+) -> i32 {
+    if limits.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    // SAFETY: `limits` was checked non-null and the ABI requires initialized storage.
+    let selected = unsafe { Limits::from(*limits) };
+    // SAFETY: delegated to the checked constructor helper.
+    unsafe {
+        crdt_rga_new_from_clock_inner(replica, replica_len, wall_time, logical, selected, out)
+    }
+}
+
+unsafe fn crdt_rga_new_from_clock_inner(
+    replica: *const u8,
+    replica_len: usize,
+    wall_time: u64,
+    logical: u64,
+    limits: Limits,
+    out: *mut *mut CrdtRga,
+) -> i32 {
     if out.is_null() {
         return INVALID_ARGUMENT;
     }
@@ -243,7 +291,7 @@ pub unsafe extern "C" fn crdt_rga_new_from_clock(
         wall_time,
         logical,
     };
-    let value = match Rga::from_clock_state(state, Limits::default()) {
+    let value = match Rga::from_clock_state(state, limits) {
         Ok(value) => value,
         Err(error) => return code(&error),
     };
@@ -282,7 +330,7 @@ unsafe fn crdt_rga_new_inner(
     OK
 }
 
-/// Releases a handle created by `crdt_rga_new` or `crdt_rga_new_with_limits`.
+/// Releases a handle created by an RGA constructor.
 /// Passing null is allowed; every non-null handle must be freed exactly once.
 ///
 /// # Safety

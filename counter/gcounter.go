@@ -125,21 +125,32 @@ func (c *GCounter) Merge(other *GCounter) error {
 
 // ApplyDelta joins delta into c.
 func (c *GCounter) ApplyDelta(delta GCounterDelta) error {
+	_, err := c.ApplyDeltaChanged(delta)
+	return err
+}
+
+// ApplyDeltaChanged joins delta into c and reports whether it extended the
+// retained counter state. Callers that bridge a counter to a local observer can
+// use the result to avoid publishing a duplicate network delivery as a new UI
+// revision.
+func (c *GCounter) ApplyDeltaChanged(delta GCounterDelta) (bool, error) {
 	if c == nil {
-		return ErrNilCounter
+		return false, ErrNilCounter
 	}
 	if err := validateCounts(delta.counts); err != nil {
-		return err
+		return false, err
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	changed := false
 	for replicaID, value := range delta.counts {
 		if value > c.counts[replicaID] {
 			c.counts[replicaID] = value
+			changed = true
 		}
 	}
-	return nil
+	return changed, nil
 }
 
 // Merge joins other into d and returns a new delta without modifying either

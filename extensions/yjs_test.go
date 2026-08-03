@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -326,6 +327,23 @@ func TestYJSHandlerConfigurationAndRoutingBoundaries(t *testing.T) {
 		t.Fatalf("negative store timeout error = %v", err)
 	}
 	config.StoreTimeout = 0
+	config.RevalidateInterval = time.Second
+	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("revalidation limits without callback error = %v", err)
+	}
+	config.RevalidateSubscription = func(context.Context, Peer, string) error { return nil }
+	config.RevalidateTimeout = 2 * time.Second
+	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("revalidation timeout above interval error = %v", err)
+	}
+	config.RevalidateTimeout = 0
+	handler, err = NewYJSHandler(config)
+	if err != nil || handler.revalidateInterval != time.Second || handler.revalidateTimeout != time.Second {
+		t.Fatalf("revalidation defaults handler=%#v err=%v", handler, err)
+	}
+	config.RevalidateSubscription = nil
+	config.RevalidateInterval = 0
+	config.RevalidateTimeout = 0
 	config.Rooms = nil
 	if _, err := NewYJSHandler(config); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("empty rooms error = %v", err)
@@ -371,6 +389,110 @@ func TestYJSHandlerConfigurationAndRoutingBoundaries(t *testing.T) {
 	}); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("duplicate durable document error = %v", err)
 	}
+}
+
+func TestYJSHandlerRevalidatesAndClosesRevokedSubscription(t *testing.T) {
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "notes", MaxUpdateBytes: 4096, MaxHistoryBytes: 32 << 10, MaxUpdates: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revoked atomic.Bool
+	revalidated := make(chan struct{}, 1)
+	handler, err := NewYJSHandler(YJSConfig{
+		Rooms: []*YJSRoom{room},
+		Authenticate: func(*http.Request) (Peer, error) {
+			return Peer{ID: "reader"}, nil
+		},
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		RevalidateSubscription: func(context.Context, Peer, string) error {
+			if !revoked.Load() {
+				return nil
+			}
+			select {
+			case revalidated <- struct{}{}:
+			default:
+			}
+			return ErrUnauthorized
+		},
+		RevalidateInterval:  5 * time.Millisecond,
+		RevalidateTimeout:   5 * time.Millisecond,
+		MaxMessageBytes:     4096,
+		MaxQueuedMessages:   16,
+		MaxQueuedBytes:      4096,
+		MaxAwarenessClients: 16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := newYJSTestClient(t, server.URL, "reader")
+	defer func() { _ = client.CloseNow() }()
+	_ = readYJSMessage(t, client)
+
+	revoked.Store(true)
+	select {
+	case <-revalidated:
+	case <-time.After(time.Second):
+		t.Fatal("subscription was not revalidated after revocation")
+	}
+	readContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, _, err := client.Read(readContext); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("revoked subscription remained readable: %v", err)
+	}
+	waitForYJSNoSubscribers(t, room)
+}
+
+func TestYJSHandlerClosesWhenSubscriptionRevalidationTimesOut(t *testing.T) {
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "notes", MaxUpdateBytes: 4096, MaxHistoryBytes: 32 << 10, MaxUpdates: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{}, 1)
+	handler, err := NewYJSHandler(YJSConfig{
+		Rooms: []*YJSRoom{room},
+		Authenticate: func(*http.Request) (Peer, error) {
+			return Peer{ID: "reader"}, nil
+		},
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		RevalidateSubscription: func(context context.Context, _ Peer, _ string) error {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-context.Done()
+			return context.Err()
+		},
+		RevalidateInterval:  5 * time.Millisecond,
+		RevalidateTimeout:   5 * time.Millisecond,
+		MaxMessageBytes:     4096,
+		MaxQueuedMessages:   16,
+		MaxQueuedBytes:      4096,
+		MaxAwarenessClients: 16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := newYJSTestClient(t, server.URL, "reader")
+	defer func() { _ = client.CloseNow() }()
+	_ = readYJSMessage(t, client)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("subscription revalidation did not start")
+	}
+	readContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, _, err := client.Read(readContext); err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timed-out revalidation left subscription readable: %v", err)
+	}
+	waitForYJSNoSubscribers(t, room)
 }
 
 func TestYJSRoomCapacityAndSubscriberBackpressure(t *testing.T) {
@@ -737,6 +859,23 @@ func waitForYJSAwarenessRemoval(t testing.TB, room *YJSRoom, clientID uint64) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("awareness client %d remained after disconnect", clientID)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForYJSNoSubscribers(t testing.TB, room *YJSRoom) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		room.mu.Lock()
+		count := len(room.peers)
+		room.mu.Unlock()
+		if count == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("subscriber count after close = %d", count)
 		}
 		time.Sleep(time.Millisecond)
 	}

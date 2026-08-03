@@ -39,6 +39,14 @@ type YJSAuthorize func(Peer, string, YJSMessageKind) error
 // from publication.
 type YJSAuthorizeSubscription func(Peer, string) error
 
+// YJSRevalidateSubscription periodically checks whether an already-connected
+// peer may continue receiving a room's live updates. It is optional so
+// existing deployments can retain their connection-lifetime policy, but a
+// production deployment with revocable access should configure it. The context
+// is canceled when the WebSocket closes or the configured revalidation timeout
+// elapses.
+type YJSRevalidateSubscription func(context.Context, Peer, string) error
+
 // YJSRoomConfig configures one explicitly named y-protocols room. Without
 // Store, a room retains complete opaque updates only to bootstrap later live
 // peers. With Store, it becomes a Level 1 Yjs room: the store owns semantic
@@ -170,12 +178,26 @@ type YJSConfig struct {
 	Authenticate          Authenticate
 	Authorize             YJSAuthorize
 	AuthorizeSubscription YJSAuthorizeSubscription
-	OriginPatterns        []string
-	MaxMessageBytes       int
-	MaxQueuedMessages     int
-	MaxQueuedBytes        int
-	MaxAwarenessClients   int
-	HandshakeTimeout      time.Duration
+	// RevalidateSubscription is called periodically for each live subscriber.
+	// A non-nil error closes that subscriber and drops queued fan-out work. An
+	// already in-flight network write cannot be recalled. It is intentionally
+	// separate from Authenticate:
+	// browser WebSockets cannot refresh a Secure/HttpOnly session cookie in
+	// place, so application code must recheck the peer's current authorization.
+	RevalidateSubscription YJSRevalidateSubscription
+	// RevalidateInterval and RevalidateTimeout bound an optional live
+	// subscription recheck. When RevalidateSubscription is set, zero values use
+	// conservative defaults; a default timeout is capped at a shorter selected
+	// interval. Supplying either duration without the callback is
+	// invalid so a deployment cannot mistakenly believe revocation is active.
+	RevalidateInterval  time.Duration
+	RevalidateTimeout   time.Duration
+	OriginPatterns      []string
+	MaxMessageBytes     int
+	MaxQueuedMessages   int
+	MaxQueuedBytes      int
+	MaxAwarenessClients int
+	HandshakeTimeout    time.Duration
 	// StoreTimeout bounds one sidecar Apply or Diff after a WebSocket is live.
 	// It is distinct from the initial WebSocket handshake timeout.
 	StoreTimeout time.Duration
@@ -187,18 +209,21 @@ type YJSConfig struct {
 // It accepts the standard y-protocols sync (0), awareness (1), and awareness
 // query (3) messages. Authentication and permissions are application-owned.
 type YJSHandler struct {
-	rooms                 map[string]*YJSRoom
-	authenticate          Authenticate
-	authorize             YJSAuthorize
-	authorizeSubscription YJSAuthorizeSubscription
-	origins               []string
-	maxMessageBytes       int
-	maxQueuedMessages     int
-	maxQueuedBytes        int
-	maxAwarenessClients   int
-	handshakeTimeout      time.Duration
-	storeTimeout          time.Duration
-	writeTimeout          time.Duration
+	rooms                  map[string]*YJSRoom
+	authenticate           Authenticate
+	authorize              YJSAuthorize
+	authorizeSubscription  YJSAuthorizeSubscription
+	revalidateSubscription YJSRevalidateSubscription
+	revalidateInterval     time.Duration
+	revalidateTimeout      time.Duration
+	origins                []string
+	maxMessageBytes        int
+	maxQueuedMessages      int
+	maxQueuedBytes         int
+	maxAwarenessClients    int
+	handshakeTimeout       time.Duration
+	storeTimeout           time.Duration
+	writeTimeout           time.Duration
 }
 
 // NewYJSHandler validates and constructs the opt-in compatibility relay.
@@ -216,6 +241,10 @@ func NewYJSHandler(config YJSConfig) (*YJSHandler, error) {
 		storeTimeout = defaultHandshakeTimeout
 	}
 	if storeTimeout <= 0 {
+		return nil, invalidConfig("extensions.new_yjs_handler", ErrInvalidConfig)
+	}
+	revalidateInterval, revalidateTimeout, err := normalizeYJSRevalidation(config)
+	if err != nil {
 		return nil, invalidConfig("extensions.new_yjs_handler", ErrInvalidConfig)
 	}
 	maxAwarenessClients := config.MaxAwarenessClients
@@ -243,18 +272,21 @@ func NewYJSHandler(config YJSConfig) (*YJSHandler, error) {
 		rooms[room.name] = room
 	}
 	return &YJSHandler{
-		rooms:                 rooms,
-		authenticate:          config.Authenticate,
-		authorize:             config.Authorize,
-		authorizeSubscription: config.AuthorizeSubscription,
-		origins:               append([]string(nil), config.OriginPatterns...),
-		maxMessageBytes:       limits.maxMessageBytes,
-		maxQueuedMessages:     limits.maxQueuedMessages,
-		maxQueuedBytes:        limits.maxQueuedBytes,
-		maxAwarenessClients:   maxAwarenessClients,
-		handshakeTimeout:      limits.handshakeTimeout,
-		storeTimeout:          storeTimeout,
-		writeTimeout:          limits.writeTimeout,
+		rooms:                  rooms,
+		authenticate:           config.Authenticate,
+		authorize:              config.Authorize,
+		authorizeSubscription:  config.AuthorizeSubscription,
+		revalidateSubscription: config.RevalidateSubscription,
+		revalidateInterval:     revalidateInterval,
+		revalidateTimeout:      revalidateTimeout,
+		origins:                append([]string(nil), config.OriginPatterns...),
+		maxMessageBytes:        limits.maxMessageBytes,
+		maxQueuedMessages:      limits.maxQueuedMessages,
+		maxQueuedBytes:         limits.maxQueuedBytes,
+		maxAwarenessClients:    maxAwarenessClients,
+		handshakeTimeout:       limits.handshakeTimeout,
+		storeTimeout:           storeTimeout,
+		writeTimeout:           limits.writeTimeout,
 	}, nil
 }
 
@@ -310,6 +342,7 @@ func (handler *YJSHandler) ServeHTTP(writer http.ResponseWriter, request *http.R
 		}
 	}
 	go subscriber.writeLoop()
+	go handler.revalidateSubscriptionLoop(subscriber, room, peer)
 	handler.readLoop(subscriber, room, peer)
 }
 
@@ -377,6 +410,33 @@ func (handler *YJSHandler) readLoop(subscriber *yjsSubscriber, room *YJSRoom, pe
 					return
 				}
 			}
+		}
+	}
+}
+
+// revalidateSubscriptionLoop closes a live subscription after its application
+// authorization expires or becomes unavailable. The timer is reset only after
+// one bounded callback completes, so a slow policy backend cannot create
+// overlapping revalidation work for one WebSocket.
+func (handler *YJSHandler) revalidateSubscriptionLoop(subscriber *yjsSubscriber, room *YJSRoom, peer Peer) {
+	if handler == nil || subscriber == nil || room == nil || handler.revalidateSubscription == nil {
+		return
+	}
+	timer := time.NewTimer(handler.revalidateInterval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-subscriber.context.Done():
+			return
+		case <-timer.C:
+			revalidationContext, cancel := context.WithTimeout(subscriber.context, handler.revalidateTimeout)
+			err := handler.revalidateSubscription(revalidationContext, peer, room.name)
+			cancel()
+			if err != nil {
+				subscriber.close()
+				return
+			}
+			timer.Reset(handler.revalidateInterval)
 		}
 	}
 }
@@ -693,6 +753,8 @@ func (subscriber *yjsSubscriber) close() {
 }
 
 const (
+	defaultYJSRevalidateInterval = time.Minute
+	defaultYJSRevalidateTimeout  = 5 * time.Second
 	// maxYJSMessageBytes keeps decoder conversions and retained room state
 	// bounded even when an embedding application supplies custom limits.
 	maxYJSMessageBytes     = 64 << 20
@@ -893,4 +955,28 @@ func normalizeYJSLimits(config YJSConfig) (transportLimits, error) {
 		return transportLimits{}, errors.New("invalid Yjs limits")
 	}
 	return transportLimits{maxMessageBytes: config.MaxMessageBytes, maxQueuedMessages: config.MaxQueuedMessages, maxQueuedBytes: config.MaxQueuedBytes, handshakeTimeout: config.HandshakeTimeout, writeTimeout: config.WriteTimeout}, nil
+}
+
+func normalizeYJSRevalidation(config YJSConfig) (time.Duration, time.Duration, error) {
+	if config.RevalidateSubscription == nil {
+		if config.RevalidateInterval != 0 || config.RevalidateTimeout != 0 {
+			return 0, 0, errors.New("yjs revalidation callback is required")
+		}
+		return 0, 0, nil
+	}
+	interval := config.RevalidateInterval
+	if interval == 0 {
+		interval = defaultYJSRevalidateInterval
+	}
+	timeout := config.RevalidateTimeout
+	if timeout == 0 {
+		timeout = defaultYJSRevalidateTimeout
+		if timeout > interval {
+			timeout = interval
+		}
+	}
+	if interval <= 0 || timeout <= 0 || timeout > interval {
+		return 0, 0, errors.New("invalid yjs revalidation limits")
+	}
+	return interval, timeout, nil
 }

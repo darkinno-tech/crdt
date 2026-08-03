@@ -30,6 +30,61 @@ public struct RGAClockState: Equatable, Sendable {
     }
 }
 
+/// Authenticated receiver bounds for an `RGA` replica.
+public struct RGALimits: Equatable, Sendable {
+    public let maxFrameBytes: Int
+    public let maxPayloadBytes: Int
+    public let maxStringBytes: Int
+    public let maxNodes: Int
+    public let maxTags: Int
+    public let maxTombstones: Int
+    public let maxPendingNodes: Int
+    public let maxPendingBytes: Int
+
+    public init(
+        maxFrameBytes: Int = 1 << 20,
+        maxPayloadBytes: Int = 1 << 20,
+        maxStringBytes: Int = 64 << 10,
+        maxNodes: Int = 100_000,
+        maxTags: Int = 100_000,
+        maxTombstones: Int = 100_000,
+        maxPendingNodes: Int = 10_000,
+        maxPendingBytes: Int = 512 << 10
+    ) {
+        self.maxFrameBytes = maxFrameBytes
+        self.maxPayloadBytes = maxPayloadBytes
+        self.maxStringBytes = maxStringBytes
+        self.maxNodes = maxNodes
+        self.maxTags = maxTags
+        self.maxTombstones = maxTombstones
+        self.maxPendingNodes = maxPendingNodes
+        self.maxPendingBytes = maxPendingBytes
+    }
+
+    fileprivate func native() throws -> crdt_limits {
+        guard maxFrameBytes > 0,
+              maxPayloadBytes > 0,
+              maxStringBytes > 0,
+              maxNodes > 0,
+              maxTags > 0,
+              maxTombstones > 0,
+              maxPendingNodes > 0,
+              maxPendingBytes > 0 else {
+            throw CRDTError(Int32(CRDT_INVALID_ARGUMENT))
+        }
+        return crdt_limits(
+            max_frame_bytes: maxFrameBytes,
+            max_payload_bytes: maxPayloadBytes,
+            max_string_bytes: maxStringBytes,
+            max_nodes: maxNodes,
+            max_tags: maxTags,
+            max_tombstones: maxTombstones,
+            max_pending_nodes: maxPendingNodes,
+            max_pending_bytes: maxPendingBytes
+        )
+    }
+}
+
 /// Authenticated receiver bounds for an `LWWMap` replica.
 public struct LWWMapLimits: Equatable, Sendable {
     public let maxFrameBytes: Int
@@ -81,14 +136,20 @@ public final class RGA: @unchecked Sendable {
     private let lock = NSLock()
 
     /// Creates an empty document using the conservative native-client limits.
-    public init(replicaID: String) throws {
+    public convenience init(replicaID: String) throws {
+        try self.init(replicaID: replicaID, limits: RGALimits())
+    }
+
+    /// Creates an empty document with manifest-negotiated receiver limits.
+    public init(replicaID: String, limits: RGALimits) throws {
         let replica = Array(replicaID.utf8)
         var created: OpaquePointer?
+        var nativeLimits = try limits.native()
         let status = replica.withUnsafeBufferPointer { buffer in
-            crdt_rga_new(buffer.baseAddress, buffer.count, &created)
+            crdt_rga_new_with_limits(buffer.baseAddress, buffer.count, &nativeLimits, &created)
         }
-        guard status == CRDT_OK else {
-            throw CRDTError(status)
+        guard status == CRDT_OK, let created else {
+            throw CRDTError(status == CRDT_OK ? Int32(CRDT_INTERNAL) : status)
         }
         handle = created
     }
@@ -96,15 +157,28 @@ public final class RGA: @unchecked Sendable {
     /// Restores a runtime clock. Apply the atomically paired complete state
     /// frame before creating any new local mutation.
     public convenience init(clockState: RGAClockState) throws {
+        try self.init(clockState: clockState, limits: RGALimits())
+    }
+
+    /// Restores a runtime clock using the same manifest-negotiated limits.
+    public convenience init(clockState: RGAClockState, limits: RGALimits) throws {
         let replica = Array(clockState.replicaID.utf8)
         var created: OpaquePointer?
+        var nativeLimits = try limits.native()
         let status = replica.withUnsafeBufferPointer { buffer in
-            crdt_rga_new_from_clock(buffer.baseAddress, buffer.count, clockState.wallTime, clockState.logical, &created)
+            crdt_rga_new_from_clock_with_limits(
+                buffer.baseAddress,
+                buffer.count,
+                clockState.wallTime,
+                clockState.logical,
+                &nativeLimits,
+                &created
+            )
         }
-        guard status == CRDT_OK else {
-            throw CRDTError(status)
+        guard status == CRDT_OK, let created else {
+            throw CRDTError(status == CRDT_OK ? Int32(CRDT_INTERNAL) : status)
         }
-        self.init(adopting: created!)
+        self.init(adopting: created)
     }
 
     private init(adopting handle: OpaquePointer) {

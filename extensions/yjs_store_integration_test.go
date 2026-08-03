@@ -98,6 +98,54 @@ func TestYJSHandlerNativeYWebsocketNodeIntegration(t *testing.T) {
 	}
 }
 
+// TestYJSHandlerNativeYWebsocketRevocationNodeIntegration runs a standard
+// y-websocket provider through an authenticated relay, then verifies that a
+// periodic application authorization denial closes the live provider instead
+// of letting it keep receiving fan-out until a transport failure.
+func TestYJSHandlerNativeYWebsocketRevocationNodeIntegration(t *testing.T) {
+	room, err := NewYJSRoom(YJSRoomConfig{Name: "notes", MaxUpdateBytes: 4096, MaxHistoryBytes: 32 << 10, MaxUpdates: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewYJSHandler(YJSConfig{
+		Rooms: []*YJSRoom{room},
+		Authenticate: func(request *http.Request) (Peer, error) {
+			cookie, err := request.Cookie("yjs_session")
+			if err != nil || cookie.Value != "revocation-test" {
+				return Peer{}, ErrUnauthorized
+			}
+			return Peer{ID: "revocation-test"}, nil
+		},
+		Authorize:             func(Peer, string, YJSMessageKind) error { return nil },
+		AuthorizeSubscription: func(Peer, string) error { return nil },
+		RevalidateSubscription: func(context.Context, Peer, string) error {
+			return ErrUnauthorized
+		},
+		RevalidateInterval:  50 * time.Millisecond,
+		RevalidateTimeout:   25 * time.Millisecond,
+		MaxMessageBytes:     4096,
+		MaxQueuedMessages:   16,
+		MaxQueuedBytes:      4096,
+		MaxAwarenessClients: 16,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	runtime := yjsStoreNodeRuntime(t, true)
+	context, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command := exec.CommandContext(context, "node", "--no-experimental-webstorage", "revocation.integration.mjs", "ws"+strings.TrimPrefix(server.URL, "http"))
+	command.Dir = runtime
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("native y-websocket revocation integration: %v\n%s", err, output)
+	}
+	waitForYJSNoSubscribers(t, room)
+}
+
 // TestYJSAgentPeerNativeYWebsocketNodeIntegration verifies the server-side
 // peer path against both the pinned semantic store and a fresh standard
 // y-websocket client. The client starts after the agent write, so it can only

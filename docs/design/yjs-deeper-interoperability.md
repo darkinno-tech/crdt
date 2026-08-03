@@ -107,6 +107,15 @@ follows a redirect from the configured bearer-token endpoint, and a handler
 permits one store-backed room per exact durable document identity; both rules
 prevent trust-boundary drift or live fan-out split-brain.
 
+`YJSHandler` can also run a bounded `RevalidateSubscription` callback for
+every long-lived WebSocket. Use it when document access can be revoked after
+the upgrade: a callback error or timeout closes the subscriber and drops queued
+fan-out work. This bounds the post-revocation window by the configured interval
+plus callback timeout, but cannot retract a message already being written to
+the network. The callback must recheck the authenticated `Peer` against the
+room; it must not treat a client-selected Yjs ID, awareness payload, state
+vector, or a previous cookie read as current authorization.
+
 A server-side AI task that needs to become a document peer uses the explicit
 `YJSAgentPeer` capability on that same configured handler, rather than calling
 the sidecar directly. It reads a bounded snapshot or state-vector diff through

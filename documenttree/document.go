@@ -26,6 +26,7 @@ var (
 	ErrInvalidRoot     = errors.New("documenttree: invalid root name")
 	ErrInvalidKey      = errors.New("documenttree: invalid map key")
 	ErrInvalidValue    = errors.New("documenttree: invalid value")
+	ErrInvalidJSON     = errors.New("documenttree: invalid JSON scalar")
 	ErrInvalidDelta    = errors.New("documenttree: invalid document-tree delta")
 	ErrInvalidState    = errors.New("documenttree: invalid document-tree state")
 	ErrIncompleteState = errors.New("documenttree: incomplete document-tree state")
@@ -701,6 +702,21 @@ func (m *Map) Set(key string, value []byte) (Delta, error) {
 	return m.document.setMapValue(m.id, key, Bytes(value))
 }
 
+// SetJSON stores one JSON scalar as a canonical byte value. Objects and arrays
+// are deliberately rejected: create a Map or Array child instead so concurrent
+// descendants retain their own CRDT identities rather than becoming one
+// last-writer-wins JSON blob.
+func (m *Map) SetJSON(key string, value any) (Delta, error) {
+	if m == nil || m.document == nil {
+		return Delta{}, ErrNilDocument
+	}
+	encoded, err := marshalJSONScalar(value, m.document.options)
+	if err != nil {
+		return Delta{}, err
+	}
+	return m.Set(key, encoded)
+}
+
 func (m *Map) Delete(key string) (Delta, error) {
 	if m == nil || m.document == nil {
 		return Delta{}, ErrNilDocument
@@ -738,6 +754,24 @@ func (m *Map) Get(key string) (Value, bool) {
 		return Value{}, false
 	}
 	return cloneValue(entry.value), true
+}
+
+// GetJSON returns a decoded JSON scalar written through SetJSON. It rejects a
+// raw byte value that is not a canonical JSON scalar rather than guessing how
+// an application intended to interpret it.
+func (m *Map) GetJSON(key string) (any, bool, error) {
+	value, ok := m.Get(key)
+	if !ok {
+		return nil, false, nil
+	}
+	if value.Kind != ValueBytes {
+		return nil, true, ErrInvalidJSON
+	}
+	decoded, err := unmarshalJSONScalar(value.Bytes, m.document.options)
+	if err != nil {
+		return nil, true, err
+	}
+	return decoded, true, nil
 }
 
 func (m *Map) Map(key string) (*Map, bool) {
@@ -811,11 +845,40 @@ func (a *Array) Get(index int) (Value, bool) {
 	return value, true
 }
 
+// GetJSON returns a decoded JSON scalar at one visible array position.
+func (a *Array) GetJSON(index int) (any, bool, error) {
+	value, ok := a.Get(index)
+	if !ok {
+		return nil, false, nil
+	}
+	if value.Kind != ValueBytes {
+		return nil, true, ErrInvalidJSON
+	}
+	decoded, err := unmarshalJSONScalar(value.Bytes, a.document.options)
+	if err != nil {
+		return nil, true, err
+	}
+	return decoded, true, nil
+}
+
 func (a *Array) Insert(index int, value []byte) (Delta, error) {
 	if a == nil || a.document == nil {
 		return Delta{}, ErrNilDocument
 	}
 	return a.document.insertArrayValue(a.id, index, Bytes(value), Kind(0))
+}
+
+// InsertJSON inserts one canonical JSON scalar. Nested JSON containers must be
+// modelled with InsertMap or InsertArray so their independent edits converge.
+func (a *Array) InsertJSON(index int, value any) (Delta, error) {
+	if a == nil || a.document == nil {
+		return Delta{}, ErrNilDocument
+	}
+	encoded, err := marshalJSONScalar(value, a.document.options)
+	if err != nil {
+		return Delta{}, err
+	}
+	return a.Insert(index, encoded)
 }
 
 func (a *Array) InsertMap(index int) (*Map, Delta, error) {

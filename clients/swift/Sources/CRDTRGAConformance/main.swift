@@ -29,6 +29,27 @@ do {
     try alice.applyFrame(recoveredEdit)
     try require(recovered.text() == alice.text(), "same-ID clock recovery produced a conflicting mutation")
 
+    let rgaLimits = RGALimits(maxNodes: 1, maxTags: 1, maxTombstones: 1)
+    let limitedRGA = try RGA(replicaID: "swift-limited", limits: rgaLimits)
+    _ = try limitedRGA.insert(at: 0, value: "A")
+    let limitedState = try limitedRGA.state()
+    let limitedClock = try limitedRGA.clockState()
+    let limitedRecovered = try RGA(clockState: limitedClock, limits: rgaLimits)
+    try limitedRecovered.applyFrame(limitedState)
+    let unboundedRGA = try RGA(replicaID: "swift-unbounded")
+    let excessDelta = try unboundedRGA.insert(at: 0, value: "B")
+    let rgaLimitState = try limitedRecovered.state()
+    let rgaLimitClock = try limitedRecovered.clockState()
+    var rgaLimitRejected = false
+    do {
+        try limitedRecovered.applyFrame(excessDelta)
+    } catch let error as CRDTError {
+        rgaLimitRejected = error.code == CRDTError.resourceLimit
+    }
+    try require(rgaLimitRejected, "RGA recovery did not retain the manifest node limit")
+    try require(try limitedRecovered.state() == rgaLimitState, "RGA limit rejection changed state")
+    try require(try limitedRecovered.clockState() == rgaLimitClock, "RGA limit rejection changed HLC")
+
     let mapVector = Data(hex: "435244540109000e01016105616c69636501000101783c3edf37")
     let mapReader = try LWWMap(replicaID: "swift-map-vector-reader")
     try mapReader.applyFrame(mapVector)

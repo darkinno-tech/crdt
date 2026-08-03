@@ -354,10 +354,19 @@ func (r *RGA) RetainsPosition(position Position) bool {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.retainsPositionLocked(position)
+}
+
+func (r *RGA) retainsPositionLocked(position Position) bool {
 	if _, ok := r.nodes[position]; ok {
 		return true
 	}
 	_, ok := r.pending[position]
+	return ok
+}
+
+func (r *RGA) hasIntegratedPositionLocked(position Position) bool {
+	_, ok := r.nodes[position]
 	return ok
 }
 
@@ -371,6 +380,22 @@ func (r *RGA) Insert(offset int, value string) (Delta, error) {
 	return delta, err
 }
 
+// insertWithPredecessor applies one local insertion and returns the exact
+// predecessor captured for that delta. It is used by local undo history so a
+// concurrent remote apply cannot make the recorded replay anchor differ from
+// the parent encoded in the local delta.
+func (r *RGA) insertWithPredecessor(offset int, value string) (Delta, Position, error) {
+	delta, _, predecessor, err := r.prepareInsertWithPredecessor(offset, value, nil, Delta.MarshalBinaryWithLimits)
+	if err != nil {
+		return Delta{}, Position{}, err
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, Position{}, err
+	}
+	delta.canonicalNodeIDs = nil
+	return delta, predecessor, nil
+}
+
 // insertAfter inserts value after an exact retained predecessor. It is used by
 // the local undo manager to replay editing intent without treating a CRDT
 // tombstone as reversible state. The predecessor may be deleted, because a
@@ -379,14 +404,6 @@ func (r *RGA) Insert(offset int, value string) (Delta, error) {
 func (r *RGA) insertAfter(predecessor Position, value string) (Delta, error) {
 	if r == nil || r.clock == nil {
 		return Delta{}, ErrNilText
-	}
-	if predecessor.Valid() {
-		r.mu.RLock()
-		_, retained := r.nodes[predecessor]
-		r.mu.RUnlock()
-		if !retained {
-			return Delta{}, ErrUndoAnchorGone
-		}
 	}
 	if !utf8.ValidString(value) {
 		return Delta{}, ErrInvalidText
@@ -408,10 +425,12 @@ func (r *RGA) insertAfter(predecessor Position, value string) (Delta, error) {
 		}
 		parent = id
 	}
-	if len(delta.nodes) == 0 {
-		return delta, nil
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if predecessor.Valid() && !r.hasIntegratedPositionLocked(predecessor) {
+		return Delta{}, ErrUndoAnchorGone
 	}
-	if err := r.ApplyDelta(delta); err != nil {
+	if err := r.applyDeltaLocked(delta); err != nil {
 		return Delta{}, err
 	}
 	delta.canonicalNodeIDs = nil
@@ -511,14 +530,22 @@ func (r *RGA) insert(offset int, value string, limits *frame.DecoderLimits, enco
 }
 
 func (r *RGA) prepareInsert(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, error) {
+	delta, encoded, _, err := r.prepareInsertWithPredecessor(offset, value, limits, encode)
+	return delta, encoded, err
+}
+
+// prepareInsertWithPredecessor prepares one insertion and retains the exact
+// visible predecessor selected with the same RGA read lock. The exported
+// preparation methods intentionally discard that local-only metadata.
+func (r *RGA) prepareInsertWithPredecessor(offset int, value string, limits *frame.DecoderLimits, encode deltaEncoder) (Delta, []byte, Position, error) {
 	if r == nil || r.clock == nil {
-		return Delta{}, nil, ErrNilText
+		return Delta{}, nil, Position{}, ErrNilText
 	}
 	if offset < 0 {
-		return Delta{}, nil, ErrRange
+		return Delta{}, nil, Position{}, ErrRange
 	}
 	if !utf8.ValidString(value) {
-		return Delta{}, nil, ErrInvalidText
+		return Delta{}, nil, Position{}, ErrInvalidText
 	}
 	runes := []rune(value)
 	r.mu.RLock()
@@ -526,23 +553,24 @@ func (r *RGA) prepareInsert(offset int, value string, limits *frame.DecoderLimit
 	visibleCount := visibleCount(r.sequence.root)
 	r.mu.RUnlock()
 	if offset > visibleCount {
-		return Delta{}, nil, ErrRange
+		return Delta{}, nil, Position{}, ErrRange
+	}
+	predecessor := Position{}
+	if hasPrevious {
+		predecessor = previous
 	}
 	if len(runes) == 0 {
 		empty := Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{})}
 		if limits == nil {
-			return empty, nil, nil
+			return empty, nil, predecessor, nil
 		}
 		encoded, err := encode(empty, *limits)
 		if err != nil {
-			return Delta{}, nil, err
+			return Delta{}, nil, Position{}, err
 		}
-		return empty, encoded, nil
+		return empty, encoded, predecessor, nil
 	}
-	parent := Position{}
-	if hasPrevious {
-		parent = previous
-	}
+	parent := predecessor
 	delta := Delta{nodes: make(map[Position]node, len(runes)), tombstones: make(map[Position]struct{})}
 	if len(runes) >= resolvedRunFastPathMinNodes {
 		delta.canonicalNodeIDs = make([]Position, 0, len(runes))
@@ -550,7 +578,7 @@ func (r *RGA) prepareInsert(offset int, value string, limits *frame.DecoderLimit
 	for _, valueRune := range runes {
 		id, err := r.clock.Now()
 		if err != nil {
-			return Delta{}, nil, err
+			return Delta{}, nil, Position{}, err
 		}
 		delta.nodes[id] = node{parent: parent, rune: valueRune}
 		if delta.canonicalNodeIDs != nil {
@@ -563,10 +591,10 @@ func (r *RGA) prepareInsert(offset int, value string, limits *frame.DecoderLimit
 		var err error
 		encoded, err = encode(delta, *limits)
 		if err != nil {
-			return Delta{}, nil, err
+			return Delta{}, nil, Position{}, err
 		}
 	}
-	return delta, encoded, nil
+	return delta, encoded, predecessor, nil
 }
 
 // Delete marks count visible runes starting at offset as removed. The delta
@@ -860,6 +888,14 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.applyDeltaLocked(delta)
+}
+
+// applyDeltaLocked installs a syntactically validated delta while holding
+// r.mu for writing. Keeping the retained-position check and application under
+// one lock lets local compensating operations fail closed if concurrent
+// compaction removed their structural anchor.
+func (r *RGA) applyDeltaLocked(delta Delta) error {
 	for id, incoming := range delta.nodes {
 		if current, exists := r.nodes[id]; exists && current != incoming {
 			return ErrTagConflict
@@ -920,6 +956,36 @@ func (r *RGA) ApplyDelta(delta Delta) error {
 		r.version++
 	}
 	return nil
+}
+
+// tombstoneRetainedPositions creates one compensating tombstone delta only
+// for positions that remain structurally retained. Unlike a transport delta,
+// it must not reintroduce a tombstone for an ID that has already crossed a
+// compaction boundary: doing so would make obsolete local history consume
+// retention capacity. The retained-position validation and application share
+// r.mu so compaction cannot race between them.
+func (r *RGA) tombstoneRetainedPositions(positions []Position) (Delta, error) {
+	if r == nil || r.clock == nil {
+		return Delta{}, ErrNilText
+	}
+	delta := Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{}, len(positions))}
+	for _, position := range positions {
+		if !position.Valid() {
+			return Delta{}, ErrInvalidDelta
+		}
+		delta.tombstones[position] = struct{}{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for position := range delta.tombstones {
+		if !r.retainsPositionLocked(position) {
+			return Delta{}, ErrUndoAnchorGone
+		}
+	}
+	if err := r.applyDeltaLocked(delta); err != nil {
+		return Delta{}, err
+	}
+	return delta, nil
 }
 
 // resolvedLinearRunLocked recognizes a complete, new, same-replica chain in

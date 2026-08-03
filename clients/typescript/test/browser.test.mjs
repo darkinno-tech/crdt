@@ -52,6 +52,29 @@ test("browser document atomically restores a local update and retries it from th
   await remote.close();
 });
 
+test("browser-native Text roots persist UTF-16-aligned edits and recover their declarations", async () => {
+  const persistence = new MemoryNativeBrowserPersistence();
+  const document = await openNativeBrowserDocument({
+    documentID: "text-recovery",
+    replicaID: "writer",
+    persistence,
+  });
+  const body = document.getText("body");
+  body.insert(0, "A😀B");
+  body.delete(1, 2);
+  await document.flush();
+  await document.close();
+
+  const restored = await openNativeBrowserDocument({
+    documentID: "text-recovery",
+    replicaID: "writer",
+    persistence,
+  });
+  assert.equal(restored.getText("body").toString(), "AB");
+  assert.throws(() => restored.getArray("body"));
+  await restored.close();
+});
+
 test("browser document compacts only after receipt and restores the compacted state", async () => {
   const persistence = new MemoryNativeBrowserPersistence();
   const document = await openNativeBrowserDocument({

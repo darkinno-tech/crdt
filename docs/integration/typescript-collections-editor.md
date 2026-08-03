@@ -45,3 +45,12 @@ The UI is an integration reference, not a production editor shell. It uses DOM
 `textContent`/node construction rather than inserting user input as HTML, and
 leaves authentication, transport, storage, access control, undo, and rich-text
 schema selection to the host.
+
+The TypeScript suite also projects a reordered, duplicated `NativeORTree`
+outline into an actual Tiptap Core schema. Its host projection calls
+`setContent(..., { emitUpdate: false })`, so a remote structural update cannot
+re-enter an editor-local outbox. This validates the
+`native-ts-collections-v1` editor boundary only: it is not a claim that this
+native collection wire format interoperates with the separate Go OR-Tree v1
+frames. Keep a Go OR-Tree group and a native collection group under distinct
+manifests and transports.

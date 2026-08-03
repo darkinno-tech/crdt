@@ -113,6 +113,43 @@ func BenchmarkRGAAppendToIndexedDocument(b *testing.B) {
 	}
 }
 
+// BenchmarkUndoManagerInsertUndoDiscardRedo models the common editor branch:
+// insert a local character, undo it, then make another local edit that drops
+// redo. The bounded manager must release obsolete position ownership while
+// keeping the current local change undoable. Resetting the document outside
+// the timed section prevents its retained CRDT tombstones from dominating this
+// local-history measurement.
+func BenchmarkUndoManagerInsertUndoDiscardRedo(b *testing.B) {
+	const resetEvery = 4096
+	var manager *UndoManager
+	reset := func() {
+		value, err := New("writer")
+		if err != nil {
+			b.Fatal(err)
+		}
+		manager, err = NewUndoManagerWithOptions(value, UndoOptions{MaxEntries: 8, MaxRunes: 64})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		if index > 0 && index%resetEvery == 0 {
+			b.StopTimer()
+			reset()
+			b.StartTimer()
+		}
+		if _, err := manager.Insert(0, "x"); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := manager.Undo(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkRGACompactEligibleTombstones models completed document deletions.
 // Setup time is stopped so ns/op isolates structural collection after an
 // external coordinator has already proved exact acknowledgement. Go's
