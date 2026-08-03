@@ -47,3 +47,24 @@ jobs:
           fi
           echo "main accepts release PRs from ${REPOSITORY}:preprod only; received ${HEAD_REPOSITORY}:${HEAD_REF}" >&2
           exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Verify stable module tags can be created
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          stable_tag="$(git tag --list --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ { print; exit }')"
+          if [[ -z "${stable_tag}" ]]; then
+            echo "No stable vMAJOR.MINOR.PATCH tag found" >&2
+            exit 1
+          fi
+          version="${stable_tag#v}"
+          IFS=. read -r major minor patch <<< "${version}"
+          if [[ ! "${patch}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid stable tag: ${stable_tag}" >&2
+            exit 1
+          fi
+          tag="v${major}.${minor}.$((10#${patch} + 1))"
+          ./scripts/tag-go-modules.sh "${tag}" "$(git rev-parse HEAD)" --dry-run
