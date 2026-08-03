@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-__all__ = ["CRDTError", "ClockState", "LWWMap", "LWWMapLimits", "RGA"]
+__all__ = ["CRDTError", "ClockState", "LWWMap", "LWWMapLimits", "RGA", "RGALimits"]
 
 _OK: Final = 0
 
@@ -26,6 +26,19 @@ class _Buffer(ctypes.Structure):
 
 class _ClockState(ctypes.Structure):
     _fields_ = [("replica_id", _Buffer), ("wall_time", ctypes.c_uint64), ("logical", ctypes.c_uint64)]
+
+
+class _RGALimits(ctypes.Structure):
+    _fields_ = [
+        ("max_frame_bytes", ctypes.c_size_t),
+        ("max_payload_bytes", ctypes.c_size_t),
+        ("max_string_bytes", ctypes.c_size_t),
+        ("max_nodes", ctypes.c_size_t),
+        ("max_tags", ctypes.c_size_t),
+        ("max_tombstones", ctypes.c_size_t),
+        ("max_pending_nodes", ctypes.c_size_t),
+        ("max_pending_bytes", ctypes.c_size_t),
+    ]
 
 
 class _LWWMapLimits(ctypes.Structure):
@@ -57,8 +70,12 @@ def _library_path() -> Path:
 _LIBRARY = ctypes.CDLL(str(_library_path()))
 _LIBRARY.crdt_rga_new.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
 _LIBRARY.crdt_rga_new.restype = ctypes.c_int32
+_LIBRARY.crdt_rga_new_with_limits.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t, ctypes.POINTER(_RGALimits), ctypes.POINTER(ctypes.c_void_p)]
+_LIBRARY.crdt_rga_new_with_limits.restype = ctypes.c_int32
 _LIBRARY.crdt_rga_new_from_clock.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t, ctypes.c_uint64, ctypes.c_uint64, ctypes.POINTER(ctypes.c_void_p)]
 _LIBRARY.crdt_rga_new_from_clock.restype = ctypes.c_int32
+_LIBRARY.crdt_rga_new_from_clock_with_limits.argtypes = [ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t, ctypes.c_uint64, ctypes.c_uint64, ctypes.POINTER(_RGALimits), ctypes.POINTER(ctypes.c_void_p)]
+_LIBRARY.crdt_rga_new_from_clock_with_limits.restype = ctypes.c_int32
 _LIBRARY.crdt_rga_free.argtypes = [ctypes.c_void_p]
 _LIBRARY.crdt_rga_free.restype = None
 _LIBRARY.crdt_rga_apply.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ubyte), ctypes.c_size_t]
@@ -122,6 +139,46 @@ class ClockState:
 
 
 @dataclass(frozen=True)
+class RGALimits:
+    """Authenticated receiver bounds for an ``RGA`` replica."""
+
+    max_frame_bytes: int = 1 << 20
+    max_payload_bytes: int = 1 << 20
+    max_string_bytes: int = 64 << 10
+    max_nodes: int = 100_000
+    max_tags: int = 100_000
+    max_tombstones: int = 100_000
+    max_pending_nodes: int = 10_000
+    max_pending_bytes: int = 512 << 10
+
+    def _native(self) -> _RGALimits:
+        if any(
+            value <= 0
+            for value in (
+                self.max_frame_bytes,
+                self.max_payload_bytes,
+                self.max_string_bytes,
+                self.max_nodes,
+                self.max_tags,
+                self.max_tombstones,
+                self.max_pending_nodes,
+                self.max_pending_bytes,
+            )
+        ):
+            raise ValueError("all RGA limits must be positive")
+        return _RGALimits(
+            self.max_frame_bytes,
+            self.max_payload_bytes,
+            self.max_string_bytes,
+            self.max_nodes,
+            self.max_tags,
+            self.max_tombstones,
+            self.max_pending_nodes,
+            self.max_pending_bytes,
+        )
+
+
+@dataclass(frozen=True)
 class LWWMapLimits:
     """Authenticated receiver bounds for an ``LWWMap`` replica."""
 
@@ -173,7 +230,13 @@ class RGA:
     clock/outbox position must be persisted atomically before replica-ID reuse.
     """
 
-    def __init__(self, replica_id: str | None = None, *, clock_state: ClockState | None = None) -> None:
+    def __init__(
+        self,
+        replica_id: str | None = None,
+        *,
+        clock_state: ClockState | None = None,
+        limits: RGALimits | None = None,
+    ) -> None:
         if (replica_id is None) == (clock_state is None):
             raise ValueError("provide exactly one of replica_id or clock_state")
         if clock_state is not None:
@@ -182,10 +245,37 @@ class RGA:
         encoded = replica_id.encode("utf-8")
         pointer, _keepalive = _input(encoded)
         self._handle = ctypes.c_void_p()
+        native_limits = limits._native() if limits is not None else None
         if clock_state is None:
-            status = _LIBRARY.crdt_rga_new(pointer, len(encoded), ctypes.byref(self._handle))
+            status = (
+                _LIBRARY.crdt_rga_new(pointer, len(encoded), ctypes.byref(self._handle))
+                if native_limits is None
+                else _LIBRARY.crdt_rga_new_with_limits(
+                    pointer,
+                    len(encoded),
+                    ctypes.byref(native_limits),
+                    ctypes.byref(self._handle),
+                )
+            )
         else:
-            status = _LIBRARY.crdt_rga_new_from_clock(pointer, len(encoded), clock_state.wall_time, clock_state.logical, ctypes.byref(self._handle))
+            status = (
+                _LIBRARY.crdt_rga_new_from_clock(
+                    pointer,
+                    len(encoded),
+                    clock_state.wall_time,
+                    clock_state.logical,
+                    ctypes.byref(self._handle),
+                )
+                if native_limits is None
+                else _LIBRARY.crdt_rga_new_from_clock_with_limits(
+                    pointer,
+                    len(encoded),
+                    clock_state.wall_time,
+                    clock_state.logical,
+                    ctypes.byref(native_limits),
+                    ctypes.byref(self._handle),
+                )
+            )
         _check("new", status)
 
     def close(self) -> None:

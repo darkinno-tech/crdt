@@ -55,6 +55,7 @@ enum {
 int32_t crdt_rga_new(const uint8_t *replica, size_t replica_len, crdt_rga **out);
 int32_t crdt_rga_new_with_limits(const uint8_t *replica, size_t replica_len, const crdt_limits *limits, crdt_rga **out);
 int32_t crdt_rga_new_from_clock(const uint8_t *replica, size_t replica_len, uint64_t wall_time, uint64_t logical, crdt_rga **out);
+int32_t crdt_rga_new_from_clock_with_limits(const uint8_t *replica, size_t replica_len, uint64_t wall_time, uint64_t logical, const crdt_limits *limits, crdt_rga **out);
 void crdt_rga_free(crdt_rga *value);
 int32_t crdt_rga_apply(crdt_rga *value, const uint8_t *frame, size_t frame_len);
 int32_t crdt_rga_insert(crdt_rga *value, size_t offset, const uint8_t *text, size_t text_len, crdt_buffer *out);

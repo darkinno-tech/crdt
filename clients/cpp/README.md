@@ -32,5 +32,8 @@ make cpp-benchmark
 
 `State()` only returns a complete RGA or LWW-Map snapshot. Persist it
 atomically with `Clock()` plus the application-owned frontier/outbox before
-reusing a replica ID. Authenticate and authorize the selected manifest before
-`Apply`; CRC-32C is not authentication, encryption, or replay protection.
+reusing a replica ID. Pass the same manifest-supplied `crdt_limits` to the
+`Rga` replica-ID and `ClockState` constructors; recovery must not widen frame,
+graph, tombstone, or pending-parent limits. Authenticate and authorize the
+selected manifest before `Apply`; CRC-32C is not authentication, encryption,
+or replay protection.

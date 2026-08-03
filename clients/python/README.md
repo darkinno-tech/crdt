@@ -1,9 +1,12 @@
 # DarkInno Python CRDT client
 
 `crdt_rga.RGA` is a Python ownership wrapper for the bounded Rust
-`rga-run-v2` runtime. `crdt_rga.LWWMap` is the matching wrapper for Go-wire
-`lww-map-v1` TypeIDs `9/10`, with opaque byte values and optional
-`LWWMapLimits` at construction/recovery. Each protocol has its own manifest.
+`rga-run-v2` runtime. Supply `RGALimits` at initial construction and
+`ClockState` recovery, so a restart cannot widen a replication group's frame,
+graph, tombstone, or pending-parent policy. `crdt_rga.LWWMap` is the matching
+wrapper for Go-wire `lww-map-v1` TypeIDs `9/10`, with opaque byte values and
+optional `LWWMapLimits` at construction/recovery. Each protocol has its own
+manifest.
 
 It is not an independent Python wire implementation. This intentionally keeps
 Python, Rust, and Swift on the same audited merge, canonicalization, resource,

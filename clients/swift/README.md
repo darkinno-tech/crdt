@@ -1,9 +1,12 @@
 # DarkInno Swift CRDT client
 
 `CRDTRGA.RGA` is a Swift wrapper around the bounded Rust `rga-run-v2` runtime.
-`CRDTRGA.LWWMap` exposes Go-compatible LWW-Map TypeID `9/10` frames, opaque
-`Data` values, ordered `keys()`, and manifest-supplied `LWWMapLimits`. It is
-not compatible with `native-ts-v1` or scalar RGA v1.
+Pass the same manifest-supplied `RGALimits` to initial construction and
+`RGAClockState` recovery, so a restart cannot widen the frame, graph,
+tombstone, or pending-parent policy. `CRDTRGA.LWWMap` exposes Go-compatible
+LWW-Map TypeID `9/10` frames, opaque `Data` values, ordered `keys()`, and
+manifest-supplied `LWWMapLimits`. It is not compatible with `native-ts-v1` or
+scalar RGA v1.
 
 The Swift package deliberately includes no bundled binary. Build the Rust
 library for each deployment target, then point SwiftPM at it:
