@@ -1,14 +1,22 @@
 package text
 
 import (
+	"errors"
 	"sync"
+	"unicode/utf8"
 )
 
-// ErrNoUndo reports that no captured local operation can be undone.
-var ErrNoUndo = errHistoryEmpty("text: no undo operation")
-
-// ErrNoRedo reports that no previously undone local operation can be redone.
-var ErrNoRedo = errHistoryEmpty("text: no redo operation")
+var (
+	// ErrNoUndo reports that no captured local operation can be undone.
+	ErrNoUndo = errHistoryEmpty("text: no undo operation")
+	// ErrNoRedo reports that no previously undone local operation can be redone.
+	ErrNoRedo = errHistoryEmpty("text: no redo operation")
+	// ErrInvalidUndoOptions reports an unusable local undo-history policy.
+	ErrInvalidUndoOptions = errors.New("text: invalid undo options")
+	// ErrUndoHistoryLimit reports that one local edit cannot fit in the
+	// configured history budget. It leaves both the RGA and history unchanged.
+	ErrUndoHistoryLimit = errors.New("text: undo history resource limit")
+)
 
 type errHistoryEmpty string
 
@@ -22,21 +30,61 @@ func (e errHistoryEmpty) Error() string { return string(e) }
 // The manager intentionally observes no direct RGA mutations. Use its Insert
 // and Delete methods for edits that should be undoable. A caller must Clear
 // history before compacting old structural anchors; otherwise replay fails
-// closed with ErrUndoAnchorGone.
+// closed with ErrUndoAnchorGone. The local stack is bounded: when a successful
+// edit would exceed its total retained budget, the manager discards its
+// complete local history and records that newest edit as the next undo step.
+// An individual edit larger than the configured rune budget is rejected before
+// it changes the RGA.
 type UndoManager struct {
-	mu     sync.Mutex
-	value  *RGA
-	undo   []*undoEntry
-	redo   []*undoEntry
-	owners map[Position]positionOwner
+	mu        sync.Mutex
+	value     *RGA
+	options   UndoOptions
+	undo      []*undoEntry
+	redo      []*undoEntry
+	undoRunes int
+	redoRunes int
+	owners    map[Position]positionOwner
 }
 
-// NewUndoManager creates a local history for value.
+// UndoOptions bounds one process-local text undo/redo stack. MaxRunes counts
+// Unicode scalar values retained by both stacks, rather than UTF-8 bytes, so
+// it matches text RGA offsets and position ownership.
+type UndoOptions struct {
+	MaxEntries int
+	MaxRunes   int
+}
+
+// DefaultUndoOptions returns conservative interactive-text history limits.
+// They bound local metadata only and do not replace RGA, frame, outbox, or
+// transport limits.
+func DefaultUndoOptions() UndoOptions {
+	return UndoOptions{
+		MaxEntries: 256,
+		MaxRunes:   1 << 20,
+	}
+}
+
+func (o UndoOptions) valid() bool {
+	return o.MaxEntries > 0 && o.MaxRunes > 0
+}
+
+// NewUndoManager creates a local history for value with the default bounded
+// interactive-text policy.
 func NewUndoManager(value *RGA) (*UndoManager, error) {
+	return NewUndoManagerWithOptions(value, DefaultUndoOptions())
+}
+
+// NewUndoManagerWithOptions creates a local history for value with explicit
+// local-only retention limits. It neither changes RGA wire semantics nor
+// serializes history for replication.
+func NewUndoManagerWithOptions(value *RGA, options UndoOptions) (*UndoManager, error) {
 	if value == nil || value.clock == nil {
 		return nil, ErrNilText
 	}
-	return &UndoManager{value: value, owners: make(map[Position]positionOwner)}, nil
+	if !options.valid() {
+		return nil, ErrInvalidUndoOptions
+	}
+	return &UndoManager{value: value, options: options, owners: make(map[Position]positionOwner)}, nil
 }
 
 // Insert applies one local insertion and captures it as one undo step.
@@ -44,20 +92,22 @@ func (m *UndoManager) Insert(offset int, value string) (Delta, error) {
 	if m == nil || m.value == nil {
 		return Delta{}, ErrNilText
 	}
+	if !utf8.ValidString(value) {
+		return Delta{}, ErrInvalidText
+	}
+	runes := utf8.RuneCountInString(value)
+	if runes > m.options.MaxRunes {
+		return Delta{}, ErrUndoHistoryLimit
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	predecessor, err := m.value.predecessorAt(offset)
-	if err != nil {
-		return Delta{}, err
-	}
-	delta, err := m.value.Insert(offset, value)
+	delta, predecessor, err := m.value.insertWithPredecessor(offset, value)
 	if err != nil || len(delta.nodes) == 0 {
 		return delta, err
 	}
-	entry := &undoEntry{kind: undoInsertion, predecessor: predecessor, value: value, positions: sortedDeltaPositions(delta)}
+	entry := &undoEntry{kind: undoInsertion, predecessor: predecessor, value: value, positions: sortedDeltaPositions(delta), runes: runes}
+	m.recordNewEntry(entry)
 	m.registerOwnedPositions(entry)
-	m.undo = append(m.undo, entry)
-	m.redo = nil
 	return delta, nil
 }
 
@@ -70,15 +120,11 @@ func (m *UndoManager) Delete(offset, count int) (Delta, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	predecessor, value, positions, err := m.value.visibleRange(offset, count)
-	if err != nil {
-		return Delta{}, err
-	}
-	delta, err := m.value.Delete(offset, count)
+	delta, predecessor, value, positions, err := m.value.deleteWithUndoCapture(offset, count, m.options.MaxRunes)
 	if err != nil || count == 0 {
 		return delta, err
 	}
-	entry := &undoEntry{kind: undoDeletion, predecessor: predecessor, value: value, targets: make([]undoTarget, len(positions)), positions: make([]Position, len(positions))}
+	entry := &undoEntry{kind: undoDeletion, predecessor: predecessor, value: value, targets: make([]undoTarget, len(positions)), positions: make([]Position, len(positions)), runes: len(positions)}
 	for index, position := range positions {
 		if owner, ok := m.owners[position]; ok {
 			entry.targets[index] = undoTarget{owner: owner.entry, index: owner.index}
@@ -86,8 +132,7 @@ func (m *UndoManager) Delete(offset, count int) (Delta, error) {
 		}
 		entry.targets[index] = undoTarget{external: position}
 	}
-	m.undo = append(m.undo, entry)
-	m.redo = nil
+	m.recordNewEntry(entry)
 	return delta, nil
 }
 
@@ -108,7 +153,9 @@ func (m *UndoManager) Undo() (Delta, error) {
 		return Delta{}, err
 	}
 	m.undo = m.undo[:len(m.undo)-1]
+	m.undoRunes -= entry.runes
 	m.redo = append(m.redo, entry)
+	m.redoRunes += entry.runes
 	return delta, nil
 }
 
@@ -129,7 +176,9 @@ func (m *UndoManager) Redo() (Delta, error) {
 		return Delta{}, err
 	}
 	m.redo = m.redo[:len(m.redo)-1]
+	m.redoRunes -= entry.runes
 	m.undo = append(m.undo, entry)
+	m.undoRunes += entry.runes
 	return delta, nil
 }
 
@@ -154,15 +203,23 @@ func (m *UndoManager) CanRedo() bool {
 	return len(m.redo) > 0
 }
 
+// Len returns the total number of retained local undo and redo entries.
+func (m *UndoManager) Len() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.undo) + len(m.redo)
+}
+
 // Clear discards local history. It does not mutate the shared RGA state.
 func (m *UndoManager) Clear() {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	m.undo = nil
-	m.redo = nil
-	m.owners = make(map[Position]positionOwner)
+	m.clearLocked()
 	m.mu.Unlock()
 }
 
@@ -172,6 +229,7 @@ type undoEntry struct {
 	value       string
 	positions   []Position
 	targets     []undoTarget
+	runes       int
 }
 
 type undoKind uint8
@@ -249,16 +307,7 @@ func (m *UndoManager) redoEntry(entry *undoEntry) (Delta, error) {
 }
 
 func (m *UndoManager) tombstonePositions(positions []Position) (Delta, error) {
-	delta := Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{}, len(positions))}
-	for _, position := range positions {
-		if position.Valid() {
-			delta.tombstones[position] = struct{}{}
-		}
-	}
-	if err := m.value.ApplyDelta(delta); err != nil {
-		return Delta{}, err
-	}
-	return delta, nil
+	return m.value.tombstoneRetainedPositions(positions)
 }
 
 func (m *UndoManager) replaceOwnedPosition(entry *undoEntry, index int, position Position) {
@@ -284,6 +333,39 @@ func (m *UndoManager) unregisterOwnedPositions(entry *undoEntry) {
 	}
 }
 
+// recordNewEntry installs one successful local edit. Redo is always local
+// history, so a new edit discards it. If the remaining undo stack plus this
+// entry exceeds either local cap, releasing the complete history is safer than
+// evicting a single entry whose position ownership may still be referenced by
+// a later deletion entry.
+func (m *UndoManager) recordNewEntry(entry *undoEntry) {
+	if len(m.undo) >= m.options.MaxEntries || m.undoRunes > m.options.MaxRunes-entry.runes {
+		m.clearLocked()
+	} else {
+		m.discardRedoLocked()
+	}
+	m.undo = append(m.undo, entry)
+	m.undoRunes += entry.runes
+}
+
+func (m *UndoManager) discardRedoLocked() {
+	for _, entry := range m.redo {
+		if entry.kind == undoInsertion {
+			m.unregisterOwnedPositions(entry)
+		}
+	}
+	m.redo = nil
+	m.redoRunes = 0
+}
+
+func (m *UndoManager) clearLocked() {
+	m.undo = nil
+	m.redo = nil
+	m.undoRunes = 0
+	m.redoRunes = 0
+	m.owners = make(map[Position]positionOwner)
+}
+
 func sortedDeltaPositions(delta Delta) []Position {
 	positions := make([]Position, 0, len(delta.nodes))
 	for position := range delta.nodes {
@@ -293,29 +375,21 @@ func sortedDeltaPositions(delta Delta) []Position {
 	return positions
 }
 
-func (r *RGA) predecessorAt(offset int) (Position, error) {
-	if r == nil {
-		return Position{}, ErrNilText
+// deleteWithUndoCapture captures and applies the exact deletion delta in one
+// local operation. It prevents a concurrent remote delta from changing the
+// offsets between history capture and local mutation. maxRunes is checked
+// before allocating the captured text and positions.
+func (r *RGA) deleteWithUndoCapture(offset, count, maxRunes int) (Delta, Position, string, []Position, error) {
+	if r == nil || r.clock == nil {
+		return Delta{}, Position{}, "", nil, ErrNilText
+	}
+	if maxRunes <= 0 || count > maxRunes {
+		return Delta{}, Position{}, "", nil, ErrUndoHistoryLimit
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if offset < 0 || offset > visibleCount(r.sequence.root) {
-		return Position{}, ErrRange
-	}
-	if predecessor, ok := r.sequence.visibleAt(offset - 1); ok {
-		return predecessor, nil
-	}
-	return Position{}, nil
-}
-
-func (r *RGA) visibleRange(offset, count int) (Position, string, []Position, error) {
-	if r == nil {
-		return Position{}, "", nil, ErrNilText
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
 	if offset < 0 || count < 0 || offset > visibleCount(r.sequence.root) || count > visibleCount(r.sequence.root)-offset {
-		return Position{}, "", nil, ErrRange
+		r.mu.RUnlock()
+		return Delta{}, Position{}, "", nil, ErrRange
 	}
 	predecessor, _ := r.sequence.visibleAt(offset - 1)
 	runes := make([]rune, 0, count)
@@ -323,10 +397,19 @@ func (r *RGA) visibleRange(offset, count int) (Position, string, []Position, err
 	for index := 0; index < count; index++ {
 		position, ok := r.sequence.visibleAt(offset + index)
 		if !ok {
-			return Position{}, "", nil, ErrRange
+			r.mu.RUnlock()
+			return Delta{}, Position{}, "", nil, ErrRange
 		}
 		runes = append(runes, r.nodes[position].rune)
 		positions = append(positions, position)
 	}
-	return predecessor, string(runes), positions, nil
+	r.mu.RUnlock()
+	delta := Delta{nodes: make(map[Position]node), tombstones: make(map[Position]struct{}, len(positions))}
+	for _, position := range positions {
+		delta.tombstones[position] = struct{}{}
+	}
+	if err := r.ApplyDelta(delta); err != nil {
+		return Delta{}, Position{}, "", nil, err
+	}
+	return delta, predecessor, string(runes), positions, nil
 }
