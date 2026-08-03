@@ -41,11 +41,7 @@ func merkleLeafForEvent(event Event) (MerkleLeaf, error) {
 }
 
 func merkleLeafBytes(leaf MerkleLeaf) uint64 {
-	tagBytes := frame.TagSize(leaf.HLC)
-	if tagBytes < 0 {
-		return 0
-	}
-	return uint64(tagBytes) + sha256.Size
+	return merkleUint64(frame.TagSize(leaf.HLC)) + sha256.Size
 }
 
 // maxMerkleEventOverhead reserves the largest v3-only envelope portion before
@@ -53,10 +49,14 @@ func merkleLeafBytes(leaf MerkleLeaf) uint64 {
 // later HLC/Merkle replay cannot contain a valid v1 change that exceeds the
 // receiver's negotiated whole-message bound after its relay HLC is attached.
 func maxMerkleEventOverhead(maxReplicaBytes int) int {
-	if maxReplicaBytes <= 0 || maxReplicaBytes > frame.DefaultLimits().MaxStringBytes {
+	return 1 + frame.UvarintSize(^uint64(0)) + frame.UvarintSize(merkleUint64(maxReplicaBytes)) + maxReplicaBytes + 2*frame.UvarintSize(^uint64(0))
+}
+
+func merkleUint64(value int) uint64 {
+	if value < 0 {
 		return 0
 	}
-	return 1 + frame.UvarintSize(^uint64(0)) + frame.UvarintSize(uint64(maxReplicaBytes)) + maxReplicaBytes + 2*frame.UvarintSize(^uint64(0))
+	return uint64(uint(value))
 }
 
 func validMerkleHLC(tag crdt.Tag, maxReplicaBytes int) bool {
@@ -108,12 +108,11 @@ func validateMerkleIdentityRequest(identities []crdt.Tag, maxLeaves, maxBytes ui
 	var usedBytes uint64
 	var previous crdt.Tag
 	for index, identity := range identities {
-		tagBytes := frame.TagSize(identity)
-		if tagBytes < 0 {
+		if !validMerkleHLC(identity, maxReplicaBytes) {
 			return errInvalidWire
 		}
-		identityBytes := uint64(tagBytes)
-		if !validMerkleHLC(identity, maxReplicaBytes) || (index > 0 && previous.Compare(identity) >= 0) || identityBytes > maxBytes-usedBytes {
+		identityBytes := merkleUint64(frame.TagSize(identity))
+		if (index > 0 && previous.Compare(identity) >= 0) || identityBytes > maxBytes-usedBytes {
 			return errInvalidWire
 		}
 		usedBytes += identityBytes

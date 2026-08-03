@@ -254,6 +254,13 @@ func mustMerkleLeaf(t *testing.T, event Event) MerkleLeaf {
 }
 
 func TestMerkleInternalValidation(t *testing.T) {
+	if got := merkleUint64(-1); got != 0 {
+		t.Fatalf("merkleUint64(-1) = %d, want 0", got)
+	}
+	if got := merkleUint64(7); got != 7 {
+		t.Fatalf("merkleUint64(7) = %d, want 7", got)
+	}
+
 	identity := crdt.Tag{ReplicaID: "relay", WallTime: 1}
 	if !validMerkleHLC(identity, 128) || validMerkleHLC(crdt.Tag{ReplicaID: " "}, 128) {
 		t.Fatal("unexpected HLC validity")
