@@ -3,7 +3,7 @@ package config
 import (
 	"strconv"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 // RequiredInt parses a required integer in the inclusive range [min, max].

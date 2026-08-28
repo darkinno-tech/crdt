@@ -4,8 +4,8 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/text"
 )
 
 // TombstoneTags returns every retained text or attribute-removal tombstone in

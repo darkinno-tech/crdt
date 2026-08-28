@@ -8,8 +8,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/DarkInno/crdt/register"
-	"github.com/DarkInno/crdt/set"
+	"github.com/im10furry/crdt/register"
+	"github.com/im10furry/crdt/set"
 )
 
 type stringCodec struct{}

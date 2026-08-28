@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
 )
 
 func TestLWWConvergesAndCopies(t *testing.T) {

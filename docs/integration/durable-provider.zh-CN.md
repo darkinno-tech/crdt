@@ -7,7 +7,7 @@
 按需安装该模块：
 
 ```sh
-go get github.com/DarkInno/crdt/durable@latest
+go get github.com/im10furry/crdt/durable@latest
 ```
 
 ## 传输保证

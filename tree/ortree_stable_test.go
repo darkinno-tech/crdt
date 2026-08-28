@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/replica"
-	"github.com/DarkInno/crdt/tombstonegc"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/replica"
+	"github.com/im10furry/crdt/tombstonegc"
 )
 
 func TestStableFrameTypeUsesObservedRemoveTreeV1(t *testing.T) {

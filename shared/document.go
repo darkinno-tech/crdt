@@ -11,10 +11,10 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	"github.com/DarkInno/crdt/documenttree"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	"github.com/im10furry/crdt/documenttree"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 var (

@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 type lwwVectorFile struct {

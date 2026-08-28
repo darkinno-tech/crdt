@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 // MarshalJSON returns a payload-free diagnostic summary.

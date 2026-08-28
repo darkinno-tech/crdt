@@ -3,8 +3,8 @@ package text
 import (
 	"fmt"
 
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 // ExampleRGA_ApplyDelta shows a bounded RGA delivery. RGA frames are

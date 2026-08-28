@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"testing"
 
-	frame "github.com/DarkInno/crdt/encoding"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 func TestRGAObfuscatedStatePreservesStructureWithoutMutatingSource(t *testing.T) {

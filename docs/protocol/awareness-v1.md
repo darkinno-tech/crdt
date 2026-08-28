@@ -127,7 +127,7 @@ instead of guessing a visible offset.
 
 ## Non-goals
 
-- Yjs awareness wire compatibility. DarkInno uses authenticated Go provider
+- Yjs awareness wire compatibility. im10furry uses authenticated Go provider
   envelopes and stable `text.Anchor` positions; translating between protocols
   belongs in an application gateway with a separately reviewed identity model.
 - Durable last-seen history, audit logs, or membership. Those require their

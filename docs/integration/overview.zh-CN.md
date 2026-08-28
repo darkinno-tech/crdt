@@ -198,7 +198,7 @@ LWW-Set 与 LWW-Map 仅能通过精确确认协调器回收；证明完成前仍
 
 `attachment.Register` 是 LWW-Map 帧面向图片、音频、视频和任意数据引用的稳定、受 schema
 限制的用法。每个附件复制组都要单独建立 Manifest：状态/增量 ID 为 9/10，schema ID 为
-`github.com/DarkInno/crdt/attachment-reference/v1`，codec ID 为空，语义版本使用
+`github.com/im10furry/crdt/attachment-reference/v1`，codec ID 为空，语义版本使用
 `attachment.SemanticsVersion`。不得用同一个 Manifest 承载 RGA 文本：一个 Manifest 只能绑定一种
 具体 CRDT 协议。
 

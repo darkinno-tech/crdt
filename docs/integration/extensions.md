@@ -3,7 +3,7 @@
 [English](extensions.md) | [简体中文](extensions.zh-CN.md)
 
 `extensions` is an official, manifest-bound live-relay reference in the
-opt-in `github.com/DarkInno/crdt/extensions` module. Its zero feature set exposes no endpoint,
+opt-in `github.com/im10furry/crdt/extensions` module. Its zero feature set exposes no endpoint,
 does not call authentication, and starts no listener or background work.
 
 It lowers the first integration step to an application-owned mux plus one

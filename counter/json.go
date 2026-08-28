@@ -1,6 +1,6 @@
 package counter
 
-import "github.com/DarkInno/crdt"
+import "github.com/im10furry/crdt"
 
 // MarshalJSON returns a diagnostic summary for structured logs. It omits
 // per-replica components and cannot be used to restore counter state.

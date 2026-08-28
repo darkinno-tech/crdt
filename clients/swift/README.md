@@ -1,4 +1,4 @@
-# DarkInno Swift CRDT client
+# im10furry Swift CRDT client
 
 `CRDTRGA.RGA` is a Swift wrapper around the bounded Rust `rga-run-v2` runtime.
 Pass the same manifest-supplied `RGALimits` to initial construction and

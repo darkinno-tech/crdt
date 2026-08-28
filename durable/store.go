@@ -14,11 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/merkle"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/merkle"
+	"github.com/im10furry/crdt/replica"
 	bolt "go.etcd.io/bbolt"
 )
 

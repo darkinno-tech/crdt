@@ -27,7 +27,7 @@ handler 接受标准 `y-websocket` 二进制消息：
 当一个文档明确选择 Yjs 作为协作契约时，浏览器直接使用标准 Yjs client 和对应编辑器绑定即可，
 不需要 Go/Wasm runtime、frame decoder 或 `replica.Manifest`。可以直接使用维护中的上游
 binding，也可以使用可选的原生
-[`@darkinno/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md)；后者仍直接处理
+[`@im10furry/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md)；后者仍直接处理
 Yjs update 与 y-protocols awareness，并不混入本仓库的 Go 或 `native-ts-v1` 协议。
 
 ```ts

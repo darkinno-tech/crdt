@@ -16,9 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/telemetry"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/telemetry"
 	"github.com/coder/websocket"
 )
 

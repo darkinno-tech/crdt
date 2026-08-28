@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 type failingStore struct {

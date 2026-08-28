@@ -1,8 +1,8 @@
 package documenttree
 
 import (
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 // The v1 identifiers remain permanently reserved. They are intentionally not

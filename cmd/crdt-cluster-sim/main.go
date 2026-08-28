@@ -22,8 +22,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/text"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/text"
 )
 
 const (

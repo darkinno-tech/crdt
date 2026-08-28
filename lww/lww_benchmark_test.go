@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 func BenchmarkMapMergeTenThousandKeys(b *testing.B) {

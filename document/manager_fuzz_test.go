@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/DarkInno/crdt/list"
+	"github.com/im10furry/crdt/list"
 )
 
 // FuzzDocManagerMultiReplicaMoveModel generates independent local list models

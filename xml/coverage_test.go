@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DarkInno/crdt/list"
+	"github.com/im10furry/crdt/list"
 )
 
 func TestFragmentPublicLifecycleWireAndRecovery(t *testing.T) {

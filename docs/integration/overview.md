@@ -234,7 +234,7 @@ tombstones until that proof is complete.
 `attachment.Register` is a stable, schema-constrained use of the LWW-Map
 frames for image, audio, video, and arbitrary data references. Create one
 separate manifest per attachment group with state/delta IDs 9/10, schema ID
-`github.com/DarkInno/crdt/attachment-reference/v1`, an empty codec ID, and
+`github.com/im10furry/crdt/attachment-reference/v1`, an empty codec ID, and
 `attachment.SemanticsVersion`. Do not use the same manifest for RGA text: one
 manifest binds exactly one concrete CRDT protocol.
 

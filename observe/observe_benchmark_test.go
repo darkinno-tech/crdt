@@ -3,8 +3,8 @@ package observe_test
 import (
 	"testing"
 
-	"github.com/DarkInno/crdt/counter"
-	"github.com/DarkInno/crdt/observe"
+	"github.com/im10furry/crdt/counter"
+	"github.com/im10furry/crdt/observe"
 )
 
 func BenchmarkGCounterBinding(b *testing.B) {

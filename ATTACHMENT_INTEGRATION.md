@@ -34,7 +34,7 @@ One attachment group must have an authenticated `replica.Manifest` with:
 | Manifest field | Required value |
 | --- | --- |
 | `StateID` / `DeltaID` | `crdt.TypeIDLWWMapState` / `crdt.TypeIDLWWMapDelta` |
-| `SchemaID` | `github.com/DarkInno/crdt/attachment-reference/v1` |
+| `SchemaID` | `github.com/im10furry/crdt/attachment-reference/v1` |
 | `CodecID` | empty string |
 | `SemanticsVersion` | `attachment.SemanticsVersion` |
 | policy | zero-value `crdt.ProtocolPolicy` |

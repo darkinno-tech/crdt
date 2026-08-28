@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/DarkInno/crdt/list"
+	"github.com/im10furry/crdt/list"
 )
 
 type stringCodec struct{}

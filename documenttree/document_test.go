@@ -6,11 +6,11 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/replica"
-	"github.com/DarkInno/crdt/snapshot"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/replica"
+	"github.com/im10furry/crdt/snapshot"
 )
 
 func TestDocumentTreeNestedMapArrayConvergesAcrossDuplicateReorderedFrames(t *testing.T) {

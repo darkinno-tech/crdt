@@ -87,7 +87,7 @@ http.Handle("/crdt", handler)
 示例中的导入路径为：
 
 ```go
-import provider "github.com/DarkInno/crdt/examples/websocket-provider/provider"
+import provider "github.com/im10furry/crdt/examples/websocket-provider/provider"
 ```
 
 该参考实现将 `github.com/coder/websocket` 固定在仓库模块中。v1.8.13 pin 保持了仓库

@@ -1,6 +1,6 @@
-# DarkInno native Rust CRDT runtime
+# im10furry native Rust CRDT runtime
 
-`darkinno-crdt-rga` is the bounded native implementation of two stable Go-wire
+`im10furry-crdt-rga` is the bounded native implementation of two stable Go-wire
 protocols: [`rga-run-v2`](../../docs/protocol/rga-run-v2.md) TypeIDs `19/20`
 (semantic version `2`) and [`lww-map-v1`](../../docs/protocol/lww-v1.md)
 TypeIDs `9/10` (semantic version `1`). Each is independently negotiated.
@@ -27,7 +27,7 @@ It is deliberately not compatible with TypeScript's separately negotiated
 ## Local API
 
 ```rust
-use darkinno_crdt_rga::{Limits, Rga};
+use im10furry_crdt_rga::{Limits, Rga};
 
 let mut alice = Rga::new("alice-device-7", Limits::default())?;
 let outgoing_delta = alice.insert(0, "Draft")?; // already applied locally
@@ -35,7 +35,7 @@ let outgoing_delta = alice.insert(0, "Draft")?; // already applied locally
 let mut bob = Rga::new("bob-device-4", Limits::default())?;
 bob.apply_frame(&outgoing_delta)?;
 assert_eq!(bob.text(), "Draft");
-# Ok::<(), darkinno_crdt_rga::Error>(())
+# Ok::<(), im10furry_crdt_rga::Error>(())
 ```
 
 `insert` and `delete` use Unicode-scalar offsets and return the exact

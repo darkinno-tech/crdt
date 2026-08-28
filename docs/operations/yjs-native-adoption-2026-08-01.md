@@ -52,7 +52,7 @@ const provider = new WebsocketProvider("wss://collab.example/yjs", "notes", docu
 ```
 
 This remains a native Yjs document. For CodeMirror plain text, the optional
-[`@darkinno/crdt-client/yjs` binding](../integration/yjs-native-editor-bindings.md)
+[`@im10furry/crdt-client/yjs` binding](../integration/yjs-native-editor-bindings.md)
 adds bounded incremental projection without introducing Go frames, Go/Wasm, or
 `native-ts-v1`; other editors can use their maintained Yjs binding directly.
 The first production requirement is a same-origin Secure, HttpOnly session

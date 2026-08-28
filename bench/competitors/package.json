@@ -1,5 +1,5 @@
 {
-  "name": "@darkinno/crdt-competitor-benchmarks",
+  "name": "@im10furry/crdt-competitor-benchmarks",
   "private": true,
   "type": "module",
   "description": "Pinned, reproducible external CRDT comparison workloads",

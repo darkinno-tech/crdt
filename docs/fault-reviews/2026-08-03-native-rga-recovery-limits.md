@@ -52,7 +52,7 @@
 
 RGA C ABI 缺少带限制的时钟恢复构造；原有恢复函数在 `clients/rust/src/ffi.rs` 中固定使用 `Limits::default()`。因此各语言包装层不能把经过认证的资源策略传入恢复实例。
 
-**相关代码位置**：`clients/rust/src/ffi.rs:226-304`、`clients/python/crdt_rga/__init__.py:141-279`、`clients/swift/Sources/CRDTRGA/CRDTRGA.swift:33-182`、`clients/cpp/include/darkinno/crdt_rga.hpp:63-171`
+**相关代码位置**：`clients/rust/src/ffi.rs:226-304`、`clients/python/crdt_rga/__init__.py:141-279`、`clients/swift/Sources/CRDTRGA/CRDTRGA.swift:33-182`、`clients/cpp/include/im10furry/crdt_rga.hpp:63-171`
 
 ### 3.3 根本原因
 
@@ -78,7 +78,7 @@ RGA C ABI 缺少带限制的时钟恢复构造；原有恢复函数在 `clients/
 - `clients/rust/include/crdt_rga.h`
 - `clients/python/crdt_rga/__init__.py`
 - `clients/swift/Sources/CRDTRGA/CRDTRGA.swift`
-- `clients/cpp/include/darkinno/crdt_rga.hpp`
+- `clients/cpp/include/im10furry/crdt_rga.hpp`
 
 **验证代码位置**：`clients/python/tests/test_rga.py:55-72`、`clients/swift/Sources/CRDTRGAConformance/main.swift:32-51`、`clients/cpp/tests/conformance.cpp:94-125`
 

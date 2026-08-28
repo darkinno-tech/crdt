@@ -31,7 +31,7 @@ go test ./examples/attachment-collaboration
 | Manifest 字段 | 必需值 |
 | --- | --- |
 | `StateID` / `DeltaID` | `crdt.TypeIDLWWMapState` / `crdt.TypeIDLWWMapDelta` |
-| `SchemaID` | `github.com/DarkInno/crdt/attachment-reference/v1` |
+| `SchemaID` | `github.com/im10furry/crdt/attachment-reference/v1` |
 | `CodecID` | 空字符串 |
 | `SemanticsVersion` | `attachment.SemanticsVersion` |
 | policy | 零值 `crdt.ProtocolPolicy` |

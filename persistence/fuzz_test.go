@@ -3,7 +3,7 @@ package persistence
 import (
 	"testing"
 
-	"github.com/DarkInno/crdt/snapshot"
+	"github.com/im10furry/crdt/snapshot"
 )
 
 func FuzzUnmarshalCheckpoint(f *testing.F) {

@@ -3,7 +3,7 @@ package replica
 import (
 	"testing"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 // BenchmarkNewManifestRegistryValidation measures the pre-I/O admission check

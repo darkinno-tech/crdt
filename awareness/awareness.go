@@ -20,7 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	frame "github.com/DarkInno/crdt/encoding"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 var (

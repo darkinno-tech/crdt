@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt/text"
 )
 
 func BenchmarkDocumentAnchorRange(b *testing.B) {

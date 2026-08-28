@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt/text"
 )
 
 func TestFormatAnchoredTracksRelativeBoundaries(t *testing.T) {

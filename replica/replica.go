@@ -17,9 +17,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 var (

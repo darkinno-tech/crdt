@@ -15,12 +15,12 @@ import (
 	"strconv"
 	"syscall/js"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	frame "github.com/DarkInno/crdt/encoding"
-	clientwasm "github.com/DarkInno/crdt/internal/wasm"
-	"github.com/DarkInno/crdt/richtext"
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	frame "github.com/im10furry/crdt/encoding"
+	clientwasm "github.com/im10furry/crdt/internal/wasm"
+	"github.com/im10furry/crdt/richtext"
+	"github.com/im10furry/crdt/text"
 )
 
 const runtimeGlobalName = "__darkinnoCRDTRGA"

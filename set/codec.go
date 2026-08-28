@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/DarkInno/crdt/internal/codecguard"
+	"github.com/im10furry/crdt/internal/codecguard"
 )
 
 // boundElementCodec is a validated codec and its stable wire identifier.

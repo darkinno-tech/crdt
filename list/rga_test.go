@@ -8,8 +8,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 type stringCodec struct{}

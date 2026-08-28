@@ -26,7 +26,7 @@ The authenticated `replica.Manifest` for this adapter must use:
 state TypeID:      23
 delta TypeID:      24
 semantics version: 1
-schema ID:         darkinno:tiptap-core-richtext-v1
+schema ID:         im10furry:tiptap-core-richtext-v1
 ```
 
 It must not share a group, state frame, outbox, or log with raw RGA, Quill, or BlockNote schemas. A reader that has not negotiated this exact schema must reject its `rt.*` values before rendering.

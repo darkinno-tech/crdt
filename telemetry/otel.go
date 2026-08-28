@@ -6,11 +6,11 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 const (
-	openTelemetryMeterName           = "github.com/DarkInno/crdt/telemetry"
+	openTelemetryMeterName           = "github.com/im10furry/crdt/telemetry"
 	openTelemetryEventsMetricName    = "crdt.telemetry.events"
 	openTelemetryDurationMetricName  = "crdt.telemetry.duration"
 	openTelemetryDroppedMetricName   = "crdt.telemetry.dropped"

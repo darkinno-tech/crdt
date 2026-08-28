@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/set"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/set"
 )
 
 func BenchmarkCoordinatorStableTombstones(b *testing.B) {

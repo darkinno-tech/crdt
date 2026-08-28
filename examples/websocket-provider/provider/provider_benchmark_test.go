@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DarkInno/crdt/awareness"
-	"github.com/DarkInno/crdt/counter"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt/awareness"
+	"github.com/im10furry/crdt/counter"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/replica"
 )
 
 // BenchmarkGroupReceiveInstalledDuplicateParallel measures the bounded relay

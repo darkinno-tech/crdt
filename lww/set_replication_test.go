@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/lww"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/lww"
+	"github.com/im10furry/crdt/replica"
 )
 
 type replicatedStringCodec struct{}

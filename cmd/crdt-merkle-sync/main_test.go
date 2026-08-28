@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/counter"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/counter"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 func TestSynchronizeMergesDivergentAndMissingGCounterStates(t *testing.T) {

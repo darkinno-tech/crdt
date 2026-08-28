@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 func TestCoordinatorInstallsAuthoritativeMembershipEpoch(t *testing.T) {

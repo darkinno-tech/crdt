@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/set"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/set"
 )
 
 const receiptDomain = "darkinno/crdt/tombstone-receipt/v1"

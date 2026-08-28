@@ -5,13 +5,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DarkInno/crdt/counter"
-	"github.com/DarkInno/crdt/delta"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/merkle"
-	"github.com/DarkInno/crdt/set"
-	"github.com/DarkInno/crdt/snapshot"
-	"github.com/DarkInno/crdt/tombstonegc"
+	"github.com/im10furry/crdt/counter"
+	"github.com/im10furry/crdt/delta"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/merkle"
+	"github.com/im10furry/crdt/set"
+	"github.com/im10furry/crdt/snapshot"
+	"github.com/im10furry/crdt/tombstonegc"
 )
 
 type integrationStringCodec struct{}

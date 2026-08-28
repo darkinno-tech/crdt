@@ -1,6 +1,6 @@
 package set
 
-import "github.com/DarkInno/crdt"
+import "github.com/im10furry/crdt"
 
 // MarshalJSON returns a diagnostic summary for structured logs. It omits set
 // elements, tags, clock state, and codec data, and cannot restore the set.

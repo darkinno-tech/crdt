@@ -11,7 +11,7 @@
 Requires Go 1.21 or later.
 
 ```sh
-go get github.com/DarkInno/crdt@latest
+go get github.com/im10furry/crdt@latest
 ```
 
 ```go
@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/DarkInno/crdt/counter"
+	"github.com/im10furry/crdt/counter"
 )
 
 func main() {
@@ -50,7 +50,7 @@ func main() {
 For a checkout:
 
 ```sh
-git clone https://github.com/DarkInno/crdt.git
+git clone https://github.com/im10furry/crdt.git
 cd crdt
 make test
 ```
@@ -111,24 +111,24 @@ The `durable` package intentionally persists a relay operation log and replay cu
 
 ## Modules and dependencies
 
-The published root module, `github.com/DarkInno/crdt`, has no non-standard-library module dependencies. Durable storage, transports, and database backends are independently versioned opt-in modules, so a core-only consumer does not resolve their dependency graphs.
+The published root module, `github.com/im10furry/crdt`, has no non-standard-library module dependencies. Durable storage, transports, and database backends are independently versioned opt-in modules, so a core-only consumer does not resolve their dependency graphs.
 
 | Module | Opt-in capability |
 | --- | --- |
-| `github.com/DarkInno/crdt/durable` | bbolt durable relay and WebSocket reconnect client. |
-| `github.com/DarkInno/crdt/persistence` | bbolt and file checkpoint Stores. |
-| `github.com/DarkInno/crdt/telemetry` | Bounded telemetry and opt-in OpenTelemetry metrics adapter. |
-| `github.com/DarkInno/crdt/extensions` | WebSocket, HTTP/SSE, gRPC, and Yjs relay references. |
-| `github.com/DarkInno/crdt/providers/{redis,postgres,mysql,mssql,sqlite,webrtc}` | Durable-log and DataChannel backends. |
-| `github.com/DarkInno/crdt/examples` | Runnable examples, including WebSocket references. |
+| `github.com/im10furry/crdt/durable` | bbolt durable relay and WebSocket reconnect client. |
+| `github.com/im10furry/crdt/persistence` | bbolt and file checkpoint Stores. |
+| `github.com/im10furry/crdt/telemetry` | Bounded telemetry and opt-in OpenTelemetry metrics adapter. |
+| `github.com/im10furry/crdt/extensions` | WebSocket, HTTP/SSE, gRPC, and Yjs relay references. |
+| `github.com/im10furry/crdt/providers/{redis,postgres,mysql,mssql,sqlite,webrtc}` | Durable-log and DataChannel backends. |
+| `github.com/im10furry/crdt/examples` | Runnable examples, including WebSocket references. |
 
 For example, an application choosing MySQL installs only the core, durable
 contract, and MySQL provider modules (plus its own selected driver):
 
 ```sh
-go get github.com/DarkInno/crdt@latest
-go get github.com/DarkInno/crdt/durable@latest
-go get github.com/DarkInno/crdt/providers/mysql@latest
+go get github.com/im10furry/crdt@latest
+go get github.com/im10furry/crdt/durable@latest
+go get github.com/im10furry/crdt/providers/mysql@latest
 ```
 
 ## Package map
@@ -140,11 +140,11 @@ go get github.com/DarkInno/crdt/providers/mysql@latest
 | `lww`, `tree`, `text`, `list`, `xml`, `richtext`, `documenttree` | HLC-backed and ordered collaborative structures. |
 | `encoding`, `delta`, `snapshot`, `clock` | Framing, bounded batches, snapshots, and HLC state. |
 | `replica`, `membership`, `tombstonegc`, `merkle` | Delivery continuity, membership, safe GC coordination, and anti-entropy. |
-| `github.com/DarkInno/crdt/persistence` | Opt-in local bounded bbolt and file CRDT checkpoint Store references. |
+| `github.com/im10furry/crdt/persistence` | Opt-in local bounded bbolt and file CRDT checkpoint Store references. |
 | `history` | Local multi-scope undo/redo command stack and content-addressed snapshot version DAG. |
 | `config` | Explicit layered host configuration. |
-| `github.com/DarkInno/crdt/telemetry` | Opt-in bounded payload-free operational telemetry and OpenTelemetry adapter. |
-| `github.com/DarkInno/crdt/durable`, `github.com/DarkInno/crdt/extensions`, `awareness`, `observe` | Opt-in durable relay and live relay; core ephemeral presence and process-local observation. |
+| `github.com/im10furry/crdt/telemetry` | Opt-in bounded payload-free operational telemetry and OpenTelemetry adapter. |
+| `github.com/im10furry/crdt/durable`, `github.com/im10furry/crdt/extensions`, `awareness`, `observe` | Opt-in durable relay and live relay; core ephemeral presence and process-local observation. |
 | `attachment` | Immutable media-reference metadata; never raw media bytes. |
 
 ## Verify and measure

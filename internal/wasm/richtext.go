@@ -5,12 +5,12 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/richtext"
-	"github.com/DarkInno/crdt/snapshot"
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/richtext"
+	"github.com/im10furry/crdt/snapshot"
+	"github.com/im10furry/crdt/text"
 )
 
 const (

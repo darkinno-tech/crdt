@@ -4,9 +4,9 @@ import (
 	"crypto/sha256"
 	"sync"
 
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/merkle"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/merkle"
 )
 
 // MerkleIndex is a small in-process helper for an application's durable event

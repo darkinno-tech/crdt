@@ -1,6 +1,6 @@
 # 本地 checkpoint Store 参考实现
 
-`persistence` 是按需模块 `github.com/DarkInno/crdt/persistence` 中的本地 CRDT 恢复边界参考实现。其 `Store` 契约将完整
+`persistence` 是按需模块 `github.com/im10furry/crdt/persistence` 中的本地 CRDT 恢复边界参考实现。其 `Store` 契约将完整
 `snapshot.Snapshot`、该状态对应的 durable-relay 游标，以及应用自有的不透明 outbox
 作为一个持久化边界保存。`BoltStore` 使用 bbolt 事务，`FileStore` 使用私有文件原子替换。
 它补齐 CRDT 状态对象与 [`durable`](durable-provider.zh-CN.md) relay 之间的本地检查点，

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 	redisclient "github.com/redis/go-redis/v9"
 )
 

@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt/replica"
 )
 
 const manifestDomain = "darkinno/crdt/membership-manifest/v1"

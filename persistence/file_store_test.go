@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/set"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/set"
 )
 
 func TestFileStorePersistsHLCCheckpointAcrossRestart(t *testing.T) {

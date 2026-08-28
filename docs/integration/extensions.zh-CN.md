@@ -2,7 +2,7 @@
 
 [English](extensions.md) | [简体中文](extensions.zh-CN.md)
 
-`extensions` 是按需模块 `github.com/DarkInno/crdt/extensions` 中、与 Manifest 绑定的 live relay 官方参考实现。它
+`extensions` 是按需模块 `github.com/im10furry/crdt/extensions` 中、与 Manifest 绑定的 live relay 官方参考实现。它
 必须显式开启：零值 feature 不暴露任何端点、不调用认证，也不启动 listener 或后台任务。
 
 接入只需将 handler 挂载到应用自己拥有的 mux，并开启需要的 feature：

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	frame "github.com/DarkInno/crdt/encoding"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 func TestBinaryMutationHelpersPreflightAndReplicate(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DarkInno/crdt/tombstonegc"
+	"github.com/im10furry/crdt/tombstonegc"
 )
 
 // TestLWWMapThreeReplicaUnreliableDeliveryAndRecovery exercises the public

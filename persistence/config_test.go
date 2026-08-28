@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	configuration "github.com/DarkInno/crdt/config"
+	configuration "github.com/im10furry/crdt/config"
 )
 
 func TestConfigFromLoaderBuildsNormalizedConfiguration(t *testing.T) {

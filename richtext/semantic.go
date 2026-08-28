@@ -7,14 +7,14 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/text"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/text"
 )
 
 const (
 	// SemanticSchemaID identifies the optional, application-negotiated schema
 	// implemented by this adapter. It does not alter rich-text v1 framing.
-	SemanticSchemaID = "github.com/DarkInno/crdt/richtext/semantic/v1"
+	SemanticSchemaID = "github.com/im10furry/crdt/richtext/semantic/v1"
 
 	// ObjectReplacementCharacter occupies exactly one RGA position for an
 	// embedded application object. Renderers must not treat its JSON as markup.

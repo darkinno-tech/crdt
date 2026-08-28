@@ -1,6 +1,6 @@
 # RGA formal model
 
-This Lean 4 project is the first formal-verification boundary for DarkInno
+This Lean 4 project is the first formal-verification boundary for im10furry
 RGA. Its toolchain is pinned in `lean-toolchain`; it has no third-party theorem
 libraries, so a proof check is reproducible with only `elan`/`lake`.
 

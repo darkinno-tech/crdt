@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 type profileOutput struct {

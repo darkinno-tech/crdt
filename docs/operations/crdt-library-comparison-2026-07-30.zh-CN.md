@@ -1,6 +1,6 @@
 # CRDT 同类库文本基线对比 — 2026-07-30
 
-本报告补齐的是一个严格限定的对比缺口，而不是“谁绝对更快”的宣传：DarkInno 使用 Go，
+本报告补齐的是一个严格限定的对比缺口，而不是“谁绝对更快”的宣传：im10furry 使用 Go，
 Yjs 使用 JavaScript，二者 wire format 不兼容，文本存储模型也刻意采用不同权衡。
 
 ## 工作负载契约
@@ -12,7 +12,7 @@ Yjs 使用 JavaScript，二者 wire format 不兼容，文本存储模型也刻�
 
 | 一侧 | 实现 | 协议 / API |
 | --- | --- | --- |
-| DarkInno | Go `text.RGA` | run-v2 `InsertRunBinaryWithLimits`、decode、`ApplyDelta` |
+| im10furry | Go `text.RGA` | run-v2 `InsertRunBinaryWithLimits`、decode、`ApplyDelta` |
 | 对照 | `yjs@13.6.31` | `Y.Text.insert`、`encodeStateAsUpdate`、`applyUpdate` |
 
 这只是**无冲突初始同步**基线，不含 WebSocket/WAN、TLS、存储、认证、重连、GC 策略、
@@ -25,15 +25,15 @@ Yjs 使用 JavaScript，二者 wire format 不兼容，文本存储模型也刻�
 `v26.5.0`；harness revision `8cc25755dc5dbc4163c7c68eb2de80075f5d29bf`。Yjs 依赖由
 [`bench/competitors/package-lock.json`](../../bench/competitors/package-lock.json) 固定。
 
-| Runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
+| Runes | im10furry median ms/op | Yjs median ms/op | im10furry update/state bytes | Yjs update/state bytes |
 | ---: | ---: | ---: | ---: | ---: |
 | 4,096 | 6.076 | 0.117 | 36,774 / 36,774 | 4,113 / 4,113 |
 | 16,384 | 25.650 | 0.079 | 147,367 / 147,367 | 16,403 / 16,403 |
 
-字节数只对这个“协议互不兼容但工作负载一致”的场景有效：DarkInno 稳定的每 Unicode
+字节数只对这个“协议互不兼容但工作负载一致”的场景有效：im10furry 稳定的每 Unicode
 scalar RGA identity，相比 Yjs 紧凑的单字符串初始 update，约多九倍字节。时间数据可
 作为各自 runtime 的回归基线，不能作为跨语言容量排名。特别是 Yjs 能紧凑表达这一条
-连续插入；DarkInno 则保留独立 position，以兑现删除、乱序投递、anchor 和未来并发插入
+连续插入；im10furry 则保留独立 position，以兑现删除、乱序投递、anchor 和未来并发插入
 的 RGA 语义。
 
 这是设计权衡，而不是缺陷。经单独协商的 outer frame v2 可以为大粘贴和快照压缩 run-v2
@@ -49,10 +49,10 @@ payload 中重复的字段，但仍保留每个 scalar 可独立寻址的 HLC ta
 相同的 ASCII base text；两个 writer 收到该 base 后，独立把中间同一 scalar 替换为 `A` 或
 `B`，随后各自重复接收对方 update 两次。第三个起始为空的 observer 先收到 right update
 两次、再收到 left update 两次，最后才收到 base update 两次。每个 replica 必须收敛，
-DarkInno observer 还必须没有 pending parent。报告的 update bytes 为一份 base update 加两份
+im10furry observer 还必须没有 pending parent。报告的 update bytes 为一份 base update 加两份
 唯一 writer update；state bytes 为最终 left replica state。
 
-| Base runes | DarkInno median ms/op | Yjs median ms/op | DarkInno update/state bytes | Yjs update/state bytes |
+| Base runes | im10furry median ms/op | Yjs median ms/op | im10furry update/state bytes | Yjs update/state bytes |
 | ---: | ---: | ---: | ---: | ---: |
 | 4,096 | 14.639 | 0.444 | 36,949 / 36,897 | 4,177 / 4,181 |
 | 16,384 | 62.830 | 0.527 | 147,414 / 147,362 | 16,473 / 16,477 |
@@ -62,7 +62,7 @@ DarkInno observer 还必须没有 pending parent。报告的 update bytes 为一
 或 provider 端到端恢复。耗时列仍只在各自 runtime 内有效；wire-byte 列展示表示法权衡，
 不能上升为通用容量结论。
 
-## 提供测试机上的 DarkInno 确认
+## 提供测试机上的 im10furry 确认
 
 同一源码以 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0` 交叉编译。每台临时远端副本执行
 前均核验 SHA-256：`06e91e54085e031b08d521fa225c40e7bbf3047094f30911a88409457bb0d1a2`。
@@ -74,7 +74,7 @@ DarkInno observer 还必须没有 pending parent。报告的 update bytes 为一
 | 4,096 runes | 22.609 | 22.700 | 36,774 / 36,774 |
 | 16,384 runes | 102.368 | 103.812 | 147,111 / 147,111 |
 
-两台主机均未安装 Go 或 Node。自包含 Go binary 使 DarkInno 远端数字仍是有效受控证据；
+两台主机均未安装 Go 或 Node。自包含 Go binary 使 im10furry 远端数字仍是有效受控证据；
 为了得到 Yjs 数字而安装全局包并不在本次授权范围内。因此 Yjs 栏暂保持本机 Node 证据；
 待单独批准在一次性远端环境配置固定 Node runtime 后再补远端对照。
 
@@ -86,13 +86,13 @@ revision="$(git rev-parse HEAD)"
 reports="$(mktemp -d)"
 go run ./cmd/crdt-compare \
   -scenario=initial -sizes=4096,16384 -samples=5 -warmups=2 -iterations=20 \
-  -revision="$revision" -output="$reports/darkinno-initial.json"
+  -revision="$revision" -output="$reports/im10furry-initial.json"
 npm --prefix bench/competitors run yjs -- \
   --scenario initial --sizes 4096,16384 --samples 5 --warmups 2 --iterations 20 \
   --revision "$revision" --report "$reports/yjs-initial.json"
 go run ./cmd/crdt-compare \
   -scenario=offline-concurrent -sizes=4096,16384 -samples=5 -warmups=2 -iterations=20 \
-  -revision="$revision" -output="$reports/darkinno-offline.json"
+  -revision="$revision" -output="$reports/im10furry-offline.json"
 npm --prefix bench/competitors run yjs -- \
   --scenario offline-concurrent --sizes 4096,16384 --samples 5 --warmups 2 --iterations 20 \
   --revision "$revision" --report "$reports/yjs-offline.json"
@@ -114,5 +114,5 @@ warning，并在每个 Yjs 样本前尝试 GC。
    relay 与 WAN/TLS/persistence。
 3. 富文本格式和相对 cursor：按功能覆盖和失败处理报告，不能只看 bytes。
 
-DarkInno 后续应据此决定协议演化。当前 stable run-v2 绝不能为了改善这一个无冲突数字，
+im10furry 后续应据此决定协议演化。当前 stable run-v2 绝不能为了改善这一个无冲突数字，
 悄悄换成 Yjs framing 或新的 chunk 模型。

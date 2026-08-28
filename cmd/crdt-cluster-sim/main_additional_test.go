@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt/text"
 )
 
 type testRoundTripper struct {

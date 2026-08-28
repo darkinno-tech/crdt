@@ -7,11 +7,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	"github.com/DarkInno/crdt/delta"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/snapshot"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	"github.com/im10furry/crdt/delta"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/snapshot"
 )
 
 func TestMapDeltaConvergesAcrossDuplicateAndReverseDelivery(t *testing.T) {

@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/durable"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/durable"
+	"github.com/im10furry/crdt/replica"
 )
 
 var ErrSequenceRange = errors.New("crdt SQL durable provider: sequence exceeds signed bigint range")

@@ -21,10 +21,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/DarkInno/crdt/counter"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/set"
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt/counter"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/set"
+	"github.com/im10furry/crdt/text"
 )
 
 const (

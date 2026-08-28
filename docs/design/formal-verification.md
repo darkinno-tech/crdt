@@ -1,6 +1,6 @@
 # Formal verification scope and roadmap
 
-DarkInno now carries a checkable Lean model in
+im10furry now carries a checkable Lean model in
 [`formal/rga`](../../formal/rga). It starts from the invariant with the highest
 correctness risk: a structural RGA tombstone must survive out-of-order delivery
 and must not be silently forgotten by a state merge.
@@ -34,7 +34,7 @@ assumptions.
 `lean-yjs` is valuable precedent: Yjs documents that its model has proofs for
 preservation and commutativity, while its community discussion notes the effort
 is still moving from algorithmic modeling toward code-adjacent verification.
-DarkInno will use the same discipline: publish exactly the completed theorem
+im10furry will use the same discipline: publish exactly the completed theorem
 and its abstraction boundary, never a blanket “formally verified” claim.
 
 ## Checked command and gate proposal

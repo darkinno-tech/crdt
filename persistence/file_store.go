@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	frame "github.com/DarkInno/crdt/encoding"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 var fileMagic = [...]byte{'C', 'R', 'F', 'S'}

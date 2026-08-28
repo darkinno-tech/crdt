@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/DarkInno/crdt/counter"
+	"github.com/im10furry/crdt/counter"
 )
 
 func TestTreeRootCachesUntilStateChanges(t *testing.T) {

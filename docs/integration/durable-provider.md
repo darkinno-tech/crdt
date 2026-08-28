@@ -14,7 +14,7 @@ frontier.
 Install the opt-in module with:
 
 ```sh
-go get github.com/DarkInno/crdt/durable@latest
+go get github.com/im10furry/crdt/durable@latest
 ```
 
 ## Guaranteed transport flow

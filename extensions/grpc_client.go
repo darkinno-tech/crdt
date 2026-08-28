@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/replica"
 	"google.golang.org/grpc"
 )
 

@@ -3,7 +3,7 @@ package replica
 import (
 	"fmt"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 // ExampleNewManifest binds one replication group to one explicitly admitted

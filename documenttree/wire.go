@@ -3,8 +3,8 @@ package documenttree
 import (
 	"sort"
 
-	"github.com/DarkInno/crdt"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 // MarshalBinary returns a canonical bounded document-tree delta frame.

@@ -3,7 +3,7 @@ package lww
 import (
 	"strings"
 
-	"github.com/DarkInno/crdt/internal/codecguard"
+	"github.com/im10furry/crdt/internal/codecguard"
 )
 
 // boundElementCodec captures the stable ID after one protected call at the

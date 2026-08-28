@@ -3,7 +3,7 @@ package persistence
 import (
 	"testing"
 
-	configuration "github.com/DarkInno/crdt/config"
+	configuration "github.com/im10furry/crdt/config"
 )
 
 func BenchmarkConfigFromLoader(b *testing.B) {

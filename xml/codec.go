@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	frame "github.com/DarkInno/crdt/encoding"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
-const nodeCodecID = "github.com/DarkInno/crdt/xml-fragment-node/v1"
+const nodeCodecID = "github.com/im10furry/crdt/xml-fragment-node/v1"
 
 type nodeCodec struct{}
 

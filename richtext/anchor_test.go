@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/DarkInno/crdt/text"
+	"github.com/im10furry/crdt/text"
 )
 
 func TestDocumentAnchorRangePersistsAcrossRichTextReplicationAndRecovery(t *testing.T) {

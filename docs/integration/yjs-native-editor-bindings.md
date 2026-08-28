@@ -1,6 +1,6 @@
 # Native Yjs editor bindings
 
-`@darkinno/crdt-client/yjs` is an opt-in browser binding for a **native Yjs
+`@im10furry/crdt-client/yjs` is an opt-in browser binding for a **native Yjs
 document**. It maps a `Y.TextEvent.delta` into a CodeMirror 6 change set, so a
 remote one-character edit updates that range rather than replacing the whole
 editor projection.
@@ -68,7 +68,7 @@ editor lifecycle. The binding owns neither the WebSocket nor the document.
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness.js";
 import type { ViewUpdate } from "@codemirror/view";
-import { bindYjsCodeMirrorPlainText, observeYjsDeep } from "@darkinno/crdt-client/yjs";
+import { bindYjsCodeMirrorPlainText, observeYjsDeep } from "@im10furry/crdt-client/yjs";
 
 const document = new Y.Doc();
 const text = document.getText("content");
@@ -101,7 +101,7 @@ atomic text fallback, never a partial Yjs transaction.
 
 ## Quill 2 rich-text setup
 
-`@darkinno/crdt-client/yjs-richtext` is an opt-in binding for Quill's native
+`@im10furry/crdt-client/yjs-richtext` is an opt-in binding for Quill's native
 Delta model. It does not bundle Quill or y-quill: the application owns its
 Quill version, modules, provider, document lifecycle, and all schema choices.
 The binding accepts only string inserts, approved scalar attributes, and
@@ -111,7 +111,7 @@ claims.
 
 ```ts
 import * as Y from "yjs";
-import { bindYjsQuillRichText } from "@darkinno/crdt-client/yjs-richtext";
+import { bindYjsQuillRichText } from "@im10furry/crdt-client/yjs-richtext";
 
 const document = new Y.Doc();
 const text = document.getText("content");

@@ -26,7 +26,7 @@
 GitHub Actions 作业 `30799130530/91639400202` 输出：
 
 ```
-./durable/go.mod requires github.com/DarkInno/crdt v1.0.35; expected v1.0.36 for v1.0.36
+./durable/go.mod requires github.com/im10furry/crdt v1.0.35; expected v1.0.36 for v1.0.36
 ```
 
 ## 2. 临时解决方案
@@ -39,7 +39,7 @@ GitHub Actions 作业 `30799130530/91639400202` 输出：
 
 1. `preprod-only` 只校验 PR 来源为仓库的 `preprod` 分支，因此 #57 可以合并。
 2. 发布作业从最新稳定标签 `v1.0.35` 推导出目标 `v1.0.36`。
-3. `scripts/tag-go-modules.sh` 扫描每个 `go.mod` 中的 `github.com/DarkInno/crdt` 依赖，并要求其等于目标标签版本。
+3. `scripts/tag-go-modules.sh` 扫描每个 `go.mod` 中的 `github.com/im10furry/crdt` 依赖，并要求其等于目标标签版本。
 4. `durable/go.mod` 首先暴露仍引用 `v1.0.35`；完整扫描确认其他子模块和 `go.work` 的本地替换也保持旧版本。
 5. 因为这个可发布性条件仅在 main 合并后的写权限作业中执行，问题在受保护 PR 门禁之后才被发现。
 

@@ -1,6 +1,6 @@
 package register
 
-import "github.com/DarkInno/crdt"
+import "github.com/im10furry/crdt"
 
 // MarshalJSON returns a diagnostic summary for structured logs. It omits the
 // opaque value, HLC tag, and clock state, and cannot restore the register.

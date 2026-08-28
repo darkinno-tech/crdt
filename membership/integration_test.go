@@ -4,8 +4,8 @@ import (
 	"crypto/sha256"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/set"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/set"
 )
 
 // TestRetireFenceCompactAndBootstrap is a production-shaped three-replica

@@ -1,4 +1,4 @@
-# DarkInno Python CRDT client
+# im10furry Python CRDT client
 
 `crdt_rga.RGA` is a Python ownership wrapper for the bounded Rust
 `rga-run-v2` runtime. Supply `RGALimits` at initial construction and

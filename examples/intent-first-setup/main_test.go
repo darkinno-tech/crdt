@@ -5,9 +5,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/counter"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/counter"
+	"github.com/im10furry/crdt/replica"
 )
 
 func TestRun(t *testing.T) {

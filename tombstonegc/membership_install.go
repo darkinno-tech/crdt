@@ -3,7 +3,7 @@ package tombstonegc
 import (
 	"errors"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 var (

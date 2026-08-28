@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 func TestRunWritesOneMachineReadableProfile(t *testing.T) {

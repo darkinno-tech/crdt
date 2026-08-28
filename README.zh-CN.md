@@ -11,7 +11,7 @@
 要求 Go 1.21 或更高版本。
 
 ```sh
-go get github.com/DarkInno/crdt@latest
+go get github.com/im10furry/crdt@latest
 ```
 
 ```go
@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/DarkInno/crdt/counter"
+	"github.com/im10furry/crdt/counter"
 )
 
 func main() {
@@ -50,7 +50,7 @@ func main() {
 本地检出：
 
 ```sh
-git clone https://github.com/DarkInno/crdt.git
+git clone https://github.com/im10furry/crdt.git
 cd crdt
 make test
 ```
@@ -109,23 +109,23 @@ make test
 
 ## 模块与依赖
 
-已发布的根模块 `github.com/DarkInno/crdt` 没有任何非标准库 module 依赖。耐久存储、传输和数据库后端都是独立版本的按需模块，因此仅使用核心的应用不会解析它们的依赖图。
+已发布的根模块 `github.com/im10furry/crdt` 没有任何非标准库 module 依赖。耐久存储、传输和数据库后端都是独立版本的按需模块，因此仅使用核心的应用不会解析它们的依赖图。
 
 | 模块 | 按需能力 |
 | --- | --- |
-| `github.com/DarkInno/crdt/durable` | bbolt durable relay 与 WebSocket 重连客户端。 |
-| `github.com/DarkInno/crdt/persistence` | bbolt 与文件 checkpoint Store。 |
-| `github.com/DarkInno/crdt/telemetry` | 有界 telemetry 与按需 OpenTelemetry metrics adapter。 |
-| `github.com/DarkInno/crdt/extensions` | WebSocket、HTTP/SSE、gRPC 与 Yjs relay 参考。 |
-| `github.com/DarkInno/crdt/providers/{redis,postgres,mysql,mssql,sqlite,webrtc}` | durable-log 与 DataChannel 后端。 |
-| `github.com/DarkInno/crdt/examples` | 可运行示例，包括 WebSocket 参考。 |
+| `github.com/im10furry/crdt/durable` | bbolt durable relay 与 WebSocket 重连客户端。 |
+| `github.com/im10furry/crdt/persistence` | bbolt 与文件 checkpoint Store。 |
+| `github.com/im10furry/crdt/telemetry` | 有界 telemetry 与按需 OpenTelemetry metrics adapter。 |
+| `github.com/im10furry/crdt/extensions` | WebSocket、HTTP/SSE、gRPC 与 Yjs relay 参考。 |
+| `github.com/im10furry/crdt/providers/{redis,postgres,mysql,mssql,sqlite,webrtc}` | durable-log 与 DataChannel 后端。 |
+| `github.com/im10furry/crdt/examples` | 可运行示例，包括 WebSocket 参考。 |
 
 例如，选择 MySQL 的应用只安装核心、durable 契约和 MySQL provider（以及应用自行选择的 driver）：
 
 ```sh
-go get github.com/DarkInno/crdt@latest
-go get github.com/DarkInno/crdt/durable@latest
-go get github.com/DarkInno/crdt/providers/mysql@latest
+go get github.com/im10furry/crdt@latest
+go get github.com/im10furry/crdt/durable@latest
+go get github.com/im10furry/crdt/providers/mysql@latest
 ```
 
 ## 包地图
@@ -137,9 +137,9 @@ go get github.com/DarkInno/crdt/providers/mysql@latest
 | `lww`、`tree`、`text`、`list`、`xml`、`richtext` | 基于 HLC 的有序协作结构。 |
 | `encoding`、`delta`、`snapshot`、`clock` | 帧、受限批次、snapshot 与 HLC 状态。 |
 | `replica`、`membership`、`tombstonegc`、`merkle` | 投递连续性、成员关系、安全 GC 协调与反熵。 |
-| `github.com/DarkInno/crdt/persistence` | 按需的本地有界 bbolt 和文件 CRDT checkpoint Store 参考。 |
-| `github.com/DarkInno/crdt/telemetry` | 按需的无 payload 有界 telemetry 和 OpenTelemetry adapter。 |
-| `github.com/DarkInno/crdt/durable`、`github.com/DarkInno/crdt/extensions`、`observe` | 按需的 durable relay 和 live relay；核心中的进程内观察。 |
+| `github.com/im10furry/crdt/persistence` | 按需的本地有界 bbolt 和文件 CRDT checkpoint Store 参考。 |
+| `github.com/im10furry/crdt/telemetry` | 按需的无 payload 有界 telemetry 和 OpenTelemetry adapter。 |
+| `github.com/im10furry/crdt/durable`、`github.com/im10furry/crdt/extensions`、`observe` | 按需的 durable relay 和 live relay；核心中的进程内观察。 |
 | `attachment` | 不可变媒体引用元数据，绝不保存原始媒体字节。 |
 
 ## 验证与测量

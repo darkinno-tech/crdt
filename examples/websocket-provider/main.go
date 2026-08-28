@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/counter"
-	frame "github.com/DarkInno/crdt/encoding"
-	"github.com/DarkInno/crdt/examples/websocket-provider/provider"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/counter"
+	frame "github.com/im10furry/crdt/encoding"
+	"github.com/im10furry/crdt/examples/websocket-provider/provider"
+	"github.com/im10furry/crdt/replica"
 )
 
 var receiveLimits = frame.DecoderLimits{

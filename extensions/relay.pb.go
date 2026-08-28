@@ -113,7 +113,7 @@ const file_extensions_relay_proto_rawDesc = "" +
 	"\x06change\x18\x02 \x01(\fH\x00R\x06changeB\t\n" +
 	"\apayload2g\n" +
 	"\x05Relay\x12^\n" +
-	"\x04Sync\x12(.darkinno.crdt.extensions.v1.SyncMessage\x1a(.darkinno.crdt.extensions.v1.SyncMessage(\x010\x01B0Z.github.com/DarkInno/crdt/extensions;extensionsb\x06proto3"
+	"\x04Sync\x12(.darkinno.crdt.extensions.v1.SyncMessage\x1a(.darkinno.crdt.extensions.v1.SyncMessage(\x010\x01B0Z.github.com/im10furry/crdt/extensions;extensionsb\x06proto3"
 
 var (
 	file_extensions_relay_proto_rawDescOnce sync.Once

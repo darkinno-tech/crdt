@@ -1,6 +1,6 @@
 package text
 
-import "github.com/DarkInno/crdt"
+import "github.com/im10furry/crdt"
 
 // MarshalJSON returns a diagnostic summary for structured logs. It omits text
 // content, positions, tombstone identities, and clock state.

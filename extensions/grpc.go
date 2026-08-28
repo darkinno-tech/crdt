@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DarkInno/crdt/telemetry"
+	"github.com/im10furry/crdt/telemetry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"

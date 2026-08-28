@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/DarkInno/crdt"
+	"github.com/im10furry/crdt"
 )
 
 type orTreeVectorFile struct {

@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/text"
-	"github.com/DarkInno/crdt/tombstonegc"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/text"
+	"github.com/im10furry/crdt/tombstonegc"
 )
 
 func TestRichCompactionErrorRecognizesWrappedUnsafeCompaction(t *testing.T) {

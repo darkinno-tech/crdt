@@ -10,13 +10,13 @@
 模块的 Go 语言最低版本为 1.21。在已有 Go 应用中，先加入最新稳定模块：
 
 ```sh
-go get github.com/DarkInno/crdt@latest
+go get github.com/im10furry/crdt@latest
 ```
 
 然后从本地检出中查看并运行最小的完整参考：
 
 ```sh
-git clone https://github.com/DarkInno/crdt.git
+git clone https://github.com/im10furry/crdt.git
 cd crdt
 go version
 (cd examples && go run ./getting-started)

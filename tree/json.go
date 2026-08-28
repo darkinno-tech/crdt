@@ -1,6 +1,6 @@
 package tree
 
-import "github.com/DarkInno/crdt"
+import "github.com/im10furry/crdt"
 
 // MarshalJSON returns a diagnostic summary for structured logs. It omits node
 // values, identities, tombstone identities, and clock state.

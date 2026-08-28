@@ -1,5 +1,5 @@
 {
-  "name": "@darkinno/crdt-client",
+  "name": "@im10furry/crdt-client",
   "version": "0.0.0-development",
   "private": true,
   "type": "module",

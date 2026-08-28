@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
-	"github.com/DarkInno/crdt/internal/codecguard"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
+	"github.com/im10furry/crdt/internal/codecguard"
 )
 
 var (

@@ -7,10 +7,10 @@ import (
 	"math"
 	"testing"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/counter"
-	"github.com/DarkInno/crdt/durable"
-	"github.com/DarkInno/crdt/replica"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/counter"
+	"github.com/im10furry/crdt/durable"
+	"github.com/im10furry/crdt/replica"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v3"
 )

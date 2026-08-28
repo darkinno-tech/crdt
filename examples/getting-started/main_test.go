@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/DarkInno/crdt/counter"
-	frame "github.com/DarkInno/crdt/encoding"
+	"github.com/im10furry/crdt/counter"
+	frame "github.com/im10furry/crdt/encoding"
 )
 
 func TestRun(t *testing.T) {

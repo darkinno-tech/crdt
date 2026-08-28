@@ -1,6 +1,6 @@
 # Go module layout and release procedure
 
-The published root module, `github.com/DarkInno/crdt`, is the dependency-free
+The published root module, `github.com/im10furry/crdt`, is the dependency-free
 CRDT core. Durable storage, network transports, database providers, and
 runnable examples are nested modules so selecting none of them adds no
 third-party module requirements to a core consumer.
@@ -9,7 +9,7 @@ third-party module requirements to a core consumer.
 
 | Module family | Scope |
 | --- | --- |
-| root `github.com/DarkInno/crdt` | CRDT types, codecs, replica helpers, and core tools; no third-party requirements. |
+| root `github.com/im10furry/crdt` | CRDT types, codecs, replica helpers, and core tools; no third-party requirements. |
 | `durable`, `persistence`, `telemetry`, `extensions` | Durable relay, checkpoint, telemetry, and transport features. |
 | `providers/*` | Redis, PostgreSQL, MySQL, SQLite, WebRTC, and shared SQL relay implementation. |
 | `examples` | Runnable examples, including the WebSocket reference. |
@@ -37,7 +37,7 @@ providers/sqlite/v1.0.32
 
 The matching root tag is required before a consumer can resolve a nested
 module: earlier root releases still include these directories and would make
-the import path ambiguous. All internal `github.com/DarkInno/crdt...` requires
+the import path ambiguous. All internal `github.com/im10furry/crdt...` requires
 in a split-release commit therefore use the exact release version.
 
 The stable release workflow calls `scripts/tag-go-modules.sh`; it verifies

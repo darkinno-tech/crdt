@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DarkInno/crdt"
-	"github.com/DarkInno/crdt/clock"
+	"github.com/im10furry/crdt"
+	"github.com/im10furry/crdt/clock"
 )
 
 func TestORSetMergeRejectsInvalidSourceWithoutMutation(t *testing.T) {
