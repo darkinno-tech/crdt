@@ -1,4 +1,4 @@
-// Command crdt-compare produces the DarkInno side of the reproducible
+// Command crdt-compare produces the im10furry side of the reproducible
 // cross-library text-sync comparison. It intentionally reports bytes and
 // language-specific elapsed time separately: Go and Node have different
 // runtimes, allocators, and APIs, so only the workload contract is shared.
@@ -68,11 +68,11 @@ func parseProtocol(value string) (comparisonProtocol, error) {
 func (protocol comparisonProtocol) implementation() string {
 	switch protocol {
 	case protocolRunV2:
-		return "DarkInno RGA run-v2"
+		return "im10furry RGA run-v2"
 	case protocolPackedV3:
-		return "DarkInno RGA packed-v3"
+		return "im10furry RGA packed-v3"
 	case protocolPackedV3OuterV2:
-		return "DarkInno RGA packed-v3 outer-v2"
+		return "im10furry RGA packed-v3 outer-v2"
 	default:
 		return "unknown"
 	}

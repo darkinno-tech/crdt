@@ -13,7 +13,7 @@ import (
 	"github.com/im10furry/crdt/set"
 )
 
-const receiptDomain = "darkinno/crdt/tombstone-receipt/v1"
+const receiptDomain = "im10furry/crdt/tombstone-receipt/v1"
 
 var (
 	ErrInvalidReceipt = errors.New("membership: invalid tombstone receipt")

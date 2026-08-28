@@ -12,5 +12,5 @@
 // pair is stable; matching TypeIDs alone still do not authenticate a peer.
 //
 // For installation, examples, and package-level guidance, see the module
-// README at https://github.com/darkinno/crdt.
+// README at https://github.com/im10furry/crdt.
 package crdt

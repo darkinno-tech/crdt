@@ -7,7 +7,7 @@ import (
 	"github.com/im10furry/crdt/replica"
 )
 
-const manifestDomain = "darkinno/crdt/membership-manifest/v1"
+const manifestDomain = "im10furry/crdt/membership-manifest/v1"
 
 // ManifestHash returns the control-plane binding digest for a replication
 // manifest. It includes the membership/data-plane epoch, schema, codec, frame

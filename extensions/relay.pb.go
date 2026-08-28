@@ -107,13 +107,13 @@ var File_extensions_relay_proto protoreflect.FileDescriptor
 
 const file_extensions_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x16extensions/relay.proto\x12\x1bdarkinno.crdt.extensions.v1\"J\n" +
+	"\x16extensions/relay.proto\x12\x1bim10furry.crdt.extensions.v1\"J\n" +
 	"\vSyncMessage\x12\x16\n" +
 	"\x05hello\x18\x01 \x01(\fH\x00R\x05hello\x12\x18\n" +
 	"\x06change\x18\x02 \x01(\fH\x00R\x06changeB\t\n" +
 	"\apayload2g\n" +
 	"\x05Relay\x12^\n" +
-	"\x04Sync\x12(.darkinno.crdt.extensions.v1.SyncMessage\x1a(.darkinno.crdt.extensions.v1.SyncMessage(\x010\x01B0Z.github.com/im10furry/crdt/extensions;extensionsb\x06proto3"
+	"\x04Sync\x12(.im10furry.crdt.extensions.v1.SyncMessage\x1a(.im10furry.crdt.extensions.v1.SyncMessage(\x010\x01B0Z.github.com/im10furry/crdt/extensions;extensionsb\x06proto3"
 
 var (
 	file_extensions_relay_proto_rawDescOnce sync.Once
@@ -129,11 +129,11 @@ func file_extensions_relay_proto_rawDescGZIP() []byte {
 
 var file_extensions_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_extensions_relay_proto_goTypes = []any{
-	(*SyncMessage)(nil), // 0: darkinno.crdt.extensions.v1.SyncMessage
+	(*SyncMessage)(nil), // 0: im10furry.crdt.extensions.v1.SyncMessage
 }
 var file_extensions_relay_proto_depIdxs = []int32{
-	0, // 0: darkinno.crdt.extensions.v1.Relay.Sync:input_type -> darkinno.crdt.extensions.v1.SyncMessage
-	0, // 1: darkinno.crdt.extensions.v1.Relay.Sync:output_type -> darkinno.crdt.extensions.v1.SyncMessage
+	0, // 0: im10furry.crdt.extensions.v1.Relay.Sync:input_type -> im10furry.crdt.extensions.v1.SyncMessage
+	0, // 1: im10furry.crdt.extensions.v1.Relay.Sync:output_type -> im10furry.crdt.extensions.v1.SyncMessage
 	1, // [1:2] is the sub-list for method output_type
 	0, // [0:1] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name

@@ -790,7 +790,7 @@ type testResult struct{}
 func (testResult) LastInsertId() (int64, error) { return 0, nil }
 func (testResult) RowsAffected() (int64, error) { return 1, nil }
 
-const sqlAdapterDriverName = "darkinno-crdt-sqlrelay-test"
+const sqlAdapterDriverName = "im10furry-crdt-sqlrelay-test"
 
 func init() {
 	sql.Register(sqlAdapterDriverName, sqlAdapterDriver{})

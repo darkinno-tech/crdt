@@ -23,7 +23,7 @@ import (
 	"github.com/im10furry/crdt/text"
 )
 
-const runtimeGlobalName = "__darkinnoCRDTRGA"
+const runtimeGlobalName = "__im10furryCRDTRGA"
 
 var (
 	errInvalidArgument = errors.New("wasm: invalid JavaScript argument")
