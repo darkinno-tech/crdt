@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/telemetry"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/telemetry"
 	"github.com/coder/websocket"
 )
 

@@ -3,7 +3,7 @@ package persistence
 import (
 	"testing"
 
-	configuration "github.com/im10furry/crdt/config"
+	configuration "github.com/darkinno-tech/crdt/config"
 )
 
 func FuzzConfigFromLoader(f *testing.F) {

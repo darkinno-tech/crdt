@@ -10,11 +10,11 @@ import (
 	"io"
 	"os"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/attachment"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/replica"
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/attachment"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/replica"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 var receiveLimits = frame.DecoderLimits{
@@ -159,7 +159,7 @@ func replicateAttachments(policy crdt.ProtocolPolicy, objects []downloadedObject
 	if !policy.SupportsFrame(crdt.TypeIDLWWMapDelta) {
 		return nil, fmt.Errorf("LWW-Map is not enabled by the replication policy")
 	}
-	manifest, err := replica.NewManifest("inspection-42/attachments", "github.com/im10furry/crdt/attachment-reference/v1", 1, replica.Protocol{
+	manifest, err := replica.NewManifest("inspection-42/attachments", "github.com/darkinno-tech/crdt/attachment-reference/v1", 1, replica.Protocol{
 		StateID:          crdt.TypeIDLWWMapState,
 		DeltaID:          crdt.TypeIDLWWMapDelta,
 		SemanticsVersion: attachment.SemanticsVersion,

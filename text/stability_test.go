@@ -3,7 +3,7 @@ package text
 import (
 	"testing"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 func TestStableFrameTypeUsesRunV2Contract(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 func validateState(state documentState, options Options, allowPending bool) error {

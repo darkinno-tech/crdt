@@ -1,6 +1,6 @@
 # RGA plain-text editor bindings
 
-`@im10furry/crdt-client/bindings` supplies a small, dependency-free bridge from
+`@darkinno-tech/crdt-client/bindings` supplies a small, dependency-free bridge from
 the negotiated Go/Wasm `RGAWasmDocument` to a text editor surface:
 
 - `bindRGAPlainText` accepts a minimal read/write/observe port.

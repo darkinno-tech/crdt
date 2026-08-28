@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const gossipDomain = "im10furry/crdt/membership-gossip/v1"
+const gossipDomain = "darkinno-tech/crdt/membership-gossip/v1"
 
 var ErrInvalidGossip = errors.New("membership: invalid gossip message")
 

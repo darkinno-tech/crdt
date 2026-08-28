@@ -47,7 +47,7 @@ API](https://github.com/yjs/yjs#document-updates) and [sync internals](https://g
 
 ## Browser Yjs core capability boundary
 
-The optional `@im10furry/crdt-client/yjs` layer now fills the browser-side
+The optional `@darkinno-tech/crdt-client/yjs` layer now fills the browser-side
 integration gaps that matter for a plain-text surface, while keeping the Yjs
 engine authoritative. It is not a second document model.
 

@@ -9,7 +9,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/im10furry/crdt/providers/internal/sqlrelay"
+	"github.com/darkinno-tech/crdt/providers/internal/sqlrelay"
 )
 
 const (

@@ -16,9 +16,9 @@ import (
 	"sort"
 	"unicode/utf8"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/list"
-	"github.com/im10furry/crdt/snapshot"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/list"
+	"github.com/darkinno-tech/crdt/snapshot"
 )
 
 var (

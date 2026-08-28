@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/richtext"
-	"github.com/im10furry/crdt/text"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/richtext"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 func TestRichTextRuntimeEditorDeltaInteroperabilityAndRecovery(t *testing.T) {

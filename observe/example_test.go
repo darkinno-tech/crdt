@@ -3,8 +3,8 @@ package observe_test
 import (
 	"fmt"
 
-	"github.com/im10furry/crdt/counter"
-	"github.com/im10furry/crdt/observe"
+	"github.com/darkinno-tech/crdt/counter"
+	"github.com/darkinno-tech/crdt/observe"
 )
 
 func ExampleStore() {

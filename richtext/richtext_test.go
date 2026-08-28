@@ -7,10 +7,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/replica"
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/replica"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 func TestFormatProducesPresentationSpans(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 func TestNewOpenTelemetrySinkExportsPayloadFreeMetricsThroughReporter(t *testing.T) {

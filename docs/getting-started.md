@@ -13,13 +13,13 @@ The module language baseline is Go 1.21. In an existing Go application, add the
 latest stable module first:
 
 ```sh
-go get github.com/im10furry/crdt@latest
+go get github.com/darkinno-tech/crdt@latest
 ```
 
 Then inspect and run the smallest complete reference from a local checkout:
 
 ```sh
-git clone https://github.com/im10furry/crdt.git
+git clone https://github.com/darkinno-tech/crdt.git
 cd crdt
 go version
 (cd examples && go run ./getting-started)

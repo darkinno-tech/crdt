@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 func TestSimpleCollectorCollectsBoundedCanonicalExcess(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 const defaultQueueSize = 256

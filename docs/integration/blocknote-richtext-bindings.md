@@ -6,7 +6,7 @@ BlockNote's public `document`, `onChange`, and `replaceBlocks` API; the shipped
 client has no BlockNote or Yjs production dependency.
 
 The authenticated rich-text Manifest for this adapter must use the exact
-renderer SchemaID `im10furry:blocknote-text-v1`. This is not a Yjs binding and
+renderer SchemaID `darkinno-tech:blocknote-text-v1`. This is not a Yjs binding and
 must not share a group, state frame, or update log with BlockNote's Yjs
 collaboration extension.
 
@@ -64,7 +64,7 @@ import {
   bindBlockNoteRichText,
   BLOCKNOTE_RICH_TEXT_SCHEMA_ID,
   initRichTextWasm,
-} from "@im10furry/crdt-client";
+} from "@darkinno-tech/crdt-client";
 
 // Authenticate a rich-text Manifest with SchemaID
 // BLOCKNOTE_RICH_TEXT_SCHEMA_ID before creating this binding.

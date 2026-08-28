@@ -6,7 +6,7 @@ import (
 	"errors"
 	"hash/crc32"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 // FormatVersion identifies the original canonical frame layout. It remains the

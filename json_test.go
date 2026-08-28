@@ -6,13 +6,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/counter"
-	"github.com/im10furry/crdt/lww"
-	"github.com/im10furry/crdt/register"
-	"github.com/im10furry/crdt/set"
-	"github.com/im10furry/crdt/text"
-	"github.com/im10furry/crdt/tree"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/counter"
+	"github.com/darkinno-tech/crdt/lww"
+	"github.com/darkinno-tech/crdt/register"
+	"github.com/darkinno-tech/crdt/set"
+	"github.com/darkinno-tech/crdt/text"
+	"github.com/darkinno-tech/crdt/tree"
 )
 
 var (

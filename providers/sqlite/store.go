@@ -7,7 +7,7 @@ package sqlite
 import (
 	"database/sql"
 
-	"github.com/im10furry/crdt/providers/internal/sqlrelay"
+	"github.com/darkinno-tech/crdt/providers/internal/sqlrelay"
 )
 
 const (

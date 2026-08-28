@@ -1,8 +1,8 @@
 {
-  "name": "@im10furry/yjs-store-runtime",
+  "name": "@darkinno-tech/yjs-store-runtime",
   "private": true,
   "version": "0.1.0",
-  "description": "Bounded Yjs semantic storage sidecar for im10furry/crdt",
+  "description": "Bounded Yjs semantic storage sidecar for darkinno-tech/crdt",
   "type": "module",
   "engines": {
     "node": ">=20"

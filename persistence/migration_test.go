@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/im10furry/crdt/snapshot"
+	"github.com/darkinno-tech/crdt/snapshot"
 	bolt "go.etcd.io/bbolt"
 )
 

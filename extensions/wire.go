@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/replica"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/replica"
 )
 
 const (

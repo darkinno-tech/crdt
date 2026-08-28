@@ -4,12 +4,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/clock"
-	"github.com/im10furry/crdt/counter"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/set"
-	"github.com/im10furry/crdt/snapshot"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/clock"
+	"github.com/darkinno-tech/crdt/counter"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/set"
+	"github.com/darkinno-tech/crdt/snapshot"
 )
 
 func TestValidatedSnapshotRejectsInvalidConcreteState(t *testing.T) {

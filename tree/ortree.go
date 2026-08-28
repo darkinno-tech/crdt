@@ -7,8 +7,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/clock"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/clock"
 )
 
 var (

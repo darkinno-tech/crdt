@@ -1,4 +1,4 @@
-name = "im10furry-rga-formal"
+name = "darkinno-tech-rga-formal"
 defaultTargets = ["RGAFormal.Delta", "RGAFormal.Order", "RGAFormal.RunV2", "RGAFormal.Recovery"]
 
 [[lean_lib]]

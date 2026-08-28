@@ -1,6 +1,6 @@
 # Tiptap and ProseMirror rich-text binding
 
-`bindTiptapRichText` binds a fixed, manifest-bound Tiptap 3 profile to the stable Go/Wasm `richtext` v1 protocol. `bindProseMirrorRichText` accepts a small application-owned port for the same profile. Both use state/delta TypeIDs `23/24`, semantic version `1`, and the exact renderer Schema ID `im10furry:tiptap-core-richtext-v1`.
+`bindTiptapRichText` binds a fixed, manifest-bound Tiptap 3 profile to the stable Go/Wasm `richtext` v1 protocol. `bindProseMirrorRichText` accepts a small application-owned port for the same profile. Both use state/delta TypeIDs `23/24`, semantic version `1`, and the exact renderer Schema ID `darkinno-tech:tiptap-core-richtext-v1`.
 
 This is a richer surface than `bindTiptapPlainText`, but it still intentionally rejects arbitrary editor JSON. Read the [profile decision](../design/tiptap-richtext-profile.md) before enabling it.
 
@@ -13,7 +13,7 @@ import {
   bindTiptapRichText,
   initRichTextWasm,
   TIPTAP_CORE_RICH_TEXT_SCHEMA_ID,
-} from "@im10furry/crdt-client";
+} from "@darkinno-tech/crdt-client";
 
 // Authenticate a rich-text Manifest with SchemaID
 // TIPTAP_CORE_RICH_TEXT_SCHEMA_ID before this construction.

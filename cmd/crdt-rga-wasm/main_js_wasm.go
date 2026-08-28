@@ -15,15 +15,15 @@ import (
 	"strconv"
 	"syscall/js"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/clock"
-	frame "github.com/im10furry/crdt/encoding"
-	clientwasm "github.com/im10furry/crdt/internal/wasm"
-	"github.com/im10furry/crdt/richtext"
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/clock"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	clientwasm "github.com/darkinno-tech/crdt/internal/wasm"
+	"github.com/darkinno-tech/crdt/richtext"
+	"github.com/darkinno-tech/crdt/text"
 )
 
-const runtimeGlobalName = "__im10furryCRDTRGA"
+const runtimeGlobalName = "__darkinno-techCRDTRGA"
 
 var (
 	errInvalidArgument = errors.New("wasm: invalid JavaScript argument")

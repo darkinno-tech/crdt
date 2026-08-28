@@ -132,7 +132,7 @@ does not inherit request context, and does not select a process-global Meter
 provider. The host creates and owns its `MeterProvider`, exporter endpoint,
 credentials, batching, resource attributes, and shutdown. That keeps an
 observability backend outside the CRDT security and availability boundary.
-Install `github.com/im10furry/crdt/telemetry` when using this adapter.
+Install `github.com/darkinno-tech/crdt/telemetry` when using this adapter.
 
 ```go
 // Configure this MeterProvider in the host with its chosen OTLP, Prometheus,

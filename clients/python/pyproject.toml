@@ -3,9 +3,9 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "im10furry-crdt-rga"
+name = "darkinno-tech-crdt-rga"
 version = "0.1.0"
-description = "Python bindings for bounded im10furry RGA run-v2 and LWW-Map native runtimes"
+description = "Python bindings for bounded darkinno-tech RGA run-v2 and LWW-Map native runtimes"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 classifiers = [

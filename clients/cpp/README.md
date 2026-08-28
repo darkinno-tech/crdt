@@ -1,21 +1,21 @@
-# im10furry C++ CRDT client
+# darkinno-tech C++ CRDT client
 
-`im10furry::crdt::Rga` and `im10furry::crdt::LwwMap` are C++20 RAII facades over
+`darkinno-tech::crdt::Rga` and `darkinno-tech::crdt::LwwMap` are C++20 RAII facades over
 the bounded Rust [`rga-run-v2`](../../docs/protocol/rga-run-v2.md) and
 [`lww-map-v1`](../../docs/protocol/lww-v1.md) runtimes. They own opaque
 handles, free every returned C ABI buffer after copying it into standard C++
-containers, and throw `im10furry::crdt::Error` for a non-zero ABI status.
+containers, and throw `darkinno-tech::crdt::Error` for a non-zero ABI status.
 
 It is a supported native client binding, not an independent C++ wire
 implementation. Rust remains the single source of truth for canonical frame
 decoding, merging, pending-parent bounds, and HLC semantics.
 
 ```cpp
-im10furry::crdt::Rga document("cpp-device-7");
+darkinno-tech::crdt::Rga document("cpp-device-7");
 const auto delta = document.Insert(0, "Draft");  // already applied locally
 document.Apply(std::span<const std::uint8_t>(delta));  // duplicate delivery is a no-op
 
-im10furry::crdt::LwwMap metadata("cpp-device-7");
+darkinno-tech::crdt::LwwMap metadata("cpp-device-7");
 const auto map_delta = metadata.Set("status", std::span<const std::uint8_t>{});
 metadata.Apply(std::span<const std::uint8_t>(map_delta));
 ```

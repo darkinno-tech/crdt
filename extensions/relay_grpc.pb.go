@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Relay_Sync_FullMethodName = "/im10furry.crdt.extensions.v1.Relay/Sync"
+	Relay_Sync_FullMethodName = "/darkinno-tech.crdt.extensions.v1.Relay/Sync"
 )
 
 // RelayClient is the client API for Relay service.
@@ -108,7 +108,7 @@ type Relay_SyncServer = grpc.BidiStreamingServer[SyncMessage, SyncMessage]
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Relay_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "im10furry.crdt.extensions.v1.Relay",
+	ServiceName: "darkinno-tech.crdt.extensions.v1.Relay",
 	HandlerType: (*RelayServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{

@@ -12,7 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/im10furry/crdt/list"
+	"github.com/darkinno-tech/crdt/list"
 )
 
 var (

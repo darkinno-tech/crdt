@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 const (

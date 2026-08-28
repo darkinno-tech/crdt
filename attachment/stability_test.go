@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/im10furry/crdt/tombstonegc"
+	"github.com/darkinno-tech/crdt/tombstonegc"
 )
 
 func TestRegisterExactAcknowledgementTombstoneLifecycle(t *testing.T) {

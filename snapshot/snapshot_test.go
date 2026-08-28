@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/counter"
-	frame "github.com/im10furry/crdt/encoding"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/counter"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 func TestSnapshotCopiesStateAndFrontier(t *testing.T) {

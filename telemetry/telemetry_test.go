@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 func TestReporterDropsWhenSinkIsBlocked(t *testing.T) {

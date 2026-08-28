@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/im10furry/crdt/persistence"
-	"github.com/im10furry/crdt/set"
+	"github.com/darkinno-tech/crdt/persistence"
+	"github.com/darkinno-tech/crdt/set"
 )
 
 type taskCodec struct{}

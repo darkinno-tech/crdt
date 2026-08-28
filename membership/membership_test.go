@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/replica"
-	"github.com/im10furry/crdt/set"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/replica"
+	"github.com/darkinno-tech/crdt/set"
 )
 
 type stringCodec struct{}

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	frame "github.com/im10furry/crdt/encoding"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 // BenchmarkRGADeltaWireProtocols compares the complete bounded encode/decode

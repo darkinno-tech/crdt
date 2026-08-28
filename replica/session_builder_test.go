@@ -3,8 +3,8 @@ package replica
 import (
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 type builderCheckpointStore struct{ checkpoint Checkpoint }

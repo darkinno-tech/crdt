@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 

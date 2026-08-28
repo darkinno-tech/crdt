@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/counter"
-	"github.com/im10furry/crdt/telemetry"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/counter"
+	"github.com/darkinno-tech/crdt/telemetry"
 )
 
 func TestExtensionsConfigurationFailuresHaveStructuredErrors(t *testing.T) {

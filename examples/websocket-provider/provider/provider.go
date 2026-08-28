@@ -17,10 +17,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/awareness"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/replica"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/awareness"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/replica"
 	"github.com/coder/websocket"
 )
 

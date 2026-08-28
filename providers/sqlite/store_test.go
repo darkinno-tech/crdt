@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/im10furry/crdt/durable"
+	"github.com/darkinno-tech/crdt/durable"
 )
 
 func TestDialectAndConstructorBoundary(t *testing.T) {

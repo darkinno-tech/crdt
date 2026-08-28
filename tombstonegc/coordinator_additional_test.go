@@ -3,7 +3,7 @@ package tombstonegc
 import (
 	"testing"
 
-	"github.com/im10furry/crdt/tree"
+	"github.com/darkinno-tech/crdt/tree"
 )
 
 func TestCoordinatorPreventsResurrectionWhenRemoteHasOldAdd(t *testing.T) {

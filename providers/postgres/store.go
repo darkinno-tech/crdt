@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/durable"
-	"github.com/im10furry/crdt/replica"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/durable"
+	"github.com/darkinno-tech/crdt/replica"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )

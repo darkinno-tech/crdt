@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/counter"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/counter"
 )
 
 func TestSnapshotRejectsInvalidFrontierAndRecoveryLimits(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	frame "github.com/im10furry/crdt/encoding"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 func TestMapDecodeOptionsRejectBeforeReceiverMutation(t *testing.T) {

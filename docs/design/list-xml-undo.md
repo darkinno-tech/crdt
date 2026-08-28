@@ -83,7 +83,7 @@ post-compaction snapshot, and old-delta retirement are complete.
 ## XML fragments
 
 `xml.Fragment` is an ordered `list.RGA[xml.Node]` with a canonical XML-node
-codec (`github.com/im10furry/crdt/xml-fragment-node/v1`). It replicates
+codec (`github.com/darkinno-tech/crdt/xml-fragment-node/v1`). It replicates
 insertion and removal of complete element/text nodes. Nodes can contain a
 complete immutable subtree, which makes offline insertion, duplication,
 reordering, and deletion converge under the same list protocol.

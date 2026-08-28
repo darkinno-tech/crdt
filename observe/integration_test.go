@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt/counter"
-	"github.com/im10furry/crdt/observe"
+	"github.com/darkinno-tech/crdt/counter"
+	"github.com/darkinno-tech/crdt/observe"
 )
 
 func TestGCounterReplicaSimulationDrivesLatestUIState(t *testing.T) {

@@ -1,7 +1,7 @@
 # Local checkpoint Store references
 
 `persistence` is a local CRDT recovery reference in the opt-in
-`github.com/im10furry/crdt/persistence` module. Its `Store` contract saves
+`github.com/darkinno-tech/crdt/persistence` module. Its `Store` contract saves
 one complete `snapshot.Snapshot`, its durable-relay cursor, and an
 application-owned opaque outbox as one durability boundary. `BoltStore` uses a
 bbolt transaction; `FileStore` uses a private file replacement. It fills the

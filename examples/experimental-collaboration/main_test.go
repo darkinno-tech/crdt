@@ -7,9 +7,9 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/replica"
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/replica"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 type failingWriter struct{}

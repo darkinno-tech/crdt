@@ -3,7 +3,7 @@
 ## Scope
 
 This records a local regression baseline for
-`im10furry:tiptap-core-richtext-v1`: approved rich-text blocks and marks plus
+`darkinno-tech:tiptap-core-richtext-v1`: approved rich-text blocks and marks plus
 codec-validated atomic inline embeds. It does not measure browser layout,
 NodeView rendering, mobile devices, WAN/TLS, durable outboxes, database I/O,
 or service capacity.

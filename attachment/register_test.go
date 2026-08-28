@@ -10,11 +10,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/clock"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/lww"
-	"github.com/im10furry/crdt/replica"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/clock"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/lww"
+	"github.com/darkinno-tech/crdt/replica"
 )
 
 func TestRegisterThreeReplicaMediaSessionOverUnreliableNetwork(t *testing.T) {
@@ -200,7 +200,7 @@ func TestRegisterUsesExplicitLWWMapManifestBoundary(t *testing.T) {
 	}
 	manifest, err := replica.NewManifest(
 		"document-17/attachments",
-		"github.com/im10furry/crdt/attachment-reference/v1",
+		"github.com/darkinno-tech/crdt/attachment-reference/v1",
 		1,
 		replica.Protocol{
 			StateID:          crdt.TypeIDLWWMapState,

@@ -1,16 +1,16 @@
 [package]
-name = "im10furry-crdt-rga"
+name = "darkinno-tech-crdt-rga"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
-description = "Bounded native Rust implementation of im10furry RGA run-v2 and LWW-Map v1"
-repository = "https://github.com/im10furry/crdt"
+description = "Bounded native Rust implementation of darkinno-tech RGA run-v2 and LWW-Map v1"
+repository = "https://github.com/darkinno-tech/crdt"
 keywords = ["crdt", "rga", "collaboration", "replication"]
 categories = ["data-structures", "encoding"]
 
 [lib]
-name = "im10furry_crdt_rga"
+name = "darkinno-tech_crdt_rga"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]

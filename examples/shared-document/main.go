@@ -9,8 +9,8 @@ import (
 	"io"
 	"os"
 
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/shared"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/shared"
 )
 
 var receiveLimits = frame.DecoderLimits{

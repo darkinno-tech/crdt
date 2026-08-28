@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/richtext"
+	"github.com/darkinno-tech/crdt"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/richtext"
 )
 
 func TestRichTextRuntimeBoundariesAccessorsAndRecovery(t *testing.T) {

@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/counter"
-	frame "github.com/im10furry/crdt/encoding"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/counter"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 func TestStoreOptionsAndGCounterMergerBoundaries(t *testing.T) {

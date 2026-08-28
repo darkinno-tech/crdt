@@ -3,7 +3,7 @@ package counter
 import (
 	"fmt"
 
-	frame "github.com/im10furry/crdt/encoding"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 // ExampleGCounter_ApplyDelta shows the local-mutation and bounded-receive

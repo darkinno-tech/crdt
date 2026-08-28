@@ -3,8 +3,8 @@ package redis
 import (
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/replica"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/replica"
 )
 
 // BenchmarkStoreAppendLoopback measures the provider's canonical envelope,

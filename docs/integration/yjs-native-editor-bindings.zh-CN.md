@@ -1,6 +1,6 @@
 # 原生 Yjs 编辑器绑定
 
-`@im10furry/crdt-client/yjs` 是面向**原生 Yjs 文档**的可选浏览器绑定。它把
+`@darkinno-tech/crdt-client/yjs` 是面向**原生 Yjs 文档**的可选浏览器绑定。它把
 `Y.TextEvent.delta` 映射为 CodeMirror 6 的变更集；远端改一个字符只会修改对应区间，
 不会把整篇文本重新投影到编辑器。
 
@@ -63,7 +63,7 @@ Awareness.setLocalStateField(relative cursor)
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness.js";
 import type { ViewUpdate } from "@codemirror/view";
-import { bindYjsCodeMirrorPlainText } from "@im10furry/crdt-client/yjs";
+import { bindYjsCodeMirrorPlainText } from "@darkinno-tech/crdt-client/yjs";
 
 const document = new Y.Doc();
 const text = document.getText("content");
@@ -92,14 +92,14 @@ change。单区间本地 CodeMirror 更新同样增量；旧 adapter 或多区�
 
 ## Quill 2 富文本接入
 
-`@im10furry/crdt-client/yjs-richtext` 是 Quill 原生 Delta 模型的可选绑定。它不会内置
+`@darkinno-tech/crdt-client/yjs-richtext` 是 Quill 原生 Delta 模型的可选绑定。它不会内置
 Quill 或 y-quill；应用自己负责 Quill 版本、module、provider、文档生命周期和 schema。
 绑定只接受字符串 insert、已批准的标量属性，以及已批准的单键标量 embed；HTML、任意嵌套
 对象、custom module state、DOM 引用、cursor 和授权信息都不属于这个 Delta 契约。
 
 ```ts
 import * as Y from "yjs";
-import { bindYjsQuillRichText } from "@im10furry/crdt-client/yjs-richtext";
+import { bindYjsQuillRichText } from "@darkinno-tech/crdt-client/yjs-richtext";
 
 const document = new Y.Doc();
 const text = document.getText("content");

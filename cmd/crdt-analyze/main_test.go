@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	frame "github.com/im10furry/crdt/encoding"
+	"github.com/darkinno-tech/crdt"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 func TestAnalyzeReportsVerifiedFrameMetadata(t *testing.T) {

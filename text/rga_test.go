@@ -3,7 +3,7 @@ package text
 import (
 	"testing"
 
-	"github.com/im10furry/crdt/clock"
+	"github.com/darkinno-tech/crdt/clock"
 )
 
 func TestRGAConcurrentInsertsConverge(t *testing.T) {

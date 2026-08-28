@@ -209,7 +209,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - Normalized the Go module declaration, internal imports, examples, and
-  documentation to the canonical `github.com/im10furry/crdt` path. This removes
+  documentation to the canonical `github.com/darkinno-tech/crdt` path. This removes
   the module-path casing mismatch that prevented reliable `go get` usage.
 
 ## [1.0.4-beta.1] - 2026-07-28
@@ -217,7 +217,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - Normalized the Go module declaration, internal imports, examples, and
-  documentation to the canonical `github.com/im10furry/crdt` path. This removes
+  documentation to the canonical `github.com/darkinno-tech/crdt` path. This removes
   the module-path casing mismatch that prevented reliable `go get` usage.
 
 ## [1.0.3] - 2026-07-28

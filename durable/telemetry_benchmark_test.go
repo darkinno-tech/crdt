@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt/telemetry"
+	"github.com/darkinno-tech/crdt/telemetry"
 )
 
 func BenchmarkHandlerRecordDisabled(b *testing.B) {

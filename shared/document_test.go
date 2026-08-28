@@ -11,9 +11,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/im10furry/crdt/clock"
-	"github.com/im10furry/crdt/documenttree"
-	frame "github.com/im10furry/crdt/encoding"
+	"github.com/darkinno-tech/crdt/clock"
+	"github.com/darkinno-tech/crdt/documenttree"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 func TestDocumentConvergesThroughNamedMapAndArrayUpdates(t *testing.T) {

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/im10furry/crdt/clock"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/snapshot"
+	"github.com/darkinno-tech/crdt/clock"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/snapshot"
 )
 
 type blankCodec struct{}

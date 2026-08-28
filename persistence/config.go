@@ -3,8 +3,8 @@ package persistence
 import (
 	"time"
 
-	configuration "github.com/im10furry/crdt/config"
-	"github.com/im10furry/crdt/snapshot"
+	configuration "github.com/darkinno-tech/crdt/config"
+	"github.com/darkinno-tech/crdt/snapshot"
 )
 
 const (

@@ -3,8 +3,8 @@ package richtext
 import (
 	"sort"
 
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/text"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 // EditorOperation is one Quill-style, offset-based operation in an editor

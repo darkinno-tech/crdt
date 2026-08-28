@@ -1,6 +1,6 @@
 package lww
 
-import "github.com/im10furry/crdt"
+import "github.com/darkinno-tech/crdt"
 
 // MarshalJSON returns a diagnostic summary for structured logs. It omits
 // elements, keys, values, tags, and clock state, and cannot restore the set.

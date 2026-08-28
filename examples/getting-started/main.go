@@ -8,8 +8,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/im10furry/crdt/counter"
-	frame "github.com/im10furry/crdt/encoding"
+	"github.com/darkinno-tech/crdt/counter"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 // receiveLimits are intentionally small so the example makes the resource

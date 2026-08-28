@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/delta"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/register"
-	"github.com/im10furry/crdt/set"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/delta"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/register"
+	"github.com/darkinno-tech/crdt/set"
 )
 
 const (

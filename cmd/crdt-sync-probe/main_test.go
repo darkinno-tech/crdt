@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt/counter"
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt/counter"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 func TestProbeAuthenticatesAndDeduplicatesDelivery(t *testing.T) {

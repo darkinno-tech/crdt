@@ -8,12 +8,12 @@ import (
 	"io"
 	"os"
 
-	"github.com/im10furry/crdt"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/lww"
-	"github.com/im10furry/crdt/replica"
-	"github.com/im10furry/crdt/text"
-	"github.com/im10furry/crdt/tree"
+	"github.com/darkinno-tech/crdt"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/lww"
+	"github.com/darkinno-tech/crdt/replica"
+	"github.com/darkinno-tech/crdt/text"
+	"github.com/darkinno-tech/crdt/tree"
 )
 
 var receiveLimits = frame.DecoderLimits{

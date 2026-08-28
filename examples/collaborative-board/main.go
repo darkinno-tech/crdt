@@ -8,9 +8,9 @@ import (
 	"os"
 	"sort"
 
-	"github.com/im10furry/crdt/counter"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/set"
+	"github.com/darkinno-tech/crdt/counter"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/set"
 )
 
 // receiveLimits are an example receive budget, not a production capacity

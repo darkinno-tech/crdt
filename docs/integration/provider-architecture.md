@@ -10,7 +10,7 @@ PostgreSQL, MySQL, SQL Server, and SQLite can provide the same replay contract.
 
 | Need | Use | Correctness boundary | Do not claim |
 | --- | --- | --- | --- |
-| Browser RGA with Go interop | `make wasm`, `@im10furry/crdt-client/wasm` | One explicit run-v2 or v1 manifest; state + frontier + HLC clock persist together | A Wasm frame or CRC authenticates its peer |
+| Browser RGA with Go interop | `make wasm`, `@darkinno-tech/crdt-client/wasm` | One explicit run-v2 or v1 manifest; state + frontier + HLC clock persist together | A Wasm frame or CRC authenticates its peer |
 | Nearby peer-to-peer live delivery | `providers/webrtc` around an already authenticated, ordered/reliable DataChannel | Canonical bounded envelopes are validated against one manifest before `OnChange` | DataChannel `Send` is a durable receipt, or WebRTC supplies replay/history |
 | Low-latency shared operation log | `providers/redis` | One Lua script atomically binds Dot, canonical bytes, sequence, and counters | Default Redis persistence/replication is automatically durable enough for product data |
 | PostgreSQL-backed operation log and multi-process relay | `providers/postgres` | One group row lock serializes append; replay uses a repeatable-read snapshot | A relay event cursor replaces the application's state/frontier/outbox checkpoint |
@@ -20,17 +20,17 @@ PostgreSQL, MySQL, SQL Server, and SQLite can provide the same replay contract.
 
 ## Dependency boundary
 
-`github.com/im10furry/crdt` is the dependency-free published core. Durable
+`github.com/darkinno-tech/crdt` is the dependency-free published core. Durable
 storage, transports, and every provider below are independent opt-in modules:
 
 ```sh
-go get github.com/im10furry/crdt/durable@latest
-go get github.com/im10furry/crdt/providers/redis@latest
-go get github.com/im10furry/crdt/providers/postgres@latest
-go get github.com/im10furry/crdt/providers/mysql@latest
-go get github.com/im10furry/crdt/providers/mssql@latest
-go get github.com/im10furry/crdt/providers/sqlite@latest
-go get github.com/im10furry/crdt/providers/webrtc@latest
+go get github.com/darkinno-tech/crdt/durable@latest
+go get github.com/darkinno-tech/crdt/providers/redis@latest
+go get github.com/darkinno-tech/crdt/providers/postgres@latest
+go get github.com/darkinno-tech/crdt/providers/mysql@latest
+go get github.com/darkinno-tech/crdt/providers/mssql@latest
+go get github.com/darkinno-tech/crdt/providers/sqlite@latest
+go get github.com/darkinno-tech/crdt/providers/webrtc@latest
 ```
 
 The MySQL, SQL Server, and SQLite providers use Go's standard `database/sql`
@@ -112,7 +112,7 @@ of source, and runs the explicit schema migration with a migration role:
 import (
 	"database/sql"
 
-	mysqlprovider "github.com/im10furry/crdt/providers/mysql"
+	mysqlprovider "github.com/darkinno-tech/crdt/providers/mysql"
 	// This is an application dependency, not a crdt module dependency.
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -157,7 +157,7 @@ connection limits, backup, and failover policy in the host application:
 import (
 	"database/sql"
 
-	mssqlprovider "github.com/im10furry/crdt/providers/mssql"
+	mssqlprovider "github.com/darkinno-tech/crdt/providers/mssql"
 )
 
 database, err := sql.Open(sqlServerDriverName, dsn) // application-selected driver
@@ -201,7 +201,7 @@ backup/restore, and the driver-specific busy timeout:
 import (
 	"database/sql"
 
-	sqliteprovider "github.com/im10furry/crdt/providers/sqlite"
+	sqliteprovider "github.com/darkinno-tech/crdt/providers/sqlite"
 	// Add a blank import for the application-selected SQLite driver.
 )
 

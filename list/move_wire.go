@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/im10furry/crdt"
-	frame "github.com/im10furry/crdt/encoding"
+	"github.com/darkinno-tech/crdt"
+	frame "github.com/darkinno-tech/crdt/encoding"
 )
 
 // UnmarshalMoveDelta decodes a bounded canonical move-sequence delta.

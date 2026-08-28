@@ -1,6 +1,6 @@
 package text
 
-import frame "github.com/im10furry/crdt/encoding"
+import frame "github.com/darkinno-tech/crdt/encoding"
 
 const anchorEncodingVersion uint64 = 1
 

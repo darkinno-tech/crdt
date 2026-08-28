@@ -9,11 +9,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/set"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/set"
 )
 
-const receiptDomain = "im10furry/crdt/tombstone-receipt/v1"
+const receiptDomain = "darkinno-tech/crdt/tombstone-receipt/v1"
 
 var (
 	ErrInvalidReceipt = errors.New("membership: invalid tombstone receipt")

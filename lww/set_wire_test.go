@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/delta"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/snapshot"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/delta"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/snapshot"
 )
 
 type setStringCodec struct{ id string }

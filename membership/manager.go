@@ -5,7 +5,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/im10furry/crdt/tombstonegc"
+	"github.com/darkinno-tech/crdt/tombstonegc"
 )
 
 // ViewStore persists a signed view before it is made active in memory. A real

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/im10furry/crdt/text"
+	"github.com/darkinno-tech/crdt/text"
 )
 
 func TestCoordinatorCompactsDeletedRGAChainAfterExactAcknowledgements(t *testing.T) {

@@ -26,7 +26,7 @@ is not decorative: it MUST identify the allowed attribute keys, values, link
 policy, and rendering/sanitization rules. A rich-text manifest MUST NOT share a
 replication group with raw RGA run-v2 frames.
 
-`richtext.SemanticSchemaID` (`github.com/im10furry/crdt/richtext/semantic/v1`)
+`richtext.SemanticSchemaID` (`github.com/darkinno-tech/crdt/richtext/semantic/v1`)
 is an optional schema adapter, not a change to TypeIDs 23/24. A group that
 uses it MUST negotiate that exact schema ID and MUST reject `rt.*` semantic
 attributes from a different schema. It standardizes `rt.bold`, `rt.italic`, a

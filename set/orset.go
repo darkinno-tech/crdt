@@ -11,10 +11,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/clock"
-	frame "github.com/im10furry/crdt/encoding"
-	"github.com/im10furry/crdt/snapshot"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/clock"
+	frame "github.com/darkinno-tech/crdt/encoding"
+	"github.com/darkinno-tech/crdt/snapshot"
 )
 
 var (

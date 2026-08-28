@@ -34,7 +34,7 @@ For a document that chooses Yjs as its collaboration contract, use the
 standard Yjs client and an editor binding that works on that same `Y.Doc`.
 The browser does not need a Go/Wasm runtime, frame decoder, or
 `replica.Manifest`. It may use a maintained upstream binding directly, or the
-optional native [`@im10furry/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md),
+optional native [`@darkinno-tech/crdt-client/yjs` CodeMirror binding](yjs-native-editor-bindings.md),
 which still operates on Yjs updates and y-protocols awareness rather than the
 repository's Go or `native-ts-v1` protocols.
 

@@ -57,7 +57,7 @@ without claiming Yjs API or wire compatibility:
   canonical byte transport for that summary.
 
 ```ts
-import { decodeNativeUpdate, encodeNativeUpdate, NativeDocument } from "@im10furry/crdt-client/native";
+import { decodeNativeUpdate, encodeNativeUpdate, NativeDocument } from "@darkinno-tech/crdt-client/native";
 
 const alice = new NativeDocument("alice-device-7");
 const metadata = alice.getMap("metadata");
@@ -100,7 +100,7 @@ operation was known and make a repair omit it.
 import {
   decodeNativeStateVector,
   encodeNativeStateVector,
-} from "@im10furry/crdt-client/native";
+} from "@darkinno-tech/crdt-client/native";
 
 const peerVector = decodeNativeStateVector(await receiveAuthenticatedVector());
 for (const update of alice.encodeStateAsUpdates(peerVector)) {
@@ -124,12 +124,12 @@ root `NativeMap`/`NativeArray` values instead. This avoids invisible in-place
 mutation and keeps resource accounting explicit.
 
 For a replication group that explicitly negotiates `native-ts-nested-v1`, use
-`NativeNestedDocument` from `@im10furry/crdt-client/nested`. It preserves the
+`NativeNestedDocument` from `@darkinno-tech/crdt-client/nested`. It preserves the
 atomic-v1 API while allowing a map or array entry to own one independently
 merged child `NativeNestedMap`/`NativeNestedArray`:
 
 ```ts
-import { NativeNestedDocument } from "@im10furry/crdt-client/nested";
+import { NativeNestedDocument } from "@darkinno-tech/crdt-client/nested";
 
 const document = new NativeNestedDocument("alice-device-7");
 const board = document.getMap("board");
@@ -147,7 +147,7 @@ transparent upgrade for a `NativeDocument` peer. See the
 
 ### Native collection bindings
 
-`@im10furry/crdt-client/collections` adds bounded Counter, Set, LWW register,
+`@darkinno-tech/crdt-client/collections` adds bounded Counter, Set, LWW register,
 and Tree views over a private `native-ts-v1` root namespace. Their negotiated
 semantic identifier is **`native-ts-collections-v1`**. The transport update is
 still canonical `native-ts-v1` JSON, but a peer must declare the same logical
@@ -160,7 +160,7 @@ validator and does not establish wire compatibility.
 import {
   encodeNativeUpdate,
   NativeCollectionsDocument,
-} from "@im10furry/crdt-client/collections";
+} from "@darkinno-tech/crdt-client/collections";
 
 const board = new NativeCollectionsDocument("tablet-7");
 const inspections = board.getCounter("inspections"); // PN-Counter
@@ -222,7 +222,7 @@ it changes state.
 ## Browser-native document: persistent local-first use in a few lines
 
 `native-ts-v1` now has a browser facade at
-`@im10furry/crdt-client/browser`. `openNativeBrowserDocument` restores an
+`@darkinno-tech/crdt-client/browser`. `openNativeBrowserDocument` restores an
 append-only IndexedDB record before exposing the same named Map/Array/Text API. It
 persists a local mutation before an optional transport is allowed to receive
 it, and an application can wait for the local recovery boundary with
@@ -232,7 +232,7 @@ it, and an application can wait for the local recovery boundary with
 import {
   createBrowserReplicaID,
   openNativeBrowserDocument,
-} from "@im10furry/crdt-client/browser";
+} from "@darkinno-tech/crdt-client/browser";
 
 const board = await openNativeBrowserDocument({
   documentID: "roadmap-2026-q3", // bind this to one product group/schema
@@ -248,7 +248,7 @@ board.transact(() => {
 await board.flush(); // local IndexedDB recovery record is committed
 ```
 
-The default browser store is `im10furry-crdt-native`; `documentID` is its local
+The default browser store is `darkinno-tech-crdt-native`; `documentID` is its local
 record key. A recovery record has three parts: copied root declarations plus
 the local actor counter and sparse state vector; an optional compacted bounded
 state base; and an append-only canonical update log. An append writes its
@@ -300,7 +300,7 @@ receipt transport separately with `connect()` when it is available:
 
 ```ts
 const live = new BroadcastChannelNativeTransport(JSON.stringify([
-  "im10furry-crdt", "native-ts-v1", authenticatedGroupID,
+  "darkinno-tech-crdt", "native-ts-v1", authenticatedGroupID,
 ]));
 const board = await openNativeBrowserDocument({
   documentID: authenticatedGroupID,
@@ -365,7 +365,7 @@ machine-readable vectors are the contract for a non-Wasm implementation. The
 Wasm wrapper remains the recommended path when the host can run it because it
 uses the same parser and merge engine as Go.
 
-For text editors, import `@im10furry/crdt-client/bindings`. It provides named
+For text editors, import `@darkinno-tech/crdt-client/bindings`. It provides named
 plain-text bindings for Quill, Monaco, CodeMirror 6, Tiptap, Lexical,
 ProseMirror, and Slate. Tiptap is accepted only with a canonical unmarked
 paragraph/text schema; Lexical, ProseMirror, and Slate require an
@@ -384,7 +384,7 @@ with `initialContent: "document"`. See the [rich-text editor binding
 guide](../../docs/integration/richtext-editor-bindings.md).
 
 For BlockNote's default text blocks, use `bindBlockNoteRichText` with the
-manifest SchemaID `im10furry:blocknote-text-v1`. It preserves the bounded
+manifest SchemaID `darkinno-tech:blocknote-text-v1`. It preserves the bounded
 paragraph/heading/list/quote/code subset, nesting, default block props, and
 approved inline styles without adding BlockNote or Yjs to this package's
 runtime dependencies. Tables, media, links, custom blocks, and unknown props
@@ -478,12 +478,12 @@ import {
   createBrowserReplicaID,
   initRGAWasm,
   openRGAWasmBrowserDocument,
-} from "@im10furry/crdt-client";
+} from "@darkinno-tech/crdt-client";
 
 const runtime = await initRGAWasm({ wasmURL: "/assets/crdt-rga.wasm" });
 const replicaID = createBrowserReplicaID("tab"); // one concurrently active actor
 const live = new BroadcastChannelNativeTransport(JSON.stringify([
-  "im10furry-crdt", "rga-run-v2", authenticatedGroupID,
+  "darkinno-tech-crdt", "rga-run-v2", authenticatedGroupID,
 ]));
 const document = await openRGAWasmBrowserDocument({
   documentID: authenticatedGroupID,
@@ -565,11 +565,11 @@ insert 收敛。新快照及浏览器 IndexedDB metadata 会将 vector 与 root�
 
 ## 浏览器原生文档：几行代码实现本地优先与恢复
 
-`@im10furry/crdt-client/browser` 的 `openNativeBrowserDocument` 在暴露
+`@darkinno-tech/crdt-client/browser` 的 `openNativeBrowserDocument` 在暴露
 Map/Array/Text API 前先从 IndexedDB 恢复，并将本地变更写入追加日志。最小使用方式如下：
 
 ```ts
-import { createBrowserReplicaID, openNativeBrowserDocument } from "@im10furry/crdt-client/browser";
+import { createBrowserReplicaID, openNativeBrowserDocument } from "@darkinno-tech/crdt-client/browser";
 
 const board = await openNativeBrowserDocument({
   documentID: "roadmap-2026-q3", // 对应一个业务复制组/schema
@@ -581,7 +581,7 @@ board.getText("body").insert(0, "纯文本草稿");
 await board.flush(); // 本地恢复记录已提交
 ```
 
-默认数据库名为 `im10furry-crdt-native`，`documentID` 是本地记录键。记录把根类型声明与本地
+默认数据库名为 `darkinno-tech-crdt-native`，`documentID` 是本地记录键。记录把根类型声明与本地
 counter、稀疏 State Vector、可选完整 state base、以及规范 update 追加日志分开保存；每次追加在一个
 IndexedDB 事务中同时保存 update 与 metadata。因此不会每次编辑都编码整个文档，并且
 `flush()` 成功后以同一 actor 重启不会复用 counter。默认在日志达到 128 条或 1 MiB 时尝试

@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 // BenchmarkOpenTelemetrySinkRecord measures the Metrics SDK aggregation work

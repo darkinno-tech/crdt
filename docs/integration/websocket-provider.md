@@ -100,7 +100,7 @@ http.Handle("/crdt", handler)
 The example imports this package as:
 
 ```go
-import provider "github.com/im10furry/crdt/examples/websocket-provider/provider"
+import provider "github.com/darkinno-tech/crdt/examples/websocket-provider/provider"
 ```
 
 The reference pins `github.com/coder/websocket` in the `examples` module. Its

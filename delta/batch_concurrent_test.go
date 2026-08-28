@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/im10furry/crdt/counter"
+	"github.com/darkinno-tech/crdt/counter"
 )
 
 func TestCoalescerConcurrentAddAndDrain(t *testing.T) {

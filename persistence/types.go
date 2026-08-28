@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/im10furry/crdt/snapshot"
+	"github.com/darkinno-tech/crdt/snapshot"
 )
 
 var (

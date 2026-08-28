@@ -34,7 +34,7 @@ const provider = new WebsocketProvider("wss://collab.example/yjs", "notes", docu
 ```
 
 这仍是原生 Yjs document。CodeMirror plain-text 可选用
-[`@im10furry/crdt-client/yjs` binding](../integration/yjs-native-editor-bindings.md) 获得有界增量投影，
+[`@darkinno-tech/crdt-client/yjs` binding](../integration/yjs-native-editor-bindings.md) 获得有界增量投影，
 但不会引入 Go frame、Go/Wasm 或 `native-ts-v1`；其他编辑器直接使用其维护中的 Yjs binding。
 生产第一要求是同源的 Secure、HttpOnly session cookie：浏览器 WebSocket API 不支持任意
 `Authorization` header，不要把长期 bearer token 放入 provider query string。应用仍必须预配置

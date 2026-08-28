@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/replica"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/replica"
 )
 
 // HTTPClient maintains one HTTP/SSE live subscription for a manifest. It

@@ -1,6 +1,6 @@
 # Rich-text editor bindings
 
-`@im10furry/crdt-client/bindings` can bind schema-specific Quill, BlockNote,
+`@darkinno-tech/crdt-client/bindings` can bind schema-specific Quill, BlockNote,
 and Tiptap/ProseMirror surfaces to the manifest-bound `richtext` v1 protocol.
 This is not an upgrade of a plain-text RGA binding: rich-text uses state/delta
 TypeIDs `23/24`, semantic version `1`, its own renderer `SchemaID`, and an
@@ -45,7 +45,7 @@ construct a separately negotiated rich-text runtime:
 import {
   bindQuillRichText,
   initRichTextWasm,
-} from "@im10furry/crdt-client";
+} from "@darkinno-tech/crdt-client";
 
 const runtime = await initRichTextWasm({ wasmURL: "/assets/crdt-rga.wasm" });
 const document = runtime.create("browser-replica-7");
@@ -93,13 +93,13 @@ creating an unrelated local newline would be a concurrent document edit.
 
 For BlockNote's default text-block document rather than a Quill Delta, use
 [`bindBlockNoteRichText`](blocknote-richtext-bindings.md). It has its own exact
-`im10furry:blocknote-text-v1` SchemaID, preserves a bounded default text-block
+`darkinno-tech:blocknote-text-v1` SchemaID, preserves a bounded default text-block
 subset, and rejects tables, media, links, custom blocks, and unknown props
 instead of flattening them into this rich-text group.
 
 For Tiptap 3 and an application-owned ProseMirror port, use
 [`bindTiptapRichText` / `bindProseMirrorRichText`](tiptap-richtext-bindings.md).
-Its `im10furry:tiptap-core-richtext-v1` profile preserves approved blocks,
+Its `darkinno-tech:tiptap-core-richtext-v1` profile preserves approved blocks,
 marks, hard breaks, and codec-validated inline atoms. It rejects lists,
 tables, media, custom attrs/marks, block embeds, and NodeViews rather than
 flattening them into the rich-text group.

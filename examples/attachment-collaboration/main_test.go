@@ -6,8 +6,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/attachment"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/attachment"
 )
 
 type failingWriter struct{}

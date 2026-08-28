@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/counter"
-	"github.com/im10furry/crdt/durable"
-	"github.com/im10furry/crdt/replica"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/counter"
+	"github.com/darkinno-tech/crdt/durable"
+	"github.com/darkinno-tech/crdt/replica"
 )
 
 func TestProviderDeliversBoundManifestChange(t *testing.T) {

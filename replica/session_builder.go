@@ -1,8 +1,8 @@
 package replica
 
 import (
-	"github.com/im10furry/crdt"
-	"github.com/im10furry/crdt/clock"
+	"github.com/darkinno-tech/crdt"
+	"github.com/darkinno-tech/crdt/clock"
 )
 
 // SessionBuilder binds one validated manifest to the local protocol policy

@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 
-	"github.com/im10furry/crdt"
+	"github.com/darkinno-tech/crdt"
 )
 
 const (

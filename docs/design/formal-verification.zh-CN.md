@@ -1,6 +1,6 @@
 # Formal verification 范围与路线
 
-im10furry 已新增可检查的 Lean 模型：[`formal/rga`](../../formal/rga)。首个目标选择风险
+darkinno-tech 已新增可检查的 Lean 模型：[`formal/rga`](../../formal/rga)。首个目标选择风险
 最高的 RGA 不变量：结构 tombstone 必须跨乱序投递保留，state merge 不能悄悄遗忘它。
 
 初始模型已证明 delta join 的幂等、交换、结合，tombstone 单调性，delete-before-insert
@@ -26,7 +26,7 @@ limits、认证、relay policy、checkpoint durability 和 GC acknowledgement �
 | provider authorization/awareness | 认证集成测试 | 属安全策略，不是 CRDT algebra |
 
 `lean-yjs` 是重要先例：Yjs 文档称其已有 preservation/commutativity proof，而社区说明
-工作仍正从 algorithmic model 走向更贴近实现的验证。im10furry 同样只发布已完成 theorem
+工作仍正从 algorithmic model 走向更贴近实现的验证。darkinno-tech 同样只发布已完成 theorem
 和 abstraction boundary，绝不笼统声称“整个实现已形式化验证”。
 
 ## Checked command 与 CI gate 建议

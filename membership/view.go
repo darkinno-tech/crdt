@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	viewDomain      = "im10furry/crdt/membership-view/v1"
+	viewDomain      = "darkinno-tech/crdt/membership-view/v1"
 	maxMembers      = 1024
 	maxMemberIDSize = 256
 )

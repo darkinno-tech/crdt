@@ -3,7 +3,7 @@ package observe
 import (
 	"errors"
 
-	"github.com/im10furry/crdt/counter"
+	"github.com/darkinno-tech/crdt/counter"
 )
 
 // GCounterView is the immutable application projection of a G-Counter. An
